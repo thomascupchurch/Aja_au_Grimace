@@ -1,3 +1,61 @@
+import shutil
+import os
+import sqlite3
+from PyQt5.QtWidgets import QPushButton, QFileDialog, QWidget, QHBoxLayout, QLabel
+from PyQt5.QtGui import QPixmap
+class ImageCellWidget(QWidget):
+    def __init__(self, parent, row, col, model, on_data_changed):
+        super().__init__(parent)
+        self.row = row
+        self.col = col
+        self.model = model
+        self.on_data_changed = on_data_changed
+        hbox = QHBoxLayout()
+        hbox.setContentsMargins(0, 0, 0, 0)
+        self.btn = QPushButton("Upload Image")
+        self.img_label = QLabel()
+        self.img_label.setFixedSize(48, 48)
+        self.img_label.setScaledContents(True)
+        self.btn.clicked.connect(self.open_file_dialog)
+        hbox.addWidget(self.btn)
+        hbox.addWidget(self.img_label)
+        self.setLayout(hbox)
+        self.refresh()
+
+    def open_file_dialog(self):
+        fname, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Image Files (*.png *.jpg *.jpeg *.bmp *.gif)")
+        if fname:
+            # Ensure images directory exists
+            images_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
+            if not os.path.exists(images_dir):
+                os.makedirs(images_dir)
+            # Copy file to images directory with a unique name
+            base = os.path.basename(fname)
+            dest = os.path.join(images_dir, base)
+            count = 1
+            orig_base, ext = os.path.splitext(base)
+            while os.path.exists(dest):
+                dest = os.path.join(images_dir, f"{orig_base}_{count}{ext}")
+                count += 1
+            shutil.copy2(fname, dest)
+            rel_path = os.path.relpath(dest, os.path.dirname(os.path.abspath(__file__)))
+            self.model.rows[self.row][ProjectDataModel.COLUMNS[self.col]] = rel_path
+            self.refresh()
+            if self.on_data_changed:
+                self.on_data_changed()
+
+    def refresh(self):
+        img_val = self.model.rows[self.row].get(ProjectDataModel.COLUMNS[self.col], "")
+        if img_val:
+            # Always resolve relative to script directory
+            img_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), img_val)
+            pixmap = QPixmap(img_path)
+            if not pixmap.isNull():
+                self.img_label.setPixmap(pixmap.scaled(48, 48))
+            else:
+                self.img_label.clear()
+        else:
+            self.img_label.clear()
 import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow, QStackedWidget, QListWidget, QWidget, QHBoxLayout, QVBoxLayout, QLabel
 
@@ -6,11 +64,47 @@ from PyQt5.QtWidgets import QTreeWidget, QTreeWidgetItem, QPushButton, QInputDia
 
 # Central data model for project parts
 class ProjectDataModel:
+    DB_FILE = "project_data.db"
+
+    def create_table(self):
+        with sqlite3.connect(self.DB_FILE) as conn:
+            c = conn.cursor()
+            fields = ", ".join([f'"{col}" TEXT' for col in self.COLUMNS])
+            c.execute(f"""
+                CREATE TABLE IF NOT EXISTS project_parts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    {fields}
+                )
+            """)
+            conn.commit()
+
+    def load_from_db(self):
+        self.rows.clear()
+        if not os.path.exists(self.DB_FILE):
+            self.create_table()
+            return
+        with sqlite3.connect(self.DB_FILE) as conn:
+            c = conn.cursor()
+            c.execute(f"SELECT {', '.join([f'"{col}"' for col in self.COLUMNS])} FROM project_parts")
+            for row in c.fetchall():
+                self.rows.append({col: val for col, val in zip(self.COLUMNS, row)})
+
+    def save_to_db(self):
+        self.create_table()
+        with sqlite3.connect(self.DB_FILE) as conn:
+            c = conn.cursor()
+            c.execute("DELETE FROM project_parts")
+            for row in self.rows:
+                values = [row.get(col, "") for col in self.COLUMNS]
+                placeholders = ", ".join(["?" for _ in self.COLUMNS])
+                c.execute(f"INSERT INTO project_parts ({', '.join([f'"{col}"' for col in self.COLUMNS])}) VALUES ({placeholders})", values)
+            conn.commit()
     COLUMNS = [
-        "Project Part", "Start Date", "Duration (days)", "Internal/External", "Dependencies", "Type", "Calculated End Date", "Deadline", "Resources", "Notes", "Responsible", "Images"
+        "Project Part", "Parent", "Children", "Start Date", "Duration (days)", "Internal/External", "Dependencies", "Type", "Calculated End Date", "Deadline", "Resources", "Notes", "Responsible", "Images"
     ]
     def __init__(self):
-        self.rows = []  # Each row is a dict with keys as COLUMNS, plus 'parent' (index or None)
+        self.rows = []  # Each row is a dict with keys as COLUMNS
+        self.load_from_db()
 
     def add_row(self, data, parent=None):
         row = {col: val for col, val in zip(self.COLUMNS, data)}
@@ -61,16 +155,24 @@ class ProjectTreeView(QWidget):
 
     def refresh(self):
         self.tree.clear()
-        def add_items(parent_widget, parent_idx):
-            for idx, children in [(i, c) for i, c in enumerate(self.model.get_tree()) if self.model.rows[i]['parent'] == parent_idx]:
+        # Build a mapping from part name to row index
+        name_to_index = {r["Project Part"]: i for i, r in enumerate(self.model.rows)}
+        # Build a mapping from parent name to list of child indices
+        parent_to_children = {}
+        for i, r in enumerate(self.model.rows):
+            parent = r.get("Parent", "")
+            parent_to_children.setdefault(parent, []).append(i)
+
+        def add_items(parent_widget, parent_name):
+            for idx in parent_to_children.get(parent_name or "", []):
                 row = self.model.rows[idx]
                 item = QTreeWidgetItem([row[col] for col in ProjectDataModel.COLUMNS])
                 if parent_widget is None:
                     self.tree.addTopLevelItem(item)
                 else:
                     parent_widget.addChild(item)
-                add_items(item, idx)
-        add_items(None, None)
+                add_items(item, row["Project Part"])
+        add_items(None, "")
 
 class GanttChartView(QWidget):
     def __init__(self):
@@ -110,7 +212,7 @@ class DatabaseView(QWidget):
     DATE_FIELDS = {"Start Date", "Calculated End Date", "Deadline"}
     DROPDOWN_FIELDS = {
         "Internal/External": ["Internal", "External"],
-        "Type": ["Milestone", "Phase", "Feature", "Type"]
+    "Type": ["Milestone", "Phase", "Feature", "Item"]
     }
 
     def __init__(self, model, on_data_changed=None):
@@ -144,8 +246,6 @@ class DatabaseView(QWidget):
     def refresh_table(self):
         self.table.blockSignals(True)
         self.table.setRowCount(len(self.model.rows))
-    from PyQt5.QtWidgets import QPushButton, QFileDialog, QWidget, QHBoxLayout, QLabel
-    from PyQt5.QtGui import QPixmap
         for row, rowdata in enumerate(self.model.rows):
             for col, colname in enumerate(ProjectDataModel.COLUMNS):
                 if colname in self.DATE_FIELDS:
@@ -166,50 +266,41 @@ class DatabaseView(QWidget):
                     date_edit.dateChanged.connect(lambda d, r=row, c=col: self.date_changed(r, c, d))
                     self.table.setCellWidget(row, col, date_edit)
                     self.table.setItem(row, col, QTableWidgetItem(date_edit.date().toString("yyyy-MM-dd")))
-                elif colname in self.DROPDOWN_FIELDS:
+                elif colname in self.DROPDOWN_FIELDS or colname == "Parent":
                     from PyQt5.QtWidgets import QComboBox
                     combo = QComboBox()
-                    combo.addItems(self.DROPDOWN_FIELDS[colname])
-                    current_val = rowdata.get(colname, "")
-                    if current_val in self.DROPDOWN_FIELDS[colname]:
-                        combo.setCurrentText(current_val)
-                    combo.currentTextChanged.connect(lambda val, r=row, c=col: self.dropdown_changed(r, c, val))
-                    self.table.setCellWidget(row, col, combo)
-                    self.table.setItem(row, col, QTableWidgetItem(combo.currentText()))
+                    if colname == "Parent":
+                        # List all other project part names except this row
+                        part_names = [self.model.rows[i]["Project Part"] for i in range(len(self.model.rows)) if i != row]
+                        combo.addItem("")  # Allow no parent
+                        combo.addItems(part_names)
+                        current_val = rowdata.get("Parent", "")
+                        if current_val in part_names:
+                            combo.setCurrentText(current_val)
+                        combo.currentTextChanged.connect(lambda val, r=row, c=col: self.dropdown_changed(r, c, val))
+                        self.table.setCellWidget(row, col, combo)
+                        self.table.setItem(row, col, QTableWidgetItem(combo.currentText()))
+                    else:
+                        combo.addItems(self.DROPDOWN_FIELDS[colname])
+                        current_val = rowdata.get(colname, "")
+                        if current_val in self.DROPDOWN_FIELDS[colname]:
+                            combo.setCurrentText(current_val)
+                        combo.currentTextChanged.connect(lambda val, r=row, c=col: self.dropdown_changed(r, c, val))
+                        self.table.setCellWidget(row, col, combo)
+                        self.table.setItem(row, col, QTableWidgetItem(combo.currentText()))
                 elif colname == "Images":
-                    # Add a button to upload/select image file and show preview
-                    widget = QWidget()
-                    hbox = QHBoxLayout()
-                    hbox.setContentsMargins(0, 0, 0, 0)
-                    btn = QPushButton("Upload Image")
-                    img_label = QLabel()
-                    img_label.setFixedSize(48, 48)
-                    img_label.setScaledContents(True)
-                    def open_file_dialog(row=row, col=col):
-                        fname, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Image Files (*.png *.jpg *.jpeg *.bmp *.gif)")
-                        if fname:
-                            self.model.rows[row][colname] = fname
-                            pixmap = QPixmap(fname)
-                            if not pixmap.isNull():
-                                img_label.setPixmap(pixmap.scaled(48, 48))
-                            self.table.setItem(row, col, QTableWidgetItem(fname.split("/")[-1] or fname.split("\\")[-1]))
-                            if self.on_data_changed:
-                                self.on_data_changed()
-                    btn.clicked.connect(open_file_dialog)
-                    hbox.addWidget(btn)
-                    hbox.addWidget(img_label)
-                    widget.setLayout(hbox)
-                    self.table.setCellWidget(row, col, widget)
-                    # Show preview if present
+                    img_widget = ImageCellWidget(self, row, col, self.model, self.on_data_changed)
+                    self.table.setCellWidget(row, col, img_widget)
                     img_val = rowdata.get(colname, "")
                     if img_val:
-                        pixmap = QPixmap(img_val)
-                        if not pixmap.isNull():
-                            img_label.setPixmap(pixmap.scaled(48, 48))
                         self.table.setItem(row, col, QTableWidgetItem(img_val.split("/")[-1] or img_val.split("\\")[-1]))
                     else:
-                        img_label.clear()
                         self.table.setItem(row, col, QTableWidgetItem(""))
+                elif colname == "Children":
+                    # Read-only: list all project parts whose parent is this part
+                    this_part = rowdata.get("Project Part", "")
+                    children = [r["Project Part"] for r in self.model.rows if r.get("Parent", "") == this_part]
+                    self.table.setItem(row, col, QTableWidgetItem(", ".join(children)))
                 else:
                     self.table.setItem(row, col, QTableWidgetItem(rowdata.get(colname, "")))
         self.table.blockSignals(False)
@@ -224,6 +315,7 @@ class DatabaseView(QWidget):
             else:
                 data.append("")
         idx = self.model.add_row(data)
+        self.model.save_to_db()
         self.refresh_table()
         if self.on_data_changed:
             self.on_data_changed()
@@ -232,6 +324,7 @@ class DatabaseView(QWidget):
         row = self.table.currentRow()
         if row >= 0:
             self.model.delete_row(row)
+            self.model.save_to_db()
             self.refresh_table()
             if self.on_data_changed:
                 self.on_data_changed()
@@ -244,13 +337,14 @@ class DatabaseView(QWidget):
             if widget:
                 date_val = widget.date().toString("yyyy-MM-dd")
                 self.model.rows[row][colname] = date_val
-        elif colname in self.DROPDOWN_FIELDS:
+        elif colname in self.DROPDOWN_FIELDS or colname == "Parent":
             widget = self.table.cellWidget(row, col)
             if widget:
                 self.model.rows[row][colname] = widget.currentText()
         else:
             val = self.table.item(row, col).text()
             self.model.rows[row][colname] = val
+        self.model.save_to_db()
         if self.on_data_changed:
             self.on_data_changed()
 
