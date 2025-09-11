@@ -39,13 +39,16 @@ class ImageCellWidget(QWidget):
                 count += 1
             shutil.copy2(fname, dest)
             rel_path = os.path.relpath(dest, os.path.dirname(os.path.abspath(__file__)))
+            print(f"Saved image relative path: {rel_path}")
             self.model.rows[self.row][ProjectDataModel.COLUMNS[self.col]] = rel_path
+            self.model.save_to_db()  # Ensure image path is persisted
             self.refresh()
             if self.on_data_changed:
                 self.on_data_changed()
 
     def refresh(self):
         img_val = self.model.rows[self.row].get(ProjectDataModel.COLUMNS[self.col], "")
+        print(f"ImageCellWidget.refresh: row={self.row}, col={self.col}, img_val={img_val}")
         if img_val:
             # Always resolve relative to script directory
             img_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), img_val)
@@ -85,9 +88,11 @@ class ProjectDataModel:
             return
         with sqlite3.connect(self.DB_FILE) as conn:
             c = conn.cursor()
-            c.execute(f"SELECT {', '.join([f'"{col}"' for col in self.COLUMNS])} FROM project_parts")
+            c.execute(f"SELECT {', '.join([f'\"{col}\"' for col in self.COLUMNS])} FROM project_parts")
             for row in c.fetchall():
-                self.rows.append({col: val for col, val in zip(self.COLUMNS, row)})
+                row_dict = {col: val for col, val in zip(self.COLUMNS, row)}
+                print(f"Loaded from DB: {row_dict}")
+                self.rows.append(row_dict)
 
     def save_to_db(self):
         self.create_table()
@@ -163,15 +168,21 @@ class ProjectTreeView(QWidget):
             parent = r.get("Parent", "")
             parent_to_children.setdefault(parent, []).append(i)
 
-        def add_items(parent_widget, parent_name):
+        def add_items(parent_widget, parent_name, visited=None):
+            if visited is None:
+                visited = set()
             for idx in parent_to_children.get(parent_name or "", []):
                 row = self.model.rows[idx]
+                part_name = row["Project Part"]
+                if part_name in visited:
+                    continue  # Prevent cycles
+                visited.add(part_name)
                 item = QTreeWidgetItem([row[col] for col in ProjectDataModel.COLUMNS])
                 if parent_widget is None:
                     self.tree.addTopLevelItem(item)
                 else:
                     parent_widget.addChild(item)
-                add_items(item, row["Project Part"])
+                add_items(item, part_name, visited.copy())
         add_items(None, "")
 
 class GanttChartView(QWidget):
@@ -291,6 +302,7 @@ class DatabaseView(QWidget):
                 elif colname == "Images":
                     img_widget = ImageCellWidget(self, row, col, self.model, self.on_data_changed)
                     self.table.setCellWidget(row, col, img_widget)
+                    img_widget.refresh()  # Ensure preview is updated after loading
                     img_val = rowdata.get(colname, "")
                     if img_val:
                         self.table.setItem(row, col, QTableWidgetItem(img_val.split("/")[-1] or img_val.split("\\")[-1]))
@@ -304,6 +316,14 @@ class DatabaseView(QWidget):
                 else:
                     self.table.setItem(row, col, QTableWidgetItem(rowdata.get(colname, "")))
         self.table.blockSignals(False)
+        # Ensure all image widgets are refreshed after table is populated
+        for row in range(self.table.rowCount()):
+            for col in range(self.table.columnCount()):
+                colname = ProjectDataModel.COLUMNS[col]
+                if colname == "Images":
+                    widget = self.table.cellWidget(row, col)
+                    if widget and hasattr(widget, "refresh"):
+                        widget.refresh()
 
     def add_row(self):
         data = []
