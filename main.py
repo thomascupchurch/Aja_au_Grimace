@@ -928,13 +928,68 @@ class CalendarView(QWidget):
         self.calendar.showSelectedDate()
 
 class TimelineView(QWidget):
-    def __init__(self):
+    def __init__(self, model=None):
         print("TimelineView: __init__ called")
         super().__init__()
+        self.model = model
         layout = QVBoxLayout()
         layout.addWidget(QLabel("Project Timeline (Read-Only)"))
-        # TODO: Add timeline rendering
+        from PyQt5.QtWidgets import QGraphicsView, QGraphicsScene
+        self.scene = QGraphicsScene()
+        self.view = QGraphicsView(self.scene)
+        layout.addWidget(self.view)
         self.setLayout(layout)
+        self.render_timeline()
+
+    def render_timeline(self):
+        import datetime
+        from PyQt5.QtGui import QBrush, QColor
+        from PyQt5.QtCore import QDate
+        self.scene.clear()
+        if not self.model or not hasattr(self.model, 'rows'):
+            return
+        rows = [row for row in self.model.rows if row.get("Start Date") and row.get("Duration (days)")]
+        if not rows:
+            return
+        # Parse dates and durations
+        bars = []
+        for row in rows:
+            start_str = row.get("Start Date", "")
+            duration = row.get("Duration (days)", 0)
+            try:
+                start = datetime.datetime.strptime(start_str, "%m-%d-%Y")
+                duration = int(duration)
+            except Exception:
+                continue
+            bars.append((row.get("Project Part", "(Unnamed)"), start, duration, row))
+        if not bars:
+            return
+        # Find min and max dates
+        min_date = min([b[1] for b in bars])
+        max_date = max([b[1] + datetime.timedelta(days=b[2]) for b in bars])
+        total_days = (max_date - min_date).days
+        # Draw bars
+        bar_height = 24
+        bar_gap = 12
+        y = 40
+        for name, start, duration, row in bars:
+            x = 100 + (start - min_date).days * 8
+            width = max(8, duration * 8)
+            color = QColor("#90caf9")  # Blue
+            self.scene.addRect(x, y, width, bar_height, brush=QBrush(color))
+            self.scene.addText(name).setPos(10, y)
+            y += bar_height + bar_gap
+        # Draw x-axis with date marks every 7 days
+        axis_y = 20
+        axis_x0 = 100
+        axis_x1 = 100 + total_days * 8 + 40
+        self.scene.addLine(axis_x0, axis_y, axis_x1, axis_y)
+        for d in range(0, total_days + 1, 7):
+            tick_x = axis_x0 + d * 8
+            self.scene.addLine(tick_x, axis_y - 5, tick_x, axis_y + 5)
+            tick_date = min_date + datetime.timedelta(days=d)
+            self.scene.addText(tick_date.strftime("%m-%d-%Y")).setPos(tick_x - 30, axis_y - 25)
+        self.view.setSceneRect(0, 0, axis_x1 + 40, max(300, y + 40))
 
 
 # New DatabaseView class
@@ -1283,7 +1338,7 @@ class MainWindow(QMainWindow):
             print("DEBUG: GanttChartView created")
             self.calendar_view = CalendarView(self.model)
             print("DEBUG: CalendarView created")
-            self.timeline_view = TimelineView()
+            self.timeline_view = TimelineView(self.model)
             print("DEBUG: TimelineView created")
             self.database_view = DatabaseView(self.model, on_data_changed=self.on_data_changed)
             print("DEBUG: DatabaseView created")
