@@ -1,3 +1,68 @@
+from PyQt5.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsLineItem
+from PyQt5.QtCore import QPointF, Qt
+# GraphicalTreeView: Visual node-link diagram of the project tree
+class GraphicalTreeView(QWidget):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("Graphical Tree (Read-Only)"))
+        self.view = QGraphicsView()
+        self.scene = QGraphicsScene()
+        self.view.setScene(self.scene)
+        layout.addWidget(self.view)
+        self.setLayout(layout)
+        self.draw_tree()
+
+    def draw_tree(self):
+        self.scene.clear()
+        rows = self.model.rows
+        if not rows:
+            return
+        # Build parent->children mapping
+        parent_to_children = {}
+        name_to_row = {}
+        for row in rows:
+            name = row.get("Project Part", "")
+            parent = row.get("Parent", "")
+            name_to_row[name] = row
+            parent_to_children.setdefault(parent, []).append(name)
+        # Layout: BFS, each level vertically spaced, siblings horizontally
+        node_positions = {}
+        level_gap = 100
+        node_gap = 120
+        def layout_level(parent, level, x_offset):
+            children = parent_to_children.get(parent, [])
+            n = len(children)
+            if n == 0:
+                return x_offset
+            start_x = x_offset
+            for i, name in enumerate(children):
+                x = x_offset + i * node_gap
+                y = level * level_gap
+                node_positions[name] = (x, y)
+                x_offset = layout_level(name, level+1, x)
+            return start_x + max(n-1,0)*node_gap
+        layout_level("", 0, 0)
+        # Draw nodes
+        node_items = {}
+        for name, (x, y) in node_positions.items():
+            ellipse = QGraphicsEllipseItem(x, y, 80, 40)
+            ellipse.setBrush(Qt.white)
+            ellipse.setPen(Qt.black)
+            self.scene.addItem(ellipse)
+            text = QGraphicsTextItem(name)
+            text.setPos(x+10, y+10)
+            self.scene.addItem(text)
+            node_items[name] = (ellipse, x+40, y+20)  # center point
+        # Draw edges
+        for parent, children in parent_to_children.items():
+            for child in children:
+                if parent and parent in node_items and child in node_items:
+                    _, px, py = node_items[parent]
+                    _, cx, cy = node_items[child]
+                    line = QGraphicsLineItem(px, py+20, cx, cy)
+                    self.scene.addItem(line)
 import shutil
 import os
 import sqlite3
@@ -401,6 +466,7 @@ class MainWindow(QMainWindow):
         self.sidebar = QListWidget()
         self.sidebar.addItems([
             "Project Tree",
+            "Graphical Tree",
             "Gantt Chart",
             "Calendar",
             "Project Timeline",
@@ -409,18 +475,20 @@ class MainWindow(QMainWindow):
         self.sidebar.currentRowChanged.connect(self.display_view)
 
         # Stacked widget for views
-        self.project_tree_view = ProjectTreeView(self.model)
-        self.gantt_chart_view = GanttChartView()
-        self.calendar_view = CalendarView()
-        self.timeline_view = TimelineView()
-        self.database_view = DatabaseView(self.model, on_data_changed=self.on_data_changed)
+    self.project_tree_view = ProjectTreeView(self.model)
+    self.graphical_tree_view = GraphicalTreeView(self.model)
+    self.gantt_chart_view = GanttChartView()
+    self.calendar_view = CalendarView()
+    self.timeline_view = TimelineView()
+    self.database_view = DatabaseView(self.model, on_data_changed=self.on_data_changed)
 
-        self.views = QStackedWidget()
-        self.views.addWidget(self.project_tree_view)
-        self.views.addWidget(self.gantt_chart_view)
-        self.views.addWidget(self.calendar_view)
-        self.views.addWidget(self.timeline_view)
-        self.views.addWidget(self.database_view)
+    self.views = QStackedWidget()
+    self.views.addWidget(self.project_tree_view)
+    self.views.addWidget(self.graphical_tree_view)
+    self.views.addWidget(self.gantt_chart_view)
+    self.views.addWidget(self.calendar_view)
+    self.views.addWidget(self.timeline_view)
+    self.views.addWidget(self.database_view)
 
         # Layout
         main_layout = QHBoxLayout()
@@ -437,7 +505,9 @@ class MainWindow(QMainWindow):
         self.views.setCurrentIndex(index)
         if index == 0:
             self.project_tree_view.refresh()
-        elif index == 4:
+        elif index == 1:
+            self.graphical_tree_view.draw_tree()
+        elif index == 5:
             self.database_view.refresh_table()
 
     def on_data_changed(self):
