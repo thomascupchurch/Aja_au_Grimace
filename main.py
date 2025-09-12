@@ -83,7 +83,7 @@ class ImageCellWidget(QWidget):
 
 class ProjectDataModel:
     COLUMNS = [
-        "Project Part", "Parent", "Children", "Start Date", "Duration (days)", "Internal/External", "Dependencies", "Type", "Calculated End Date", "Deadline", "Resources", "Notes", "Responsible", "Images", "Pace Link"
+        "Project Part", "Parent", "Children", "Start Date", "Duration (days)", "Internal/External", "Dependencies", "Type", "Calculated End Date", "Resources", "Notes", "Responsible", "Images", "Pace Link"
     ]
     DB_FILE = "project_data.db"
 
@@ -355,7 +355,7 @@ class GanttChartView(QWidget):
         edits = {}
         for col in self.model.COLUMNS:
             val = row.get(col, "")
-            if col in ("Start Date", "Calculated End Date", "Deadline"):
+            if col in ("Start Date", "Calculated End Date"):
                 date_edit = QDateEdit()
                 date_edit.setCalendarPopup(True)
                 if val:
@@ -649,8 +649,9 @@ class GanttChartView(QWidget):
             if selected:
                 row = self._bar_rect_to_row[selected[0]]
                 self.show_edit_dialog(row)
-                # Deselect after editing to allow re-click
-                selected[0].setSelected(False)
+                # Deselect after editing to allow re-click, but only if item is still in the scene
+                if selected[0].scene() is not None:
+                    selected[0].setSelected(False)
         try:
             self.scene.selectionChanged.disconnect()
         except TypeError:
@@ -858,7 +859,7 @@ from PyQt5.QtWidgets import QDateEdit
 from PyQt5.QtCore import QDate
 
 class DatabaseView(QWidget):
-    DATE_FIELDS = {"Start Date", "Calculated End Date", "Deadline"}
+    DATE_FIELDS = {"Start Date", "Calculated End Date"}
     DROPDOWN_FIELDS = {
         "Internal/External": ["Internal", "External"],
     "Type": ["Milestone", "Phase", "Feature", "Item"]
@@ -902,20 +903,28 @@ class DatabaseView(QWidget):
                     date_val = rowdata.get(colname, "")
                     date_edit = QDateEdit()
                     date_edit.setCalendarPopup(True)
+                    # Use the earliest valid QDate as the special value (blank)
+                    min_blank = QDate(1752, 9, 14)
+                    date_edit.setMinimumDate(min_blank)
+                    date_edit.setSpecialValueText("")
                     if date_val:
                         try:
                             date = QDate.fromString(date_val, "MM-dd-yyyy")
                             if date.isValid():
                                 date_edit.setDate(date)
                             else:
-                                date_edit.setDate(QDate.currentDate())
+                                date_edit.setDate(min_blank)
                         except Exception:
-                            date_edit.setDate(QDate.currentDate())
+                            date_edit.setDate(min_blank)
                     else:
-                        date_edit.setDate(QDate.currentDate())
+                        date_edit.setDate(min_blank)
                     date_edit.dateChanged.connect(lambda d, r=row, c=col: self.date_changed(r, c, d))
                     self.table.setCellWidget(row, col, date_edit)
-                    self.table.setItem(row, col, QTableWidgetItem(date_edit.date().toString("MM-dd-yyyy")))
+                    # Show blank in the table cell if value is empty or minimum blank
+                    if not date_val or date_val == min_blank.toString("MM-dd-yyyy"):
+                        self.table.setItem(row, col, QTableWidgetItem(""))
+                    else:
+                        self.table.setItem(row, col, QTableWidgetItem(date_val))
                 elif colname == "Calculated End Date":
                     # Show as read-only text
                     val = rowdata.get(colname, "")
@@ -994,11 +1003,11 @@ class DatabaseView(QWidget):
                 data.append("1")
             elif col == "Internal/External":
                 data.append("Internal")
+            # Removed Deadline field
             else:
                 data.append("")
         idx = self.model.add_row(data)
         self.model.save_to_db()
-        
         self.refresh_table()
         if self.on_data_changed:
             self.on_data_changed()
