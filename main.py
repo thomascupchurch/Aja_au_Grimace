@@ -1,4 +1,5 @@
 from PyQt5.QtWidgets import QDialog, QFormLayout, QLineEdit, QTextEdit, QComboBox, QDateEdit, QPushButton, QFileDialog, QLabel, QHBoxLayout
+from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtCore import QDate
 print("ZZZ-TEST-123: This is the top of main.py you are editing!")
 
@@ -659,11 +660,16 @@ class GanttChartView(QWidget):
         def on_selection_changed():
             selected = [item for item in self.scene.selectedItems() if item in self._bar_rect_to_row]
             if selected:
-                row = self._bar_rect_to_row[selected[0]]
-                self.show_edit_dialog(row)
-                # Deselect after editing to allow re-click, but only if item is still in the scene
-                if selected[0].scene() is not None:
-                    selected[0].setSelected(False)
+                bar = selected[0]
+                # Check if the item is still valid and not deleted
+                try:
+                    if bar.scene() is not None:
+                        row = self._bar_rect_to_row[bar]
+                        self.show_edit_dialog(row)
+                        bar.setSelected(False)
+                except RuntimeError:
+                    # The item was deleted, ignore
+                    pass
         try:
             self.scene.selectionChanged.disconnect()
         except TypeError:
@@ -846,13 +852,80 @@ class GanttChartView(QWidget):
         self.view.setSceneRect(0, 0, 800, max(300, len(bars)*(bar_height+bar_gap)+60))
 
 class CalendarView(QWidget):
-    def __init__(self):
+    def __init__(self, model=None):
         print("CalendarView: __init__ called")
         super().__init__()
+        self.model = model
+        from PyQt5.QtWidgets import QCalendarWidget, QListWidget, QMessageBox, QPushButton, QHBoxLayout
+        from PyQt5.QtGui import QTextCharFormat, QBrush, QColor
         layout = QVBoxLayout()
-        layout.addWidget(QLabel("Calendar (Read-Only)"))
-        # TODO: Add calendar rendering
+        layout.addWidget(QLabel("Calendar (Click a date to see tasks)"))
+        self.calendar = QCalendarWidget()
+        self.calendar.setGridVisible(True)
+        layout.addWidget(self.calendar)
+        self.task_list = QListWidget()
+        layout.addWidget(self.task_list)
+        # Add 'Today' button
+        btn_layout = QHBoxLayout()
+        today_btn = QPushButton("Today")
+        today_btn.clicked.connect(self.go_to_today)
+        btn_layout.addWidget(today_btn)
+        layout.addLayout(btn_layout)
         self.setLayout(layout)
+        self.calendar.selectionChanged.connect(self.update_task_list)
+        self.calendar.clicked.connect(self.show_task_details)
+        self.highlight_task_dates()
+        self.update_task_list()
+
+    def highlight_task_dates(self):
+        if not self.model:
+            return
+        from PyQt5.QtGui import QTextCharFormat, QBrush, QColor
+        fmt = QTextCharFormat()
+        fmt.setBackground(QBrush(QColor("#ffe082")))  # Light yellow
+        # Clear previous highlights
+        self.calendar.setDateTextFormat(self.calendar.minimumDate(), QTextCharFormat())
+        self.calendar.setDateTextFormat(self.calendar.maximumDate(), QTextCharFormat())
+        # Highlight all dates with tasks
+        dates_with_tasks = set()
+        for row in getattr(self.model, 'rows', []):
+            date_str = row.get("Start Date", "")
+            if date_str:
+                from PyQt5.QtCore import QDate
+                date = QDate.fromString(date_str, "MM-dd-yyyy")
+                if date.isValid():
+                    dates_with_tasks.add(date)
+        for date in dates_with_tasks:
+            self.calendar.setDateTextFormat(date, fmt)
+
+    def update_task_list(self):
+        self.task_list.clear()
+        if not self.model:
+            return
+        selected_date = self.calendar.selectedDate()
+        date_str = selected_date.toString("MM-dd-yyyy")
+        for row in getattr(self.model, 'rows', []):
+            if row.get("Start Date", "") == date_str:
+                part = row.get("Project Part", "(Unnamed)")
+                self.task_list.addItem(part)
+
+    def show_task_details(self, qdate):
+        if not self.model:
+            return
+        date_str = qdate.toString("MM-dd-yyyy")
+        tasks = [row for row in getattr(self.model, 'rows', []) if row.get("Start Date", "") == date_str]
+        if not tasks:
+            return
+        msg = "Tasks for {}:\n".format(date_str)
+        for row in tasks:
+            msg += f"- {row.get('Project Part', '(Unnamed)')}\n"
+        QMessageBox.information(self, "Tasks on {}".format(date_str), msg)
+
+    def go_to_today(self):
+        from PyQt5.QtCore import QDate
+        self.calendar.setSelectedDate(QDate.currentDate())
+        self.update_task_list()
+        self.calendar.showSelectedDate()
 
 class TimelineView(QWidget):
     def __init__(self):
@@ -1208,7 +1281,7 @@ class MainWindow(QMainWindow):
             print("DEBUG: ProjectTreeView created")
             self.gantt_chart_view = GanttChartView()
             print("DEBUG: GanttChartView created")
-            self.calendar_view = CalendarView()
+            self.calendar_view = CalendarView(self.model)
             print("DEBUG: CalendarView created")
             self.timeline_view = TimelineView()
             print("DEBUG: TimelineView created")
