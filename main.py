@@ -1,4 +1,7 @@
+from PyQt5.QtWidgets import QDialog, QFormLayout, QLineEdit, QTextEdit, QComboBox, QDateEdit, QPushButton, QFileDialog, QLabel, QHBoxLayout
+from PyQt5.QtCore import QDate
 print("ZZZ-TEST-123: This is the top of main.py you are editing!")
+
 # Minimal ImageCellWidget for image upload/preview in DatabaseView
 from PyQt5.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFileDialog, QMainWindow, QApplication, QListWidget, QTreeWidget, QGraphicsScene, QStackedWidget, QDialog
 from PyQt5.QtWidgets import QTreeWidgetItem
@@ -80,7 +83,7 @@ class ImageCellWidget(QWidget):
 
 class ProjectDataModel:
     COLUMNS = [
-        "Project Part", "Parent", "Children", "Start Date", "Duration (days)", "Internal/External", "Dependencies", "Type", "Calculated End Date", "Deadline", "Resources", "Notes", "Responsible", "Images"
+        "Project Part", "Parent", "Children", "Start Date", "Duration (days)", "Internal/External", "Dependencies", "Type", "Calculated End Date", "Deadline", "Resources", "Notes", "Responsible", "Images", "Pace Link"
     ]
     DB_FILE = "project_data.db"
 
@@ -171,10 +174,16 @@ class ProjectDataModel:
             duration = row.get("Duration (days)", "")
             try:
                 if start and duration:
-                    start_date = datetime.datetime.strptime(start, "%Y-%m-%d")
+                    start_date = datetime.datetime.strptime(start, "%m-%d-%Y")
                     days = int(duration)
-                    end_date = start_date + datetime.timedelta(days=days)
-                    row["Calculated End Date"] = end_date.strftime("%Y-%m-%d")
+                    current_date = start_date
+                    added_days = 0
+                    while added_days < days:
+                        current_date += datetime.timedelta(days=1)
+                        # Skip Saturday (5) and Sunday (6)
+                        if current_date.weekday() < 5:
+                            added_days += 1
+                    row["Calculated End Date"] = current_date.strftime("%m-%d-%Y")
                 else:
                     row["Calculated End Date"] = ""
             except Exception:
@@ -187,13 +196,84 @@ class ProjectTreeView(QWidget):
         self.model = model
         self.on_part_selected = on_part_selected
         layout = QVBoxLayout()
-        layout.addWidget(QLabel("Project Tree (Read-Only)"))
+        layout.addWidget(QLabel("Project Tree (Drag-and-Drop Enabled)"))
         self.tree = QTreeWidget()
         self.display_columns = ["Project Part", "Type"]
         self.tree.setHeaderLabels(self.display_columns)
+        # Enable drag and drop
+        self.tree.setDragEnabled(True)
+        self.tree.setAcceptDrops(True)
+        self.tree.setDropIndicatorShown(True)
+        self.tree.setDefaultDropAction(Qt.MoveAction)
+        self.tree.setDragDropMode(QTreeWidget.InternalMove)
         layout.addWidget(self.tree)
+
+        # Add image preview label
+        self.preview_label = QLabel()
+        self.preview_label.setFixedHeight(100)
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.preview_label)
+
         self.setLayout(layout)
         self.tree.itemSelectionChanged.connect(self.handle_selection)
+        self.tree.dropEvent = self.dropEvent  # Override dropEvent
+        self.tree.setMouseTracking(True)
+        self.tree.viewport().setMouseTracking(True)
+        self.tree.viewport().installEventFilter(self)
+        self.refresh()
+
+    def eventFilter(self, obj, event):
+        from PyQt5.QtCore import QEvent
+        if obj == self.tree.viewport():
+            if event.type() == QEvent.MouseMove:
+                pos = event.pos()
+                item = self.tree.itemAt(pos)
+                if item:
+                    part_name = item.text(0)
+                    row = next((r for r in self.model.rows if r["Project Part"] == part_name), None)
+                    if row:
+                        img_path = row.get("Images", "")
+                        if img_path and str(img_path).strip():
+                            import os
+                            from PyQt5.QtGui import QPixmap
+                            if not os.path.isabs(img_path):
+                                base_dir = os.path.dirname(os.path.abspath(__file__))
+                                img_path_full = os.path.join(base_dir, img_path)
+                            else:
+                                img_path_full = img_path
+                            pixmap = QPixmap(img_path_full)
+                            if not pixmap.isNull():
+                                self.preview_label.setPixmap(pixmap.scaledToHeight(90, Qt.SmoothTransformation))
+                            else:
+                                self.preview_label.setText("[Image not found]")
+                        else:
+                            self.preview_label.clear()
+                    else:
+                        self.preview_label.clear()
+                else:
+                    self.preview_label.clear()
+            elif event.type() == QEvent.Leave:
+                self.preview_label.clear()
+        return super().eventFilter(obj, event)
+
+    def dropEvent(self, event):
+        # Call the default dropEvent to move the item visually
+        QTreeWidget.dropEvent(self.tree, event)
+        # After the move, update the model
+        self.update_model_after_drag()
+
+    def update_model_after_drag(self):
+        # Rebuild parent relationships in the model based on the new tree structure
+        def recurse(item, parent_name):
+            part_name = item.text(0)
+            for row in self.model.rows:
+                if row["Project Part"] == part_name:
+                    row["Parent"] = parent_name if parent_name else None
+            for i in range(item.childCount()):
+                recurse(item.child(i), part_name)
+        for i in range(self.tree.topLevelItemCount()):
+            recurse(self.tree.topLevelItem(i), None)
+        self.model.save_to_db()
         self.refresh()
 
     def handle_selection(self):
@@ -267,6 +347,144 @@ class ZoomableGraphicsView(QGraphicsView):
 
 
 class GanttChartView(QWidget):
+
+    def show_edit_dialog(self, row):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Edit Project Part: {row.get('Project Part', '')}")
+        layout = QFormLayout(dialog)
+        edits = {}
+        for col in self.model.COLUMNS:
+            val = row.get(col, "")
+            if col in ("Start Date", "Calculated End Date", "Deadline"):
+                date_edit = QDateEdit()
+                date_edit.setCalendarPopup(True)
+                if val:
+                    date = QDate.fromString(val, "MM-dd-yyyy")
+                    if date.isValid():
+                        date_edit.setDate(date)
+                edits[col] = date_edit
+                layout.addRow(col, date_edit)
+            elif col == "Type":
+                combo = QComboBox()
+                combo.addItems(["Milestone", "Phase", "Feature", "Item"])
+                if val:
+                    combo.setCurrentText(val)
+                edits[col] = combo
+                layout.addRow(col, combo)
+            elif col == "Internal/External":
+                combo = QComboBox()
+                combo.addItems(["Internal", "External"])
+                if val:
+                    combo.setCurrentText(val)
+                edits[col] = combo
+                layout.addRow(col, combo)
+            elif col == "Notes":
+                text = QTextEdit()
+                text.setPlainText(val)
+                edits[col] = text
+                layout.addRow(col, text)
+            elif col == "Images":
+                hbox = QHBoxLayout()
+                img_label = QLabel()
+                if val:
+                    import os
+                    from PyQt5.QtGui import QPixmap
+                    if not os.path.isabs(val):
+                        base_dir = os.path.dirname(os.path.abspath(__file__))
+                        img_path_full = os.path.join(base_dir, val)
+                    else:
+                        img_path_full = val
+                    pixmap = QPixmap(img_path_full)
+                    if not pixmap.isNull():
+                        img_label.setPixmap(pixmap.scaledToHeight(48, Qt.SmoothTransformation))
+                btn = QPushButton("Change Image")
+                def pick_image():
+                    fname, _ = QFileDialog.getOpenFileName(dialog, "Select Image", "", "Image Files (*.png *.jpg *.jpeg *.bmp *.gif)")
+                    if fname:
+                        img_label.setPixmap(QPixmap(fname).scaledToHeight(48, Qt.SmoothTransformation))
+                        edits[col].setText(fname)
+                btn.clicked.connect(pick_image)
+                img_path_edit = QLineEdit(val)
+                edits[col] = img_path_edit
+                hbox.addWidget(img_label)
+                hbox.addWidget(img_path_edit)
+                hbox.addWidget(btn)
+                layout.addRow(col, hbox)
+            elif col == "Pace Link":
+                link_edit = QLineEdit(val)
+                edits[col] = link_edit
+                link_label = QLabel()
+                if val and (val.startswith("http://") or val.startswith("https://")):
+                    link_label.setText(f'<a href="{val}">{val}</a>')
+                    link_label.setOpenExternalLinks(True)
+                else:
+                    link_label.setText("")
+                layout.addRow(col, link_edit)
+                layout.addRow("Link Preview", link_label)
+                def update_link_label():
+                    v = link_edit.text()
+                    if v and (v.startswith("http://") or v.startswith("https://")):
+                        link_label.setText(f'<a href="{v}">{v}</a>')
+                        link_label.setOpenExternalLinks(True)
+                    else:
+                        link_label.setText("")
+                link_edit.textChanged.connect(update_link_label)
+            else:
+                line = QLineEdit(val)
+                edits[col] = line
+                layout.addRow(col, line)
+        save_btn = QPushButton("Save")
+        cancel_btn = QPushButton("Cancel")
+        def save():
+            for col in self.model.COLUMNS:
+                widget = edits[col]
+                if isinstance(widget, QLineEdit):
+                    row[col] = widget.text()
+                elif isinstance(widget, QComboBox):
+                    row[col] = widget.currentText()
+                elif isinstance(widget, QDateEdit):
+                    row[col] = widget.date().toString("MM-dd-yyyy")
+                elif isinstance(widget, QTextEdit):
+                    row[col] = widget.toPlainText()
+            self.model.save_to_db()
+            self.render_gantt(self.model)
+            dialog.accept()
+        save_btn.clicked.connect(save)
+        cancel_btn.clicked.connect(dialog.reject)
+        btn_hbox = QHBoxLayout()
+        btn_hbox.addWidget(save_btn)
+        btn_hbox.addWidget(cancel_btn)
+        layout.addRow(btn_hbox)
+        dialog.setLayout(layout)
+        dialog.exec_()
+    def highlight_group(self, part_name):
+        # Find parent and children for the given part_name
+        parent = None
+        children = set()
+        for row in self.model.rows:
+            if row["Project Part"] == part_name:
+                parent = row.get("Parent")
+            if row.get("Parent") == part_name:
+                children.add(row["Project Part"])
+        group = {part_name}
+        if parent:
+            group.add(parent)
+        group.update(children)
+        # Highlight bars in group
+        from PyQt5.QtGui import QPen, QColor
+        highlight_color = QColor("#00BFFF")
+        for item in self.scene.items():
+            if hasattr(item, 'data') and callable(item.data):
+                if item.data(0) in group:
+                    item.setPen(QPen(highlight_color, 3))
+                else:
+                    item.setPen(QPen())
+            elif hasattr(item, 'toGraphicsObject') and hasattr(item, 'setDefaultTextColor'):
+                if hasattr(item, 'toPlainText') and item.toPlainText() in group:
+                    item.setDefaultTextColor(highlight_color)
+                else:
+                    item.setDefaultTextColor(QColor("black"))
+
     def export_gantt_chart(self):
         # Open file dialog for PNG
         path, _ = QFileDialog.getSaveFileName(self, "Export Gantt Chart", "gantt_chart.png", "PNG Files (*.png)")
@@ -329,9 +547,10 @@ class GanttChartView(QWidget):
 
         self.setLayout(layout)
 
+
     def render_gantt(self, model):
-        print("DEBUG: PATCH TEST - render_gantt is running from the edited file!")
         print("DEBUG: Entered render_gantt")
+        self.model = model  # Store model for use in other methods
         self.scene.clear()
         self.preview_label.clear()
         # Get all rows with valid start date and duration
@@ -353,7 +572,7 @@ class GanttChartView(QWidget):
         bar_items = []
         for i, row in enumerate(rows):
             try:
-                start = datetime.datetime.strptime(row["Start Date"], "%Y-%m-%d")
+                start = datetime.datetime.strptime(row["Start Date"], "%m-%d-%Y")
                 duration = int(row["Duration (days)"])
                 end = start + datetime.timedelta(days=duration)
                 if min_date is None or start < min_date:
@@ -371,191 +590,72 @@ class GanttChartView(QWidget):
         # Draw bars and record their positions
         from PyQt5.QtGui import QColor
         gantt_color = QColor("#FF8200")
-
-        for name, start, duration, idx, row in bars:
-            print(f"DEBUG: [LOOP] Processing bar '{name}' row={row}")
-            x = (start - min_date).days * 10 + 100  # no shift, normal bar position
-            y = idx * (bar_height + bar_gap) + 40
-            width = max(duration * 10, 10)
-            print("DEBUG: PATCH INSIDE BAR LOOP", name)
-            print(f"DEBUG: Drawing bar {name} at x={x}, y={y}, width={width}")
-            rect = self.scene.addRect(x, y, width, bar_height)
-            rect.setBrush(gantt_color)
-            img_path = row.get("Images", "")
-            print(f"DEBUG: [CHECK] img_path for '{name}' is '{img_path}' (type={type(img_path)})")
-            print("DEBUG: FORCED INDICATOR CHECK", name, img_path, type(img_path))
-            label = self.scene.addText(name)
-            label.setPos(10, y)
-            date_label = self.scene.addText(start.strftime("%Y-%m-%d"))
-            # Draw indicator after bar and label for visibility
-            if img_path and str(img_path).strip():
-                print("DEBUG: FORCED INSIDE IF", name, img_path)
-                print(f"DEBUG: Adding image indicator for bar '{name}' at ({x}, {y}) with image path: '{img_path}'")
-                indicator_radius = 16
-                indicator_x = x - indicator_radius + 2  # offset further left
-                indicator_y = y + (bar_height // 2) - (indicator_radius // 2)
-                from PyQt5.QtGui import QBrush, QColor, QPen
-                indicator = self.scene.addEllipse(
-                    indicator_x, indicator_y, indicator_radius, indicator_radius,
-                    QPen(QColor("#000000"), 4), QBrush(QColor("#ff2222"))
-                )
-                indicator.setZValue(100)
-                print(f"DEBUG: Indicator for '{name}' at ({indicator_x},{indicator_y}), radius={indicator_radius}, Z={indicator.zValue()}")
-            else:
-                print("DEBUG: FORCED INSIDE ELSE", name, img_path)
-                print(f"DEBUG: SKIPPING indicator for bar '{name}' at ({x}, {y}); img_path='{img_path}' (type={type(img_path)})")
-            print("DEBUG: PATCH END OF BAR LOOP", name)
-            date_label.setPos(x, y + bar_height)
-            name_to_bar[name] = (x, y, width, bar_height)
-            # Store bar rect and row for hover events
-            bar_items.append((rect, row))
-
-        # Add mouse click events to bars
-        for rect, row in bar_items:
-            rect.setAcceptHoverEvents(False)
-            import os
-            def make_mouse_press(row):
-                def mousePressEvent(event):
-                    img_path = row.get("Images", "")
-                    if img_path:
-                        # If not absolute, resolve relative to project dir
-                        if not os.path.isabs(img_path):
-                            base_dir = os.path.dirname(os.path.abspath(__file__))
-                            img_path_full = os.path.join(base_dir, img_path)
-                        else:
-                            img_path_full = img_path
-                        pixmap = QPixmap(img_path_full)
-                        if not pixmap.isNull():
-                            self.preview_label.setPixmap(pixmap.scaledToHeight(90, Qt.SmoothTransformation))
-                        else:
-                            self.preview_label.setText("[Image not found]")
+        from PyQt5.QtWidgets import QGraphicsRectItem
+        class HoverableBar(QGraphicsRectItem):
+            def __init__(self, x, y, width, height, row, preview_label, *args, **kwargs):
+                super().__init__(x, y, width, height, *args, **kwargs)
+                self.row = row
+                self.preview_label = preview_label
+                self.setAcceptHoverEvents(True)
+            def hoverEnterEvent(self, event):
+                img_path = self.row.get("Images", "")
+                if img_path and str(img_path).strip():
+                    import os
+                    from PyQt5.QtGui import QPixmap
+                    if not os.path.isabs(img_path):
+                        base_dir = os.path.dirname(os.path.abspath(__file__))
+                        img_path_full = os.path.join(base_dir, img_path)
                     else:
-                        self.preview_label.setText("")
-                return mousePressEvent
-            rect.mousePressEvent = make_mouse_press(row)
+                        img_path_full = img_path
+                    pixmap = QPixmap(img_path_full)
+                    if not pixmap.isNull():
+                        self.preview_label.setPixmap(pixmap.scaledToHeight(90, Qt.SmoothTransformation))
+                    else:
+                        self.preview_label.setText("[Image not found]")
+                else:
+                    self.preview_label.setText("")
+                super().hoverEnterEvent(event)
+            def hoverLeaveEvent(self, event):
+                self.preview_label.clear()
+                super().hoverLeaveEvent(event)
 
-        # Draw x-axis with date marks
-        if min_date and max_date:
-            axis_y = 30
-            axis_x0 = 100
-            axis_x1 = (max_date - min_date).days * 10 + 100 + 40
-            self.scene.addLine(axis_x0, axis_y, axis_x1, axis_y)
-            # Draw tick marks and date labels every 7 days
-            tick_interval = 7
-            total_days = (max_date - min_date).days
-            for d in range(0, total_days + 1, tick_interval):
-                tick_x = axis_x0 + d * 10
-                self.scene.addLine(tick_x, axis_y - 5, tick_x, axis_y + 5)
-                tick_date = min_date + datetime.timedelta(days=d)
-                tick_label = self.scene.addText(tick_date.strftime("%Y-%m-%d"))
-                tick_label.setPos(tick_x - 30, axis_y - 25)
-
-        # Draw dependency lines (red, thick, robust to whitespace/case)
-        from PyQt5.QtGui import QPen, QColor
-        dep_pen_red = QPen(QColor(220, 0, 0))
-        dep_pen_red.setWidth(3)
-        dep_pen_black = QPen(QColor(0, 0, 0))
-        dep_pen_black.setWidth(3)
-        import datetime
-        # Build a mapping from name to (start, end) dates
-        name_to_dates = {}
-        for name, start, duration, idx, row in bars:
-            end = start + datetime.timedelta(days=duration)
-            name_to_dates[name] = (start, end)
-        for name, start, duration, idx, row in bars:
-            deps = row.get("Dependencies", "")
-            if not deps:
-                continue
-            for dep_name in [d.strip() for d in deps.split(",") if d.strip()]:
-                # Case-insensitive match
-                dep_key = next((k for k in name_to_bar if k.strip().lower() == dep_name.lower()), None)
-                this_key = next((k for k in name_to_bar if k.strip().lower() == name.lower()), None)
-                if dep_key and this_key:
-                    dep_x, dep_y, dep_width, dep_height = name_to_bar[dep_key]
-                    this_x, this_y, _, _ = name_to_bar[this_key]
-                    # Draw dependency line (red if valid, black if not)
-                    pen = dep_pen_red if name_to_dates[this_key][0] > name_to_dates[dep_key][1] else dep_pen_black
-                    self.scene.addLine(dep_x + dep_width, dep_y + bar_height // 2, this_x, this_y + bar_height // 2, pen)
-
-    def render_gantt(self, model):
-        print("DEBUG: Entered render_gantt")
-        self.scene.clear()
-        self.preview_label.clear()
-        # Get all rows with valid start date and duration
-        print(f"DEBUG: model.rows = {model.rows}")
-        rows = [r for r in model.rows if r.get("Start Date") and r.get("Duration (days)")]
-        print(f"DEBUG: rows for Gantt = {rows}")
-        if not rows:
-            print("DEBUG: No rows to render in Gantt chart.")
-            return
-        # Parse dates and durations
-        import datetime
-        from PyQt5.QtGui import QPixmap
-        bar_height = 24
-        bar_gap = 10
-        min_date = None
-        max_date = None
-        bars = []
-        name_to_bar = {}
-        bar_items = []
-        for i, row in enumerate(rows):
-            try:
-                start = datetime.datetime.strptime(row["Start Date"], "%Y-%m-%d")
-                duration = int(row["Duration (days)"])
-                end = start + datetime.timedelta(days=duration)
-                if min_date is None or start < min_date:
-                    min_date = start
-                if max_date is None or end > max_date:
-                    max_date = end
-                bars.append((row["Project Part"], start, duration, i, row))
-                print(f"DEBUG: Added bar: {row['Project Part']}, start={start}, duration={duration}, end={end}")
-            except Exception as e:
-                print(f"DEBUG: Failed to parse row {row}: {e}")
-                continue
-        if not bars:
-            print("DEBUG: No bars to draw in Gantt chart.")
-            return
-        # Draw bars and record their positions
-        from PyQt5.QtGui import QColor
-        gantt_color = QColor("#FF8200")
         for name, start, duration, idx, row in bars:
             x = (start - min_date).days * 10 + 100  # 10px per day, offset for labels
             y = idx * (bar_height + bar_gap) + 40
             width = max(duration * 10, 10)
             print(f"DEBUG: Drawing bar {name} at x={x}, y={y}, width={width}")
-            rect = self.scene.addRect(x, y, width, bar_height)
+            rect = HoverableBar(x, y, width, bar_height, row, self.preview_label)
             rect.setBrush(gantt_color)
+            self.scene.addItem(rect)
             label = self.scene.addText(name)
             label.setPos(10, y)
-            date_label = self.scene.addText(start.strftime("%Y-%m-%d"))
-            date_label.setPos(x, y + bar_height)
+            # Removed automatic display of start date label on Gantt chart bars
             name_to_bar[name] = (x, y, width, bar_height)
-            # Store bar rect and row for hover events
+            # Store bar rect and row for selection/edit events
             bar_items.append((rect, row))
 
+            # Removed image indicator ellipse for image association
+
         # Add mouse click events to bars
+        from PyQt5.QtWidgets import QGraphicsItem
+        self._bar_rect_to_row = {}
         for rect, row in bar_items:
-            rect.setAcceptHoverEvents(False)
-            import os
-            def make_mouse_press(row):
-                def mousePressEvent(event):
-                    img_path = row.get("Images", "")
-                    if img_path:
-                        # If not absolute, resolve relative to project dir
-                        if not os.path.isabs(img_path):
-                            base_dir = os.path.dirname(os.path.abspath(__file__))
-                            img_path_full = os.path.join(base_dir, img_path)
-                        else:
-                            img_path_full = img_path
-                        pixmap = QPixmap(img_path_full)
-                        if not pixmap.isNull():
-                            self.preview_label.setPixmap(pixmap.scaledToHeight(90, Qt.SmoothTransformation))
-                        else:
-                            self.preview_label.setText("[Image not found]")
-                    else:
-                        self.preview_label.setText("")
-                return mousePressEvent
-            rect.mousePressEvent = make_mouse_press(row)
+            rect.setFlag(QGraphicsItem.ItemIsSelectable, True)
+            self._bar_rect_to_row[rect] = row
+
+        # Connect selection change to open edit dialog
+        def on_selection_changed():
+            selected = [item for item in self.scene.selectedItems() if item in self._bar_rect_to_row]
+            if selected:
+                row = self._bar_rect_to_row[selected[0]]
+                self.show_edit_dialog(row)
+                # Deselect after editing to allow re-click
+                selected[0].setSelected(False)
+        try:
+            self.scene.selectionChanged.disconnect()
+        except TypeError:
+            pass
+        self.scene.selectionChanged.connect(on_selection_changed)
 
         # Draw x-axis with date marks
         if min_date and max_date:
@@ -570,7 +670,7 @@ class GanttChartView(QWidget):
                 tick_x = axis_x0 + d * 10
                 self.scene.addLine(tick_x, axis_y - 5, tick_x, axis_y + 5)
                 tick_date = min_date + datetime.timedelta(days=d)
-                tick_label = self.scene.addText(tick_date.strftime("%Y-%m-%d"))
+                tick_label = self.scene.addText(tick_date.strftime("%m-%d-%Y"))
                 tick_label.setPos(tick_x - 30, axis_y - 25)
 
         # Draw dependency lines (red, thick, robust to whitespace/case)
@@ -804,7 +904,7 @@ class DatabaseView(QWidget):
                     date_edit.setCalendarPopup(True)
                     if date_val:
                         try:
-                            date = QDate.fromString(date_val, "yyyy-MM-dd")
+                            date = QDate.fromString(date_val, "MM-dd-yyyy")
                             if date.isValid():
                                 date_edit.setDate(date)
                             else:
@@ -815,7 +915,7 @@ class DatabaseView(QWidget):
                         date_edit.setDate(QDate.currentDate())
                     date_edit.dateChanged.connect(lambda d, r=row, c=col: self.date_changed(r, c, d))
                     self.table.setCellWidget(row, col, date_edit)
-                    self.table.setItem(row, col, QTableWidgetItem(date_edit.date().toString("yyyy-MM-dd")))
+                    self.table.setItem(row, col, QTableWidgetItem(date_edit.date().toString("MM-dd-yyyy")))
                 elif colname == "Calculated End Date":
                     # Show as read-only text
                     val = rowdata.get(colname, "")
@@ -856,6 +956,25 @@ class DatabaseView(QWidget):
                     this_part = rowdata.get("Project Part", "")
                     children = [r["Project Part"] for r in self.model.rows if r.get("Parent", "") == this_part]
                     self.table.setItem(row, col, QTableWidgetItem(", ".join(children)))
+                elif colname == "Pace Link":
+                    link = rowdata.get(colname, "")
+                    if link and (link.startswith("http://") or link.startswith("https://")):
+                        label = QLabel(f'<a href="{link}">{link}</a>')
+                        label.setOpenExternalLinks(True)
+                        self.table.setCellWidget(row, col, label)
+                        self.table.setItem(row, col, QTableWidgetItem(link))
+                    else:
+                        line_edit = QLineEdit(link)
+                        def on_edit_finished(row=row, col=col, edit=line_edit):
+                            val = edit.text()
+                            self.model.rows[row][colname] = val
+                            self.model.save_to_db()
+                            self.refresh_table()
+                            if self.on_data_changed:
+                                self.on_data_changed()
+                        line_edit.editingFinished.connect(on_edit_finished)
+                        self.table.setCellWidget(row, col, line_edit)
+                        self.table.setItem(row, col, QTableWidgetItem(link))
                 else:
                     self.table.setItem(row, col, QTableWidgetItem(rowdata.get(colname, "")))
         self.table.blockSignals(False)
@@ -899,7 +1018,7 @@ class DatabaseView(QWidget):
         if colname in self.DATE_FIELDS:
             widget = self.table.cellWidget(row, col)
             if widget:
-                date_val = widget.date().toString("yyyy-MM-dd")
+                date_val = widget.date().toString("MM-dd-yyyy")
                 self.model.rows[row][colname] = date_val
             # Add Export button
             export_btn = QPushButton("Export Gantt Chart")
@@ -909,12 +1028,18 @@ class DatabaseView(QWidget):
             widget = self.table.cellWidget(row, col)
             if widget:
                 self.model.rows[row][colname] = widget.currentText()
+        elif colname == "Pace Link":
+            widget = self.table.cellWidget(row, col)
+            if isinstance(widget, QLineEdit):
+                val = widget.text()
+                self.model.rows[row][colname] = val
+
         else:
             val = self.table.item(row, col).text()
             self.model.rows[row][colname] = val
-        self.model.update_calculated_end_dates()
-        self.model.save_to_db()
-        self.refresh_table()
+            self.model.update_calculated_end_dates()
+            self.model.save_to_db()
+            self.refresh_table()
         if self.on_data_changed:
             self.on_data_changed()
     
@@ -967,7 +1092,7 @@ class DatabaseView(QWidget):
 
     def date_changed(self, row, col, qdate):
         colname = ProjectDataModel.COLUMNS[col]
-        date_val = qdate.toString("yyyy-MM-dd")
+        date_val = qdate.toString("MM-dd-yyyy")
         self.model.rows[row][colname] = date_val
         self.table.blockSignals(True)
         self.table.setItem(row, col, QTableWidgetItem(date_val))
@@ -991,128 +1116,120 @@ class MainWindow(QMainWindow):
         elif index == 4:
             self.database_view.refresh_table()
     def __init__(self, model):
-        print("MainWindow: __init__ called")
-        super().__init__()
-        self.setWindowTitle("Project Management App")
-        self.resize(1200, 700)
-        # Set global stylesheet for background and foreground colors
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #4B4B4B;
-                color: #FF8200;
-            }
-            QLineEdit, QTableWidget, QTreeWidget, QComboBox, QDateEdit, QHeaderView::section {
-                background-color: #333333;
-                color: #FF8200;
-                border: 1px solid #FF8200;
-            }
-            QPushButton {
-                background-color: #333333;
-                color: #FF8200;
-                border: 1px solid #FF8200;
-            }
-            QTableWidget QTableCornerButton::section {
-                background-color: #333333;
-            }
-        """)
+        try:
+            print("MainWindow: __init__ called")
+            super().__init__()
+            self.setWindowTitle("Project Management App")
+            self.resize(1200, 700)
+            # Set global stylesheet for background and foreground colors
+            self.setStyleSheet("""
+                QWidget {
+                    background-color: #4B4B4B;
+                    color: #FF8200;
+                }
+                QLineEdit, QTableWidget, QTreeWidget, QComboBox, QDateEdit, QHeaderView::section {
+                    background-color: #333333;
+                    color: #FF8200;
+                    border: 1px solid #FF8200;
+                }
+                QPushButton {
+                    background-color: #333333;
+                    color: #FF8200;
+                    border: 1px solid #FF8200;
+                }
+                QTableWidget QTableCornerButton::section {
+                    background-color: #333333;
+                }
+            """)
 
-        self.model = model
+            self.model = model
 
-        # Header with centered logo
-        header_layout = QHBoxLayout()
-        header_layout.addStretch(1)
-        logo_label = QLabel()
-        logo_pixmap = QPixmap(os.path.join(os.path.dirname(os.path.abspath(__file__)), "LSI_Power_T_Combo_Logo.png"))
-        logo_label.setPixmap(logo_pixmap.scaledToHeight(64, Qt.SmoothTransformation))
-        header_layout.addWidget(logo_label, alignment=Qt.AlignCenter)
-        header_layout.addStretch(1)
+            # Header with centered header.png image
+            header_layout = QHBoxLayout()
+            header_layout.addStretch(1)
+            header_label = QLabel()
+            header_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "header.png")
+            if os.path.exists(header_path):
+                header_pixmap = QPixmap(header_path)
+                header_label.setPixmap(header_pixmap.scaledToHeight(64, Qt.SmoothTransformation))
+            else:
+                header_label.setText("[header.png not found]")
+            header_layout.addWidget(header_label, alignment=Qt.AlignCenter)
+            header_layout.addStretch(1)
+            print("DEBUG: Header layout created")
 
-        # Sidebar for view selection (create and add to layout first)
-        self.sidebar = QListWidget()
-        self.sidebar.addItems([
-            "Project Tree",
-            "Gantt Chart",
-            "Calendar",
-            "Project Timeline",
-            "Database"
-        ])
+            # Sidebar for view selection (create and add to layout first)
+            self.sidebar = QListWidget()
+            self.sidebar.addItems([
+                "Project Tree",
+                "Gantt Chart",
+                "Calendar",
+                "Project Timeline",
+                "Database"
+            ])
+            print("DEBUG: Sidebar created and items added")
 
-        # Stacked widget for views
-    self.project_tree_view = ProjectTreeView(self.model, on_part_selected=self.on_tree_part_selected)
+            # Stacked widget for views
+            self.project_tree_view = ProjectTreeView(self.model, on_part_selected=self.on_tree_part_selected)
+            print("DEBUG: ProjectTreeView created")
+            self.gantt_chart_view = GanttChartView()
+            print("DEBUG: GanttChartView created")
+            self.calendar_view = CalendarView()
+            print("DEBUG: CalendarView created")
+            self.timeline_view = TimelineView()
+            print("DEBUG: TimelineView created")
+            self.database_view = DatabaseView(self.model, on_data_changed=self.on_data_changed)
+            print("DEBUG: DatabaseView created")
+
+            self.views = QStackedWidget()
+            self.views.addWidget(self.project_tree_view)
+            self.views.addWidget(self.gantt_chart_view)
+            self.views.addWidget(self.calendar_view)
+            self.views.addWidget(self.timeline_view)
+            self.views.addWidget(self.database_view)
+            print("DEBUG: QStackedWidget created and all views added")
+
+            # Layout
+            main_layout = QVBoxLayout()
+            main_layout.addLayout(header_layout)
+            content_layout = QHBoxLayout()
+            content_layout.addWidget(self.sidebar)
+            content_layout.addWidget(self.views, 1)
+            main_layout.addLayout(content_layout)
+            print("DEBUG: Main layout and content layout created")
+
+            container = QWidget()
+            container.setLayout(main_layout)
+            self.setCentralWidget(container)
+            print("DEBUG: Central widget set")
+
+            # Now that all views are constructed, connect sidebar signals and set current row
+            self.sidebar.currentRowChanged.connect(self.display_view)
+            self.sidebar.setCurrentRow(4)  # Start on Database view for editing
+            print("DEBUG: Sidebar signal connected and current row set")
+            # If Gantt tab is selected at startup, render it
+            if self.sidebar.currentRow() == 1:
+                if hasattr(self.gantt_chart_view, 'scene') and self.gantt_chart_view.scene is not None:
+                    self.gantt_chart_view.render_gantt(self.model)
+            print("DEBUG: MainWindow __init__ complete")
+        except Exception as e:
+            import traceback
+            print("EXCEPTION in MainWindow.__init__:", e)
+            traceback.print_exc()
     def on_tree_part_selected(self, part_name):
-        # Switch to Gantt view and highlight the bar
-        gantt_index = 1  # Assuming Gantt is at index 1 in sidebar/views
-        self.sidebar.setCurrentRow(gantt_index)
-        if hasattr(self.gantt_chart_view, 'highlight_bar'):
+        # No automatic view switching. Optionally, highlight in Gantt if already there.
+        if self.sidebar.currentRow() == 1 and hasattr(self.gantt_chart_view, 'highlight_bar'):
             self.gantt_chart_view.highlight_bar(part_name)
-    def highlight_bar(self, part_name):
-        # Highlight the bar for the given part_name
-        from PyQt5.QtGui import QPen, QColor
-        highlight_color = QColor("#00BFFF")  # DeepSkyBlue
-        for item in self.scene.items():
-            if hasattr(item, 'data') and callable(item.data):
-                if item.data(0) == part_name:
-                    item.setPen(QPen(highlight_color, 3))
-                else:
-                    item.setPen(QPen())
-            elif hasattr(item, 'toGraphicsObject') and hasattr(item, 'setDefaultTextColor'):
-                # Optionally highlight text labels
-                if hasattr(item, 'toPlainText') and item.toPlainText() == part_name:
-                    item.setDefaultTextColor(highlight_color)
-                else:
-                    item.setDefaultTextColor(QColor("black"))
-        self.gantt_chart_view = GanttChartView()
-        print("DEBUG: GanttChartView constructed")
-        self.calendar_view = CalendarView()
-        self.timeline_view = TimelineView()
-        self.database_view = DatabaseView(self.model, on_data_changed=self.on_data_changed)
 
-        self.views = QStackedWidget()
-        self.views.addWidget(self.project_tree_view)
-        self.views.addWidget(self.gantt_chart_view)
-        self.views.addWidget(self.calendar_view)
-        self.views.addWidget(self.timeline_view)
-        self.views.addWidget(self.database_view)
-
-        # Layout
-        main_layout = QVBoxLayout()
-        main_layout.addLayout(header_layout)
-        content_layout = QHBoxLayout()
-        content_layout.addWidget(self.sidebar)
-        content_layout.addWidget(self.views, 1)
-        main_layout.addLayout(content_layout)
-
-        container = QWidget()
-        container.setLayout(main_layout)
-        self.setCentralWidget(container)
-
-        # Now that all views are constructed, connect sidebar signals and set current row
-        self.sidebar.currentRowChanged.connect(self.display_view)
-        self.sidebar.setCurrentRow(4)  # Start on Database view for editing
-        # If Gantt tab is selected at startup, render it
-        if self.sidebar.currentRow() == 1:
-            if hasattr(self.gantt_chart_view, 'scene') and self.gantt_chart_view.scene is not None:
-                self.gantt_chart_view.render_gantt(self.model)
-
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        # Render Gantt chart after window is shown, if Gantt tab is selected
-        if self.sidebar.currentRow() == 1:
-            if hasattr(self.gantt_chart_view, 'scene') and self.gantt_chart_view.scene is not None:
-                self.gantt_chart_view.render_gantt(self.model)
-
-
-# --- Ensure the app starts ---
 if __name__ == "__main__":
     print('DEBUG: Entered __main__ block')
+    print('ZZZ-TEST-123: About to instantiate MainWindow')
     import sys
+    from PyQt5.QtWidgets import QApplication
     app = QApplication(sys.argv)
-    print('DEBUG: QApplication created')
     model = ProjectDataModel()
-    print('DEBUG: ProjectDataModel created')
     window = MainWindow(model)
-    print('DEBUG: MainWindow created')
+    print('ZZZ-TEST-123: MainWindow instantiated')
     window.show()
     print('DEBUG: window.show() called')
     sys.exit(app.exec_())
