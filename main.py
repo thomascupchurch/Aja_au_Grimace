@@ -358,10 +358,17 @@ class GanttChartView(QWidget):
             if col in ("Start Date", "Calculated End Date"):
                 date_edit = QDateEdit()
                 date_edit.setCalendarPopup(True)
+                min_blank = QDate(1753, 1, 1)
+                date_edit.setMinimumDate(min_blank)
+                date_edit.setSpecialValueText("")
                 if val:
                     date = QDate.fromString(val, "MM-dd-yyyy")
-                    if date.isValid():
+                    if date.isValid() and date != QDate(1752, 9, 14) and date != min_blank:
                         date_edit.setDate(date)
+                    else:
+                        date_edit.setDate(min_blank)
+                else:
+                    date_edit.setDate(min_blank)
                 edits[col] = date_edit
                 layout.addRow(col, date_edit)
             elif col == "Type":
@@ -443,7 +450,12 @@ class GanttChartView(QWidget):
                 elif isinstance(widget, QComboBox):
                     row[col] = widget.currentText()
                 elif isinstance(widget, QDateEdit):
-                    row[col] = widget.date().toString("MM-dd-yyyy")
+                    d = widget.date()
+                    min_blank = QDate(1753, 1, 1)
+                    if d == min_blank:
+                        row[col] = ""
+                    else:
+                        row[col] = d.toString("MM-dd-yyyy")
                 elif isinstance(widget, QTextEdit):
                     row[col] = widget.toPlainText()
             self.model.save_to_db()
@@ -903,21 +915,29 @@ class DatabaseView(QWidget):
                     date_val = rowdata.get(colname, "")
                     date_edit = QDateEdit()
                     date_edit.setCalendarPopup(True)
-                    # Use the earliest valid QDate as the special value (blank)
-                    min_blank = QDate(1752, 9, 14)
+                    min_blank = QDate(1753, 1, 1)
                     date_edit.setMinimumDate(min_blank)
                     date_edit.setSpecialValueText("")
                     if date_val:
                         try:
                             date = QDate.fromString(date_val, "MM-dd-yyyy")
-                            if date.isValid():
+                            if date.isValid() and date != QDate(1752, 9, 14) and date != min_blank:
                                 date_edit.setDate(date)
                             else:
-                                date_edit.setDate(min_blank)
+                                if colname == "Start Date":
+                                    date_edit.setDate(QDate.currentDate())
+                                else:
+                                    date_edit.clear()
                         except Exception:
-                            date_edit.setDate(min_blank)
+                            if colname == "Start Date":
+                                date_edit.setDate(QDate.currentDate())
+                            else:
+                                date_edit.clear()
                     else:
-                        date_edit.setDate(min_blank)
+                        if colname == "Start Date":
+                            date_edit.setDate(QDate.currentDate())
+                        else:
+                            date_edit.clear()
                     date_edit.dateChanged.connect(lambda d, r=row, c=col: self.date_changed(r, c, d))
                     self.table.setCellWidget(row, col, date_edit)
                     # Show blank in the table cell if value is empty or minimum blank
@@ -1101,8 +1121,13 @@ class DatabaseView(QWidget):
 
     def date_changed(self, row, col, qdate):
         colname = ProjectDataModel.COLUMNS[col]
-        date_val = qdate.toString("MM-dd-yyyy")
-        self.model.rows[row][colname] = date_val
+        min_blank = QDate(1753, 1, 1)
+        if qdate == min_blank:
+            self.model.rows[row][colname] = ""
+            date_val = ""
+        else:
+            date_val = qdate.toString("MM-dd-yyyy")
+            self.model.rows[row][colname] = date_val
         self.table.blockSignals(True)
         self.table.setItem(row, col, QTableWidgetItem(date_val))
         self.table.blockSignals(False)
