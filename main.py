@@ -1,7 +1,9 @@
+print("DEBUG: VERY TOP OF FILE")
+
 from PyQt5.QtWidgets import QDialog, QFormLayout, QLineEdit, QTextEdit, QComboBox, QDateEdit, QPushButton, QFileDialog, QLabel, QHBoxLayout
 from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtCore import QDate
-print("ZZZ-TEST-123: This is the top of main.py you are editing!")
+
 
 # Minimal ImageCellWidget for image upload/preview in DatabaseView
 from PyQt5.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFileDialog, QMainWindow, QApplication, QListWidget, QTreeWidget, QGraphicsScene, QStackedWidget, QDialog
@@ -10,7 +12,7 @@ import os
 from PyQt5.QtGui import QPixmap
 import shutil
 
-
+print("ZZZ-TEST-123: This is the top of main.py you are editing!")
 
 class ImageCellWidget(QWidget):
     def __init__(self, parent, row, col, model, on_data_changed=None):
@@ -211,7 +213,7 @@ class ProjectTreeView(QWidget):
 
         # Add image preview label
         self.preview_label = QLabel()
-        self.preview_label.setFixedHeight(100)
+        self.preview_label.setFixedHeight(200)
         self.preview_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.preview_label)
 
@@ -244,7 +246,7 @@ class ProjectTreeView(QWidget):
                                 img_path_full = img_path
                             pixmap = QPixmap(img_path_full)
                             if not pixmap.isNull():
-                                self.preview_label.setPixmap(pixmap.scaledToHeight(90, Qt.SmoothTransformation))
+                                self.preview_label.setPixmap(pixmap.scaledToHeight(180, Qt.SmoothTransformation))
                             else:
                                 self.preview_label.setText("[Image not found]")
                         else:
@@ -444,24 +446,32 @@ class GanttChartView(QWidget):
         save_btn = QPushButton("Save")
         cancel_btn = QPushButton("Cancel")
         def save():
-            for col in self.model.COLUMNS:
-                widget = edits[col]
-                if isinstance(widget, QLineEdit):
-                    row[col] = widget.text()
-                elif isinstance(widget, QComboBox):
-                    row[col] = widget.currentText()
-                elif isinstance(widget, QDateEdit):
-                    d = widget.date()
-                    min_blank = QDate(1753, 1, 1)
-                    if d == min_blank:
-                        row[col] = ""
-                    else:
-                        row[col] = d.toString("MM-dd-yyyy")
-                elif isinstance(widget, QTextEdit):
-                    row[col] = widget.toPlainText()
-            self.model.save_to_db()
-            self.render_gantt(self.model)
-            dialog.accept()
+            try:
+                for col in self.model.COLUMNS:
+                    widget = edits[col]
+                    if isinstance(widget, QLineEdit):
+                        row[col] = widget.text()
+                    elif isinstance(widget, QComboBox):
+                        row[col] = widget.currentText()
+                    elif isinstance(widget, QDateEdit):
+                        d = widget.date()
+                        min_blank = QDate(1753, 1, 1)
+                        # Defensive: treat invalid or minimum date as blank
+                        if not d.isValid() or d == min_blank:
+                            row[col] = ""
+                        else:
+                            # Defensive: always output in MM-dd-yyyy
+                            row[col] = d.toString("MM-dd-yyyy")
+                    elif isinstance(widget, QTextEdit):
+                        row[col] = widget.toPlainText()
+                self.model.save_to_db()
+                self.render_gantt(self.model)
+                dialog.accept()
+            except Exception as e:
+                import traceback
+                print(f"ERROR in GanttChartView.save(): {e}")
+                traceback.print_exc()
+                QMessageBox.critical(dialog, "Save Error", f"An error occurred while saving: {e}")
         save_btn.clicked.connect(save)
         cancel_btn.clicked.connect(dialog.reject)
         btn_hbox = QHBoxLayout()
@@ -549,7 +559,7 @@ class GanttChartView(QWidget):
 
         # Image preview area
         self.preview_label = QLabel()
-        self.preview_label.setFixedHeight(100)
+        self.preview_label.setFixedHeight(200)
         self.preview_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.preview_label)
 
@@ -685,13 +695,13 @@ class GanttChartView(QWidget):
         from PyQt5.QtGui import QColor
         gantt_color = QColor("#FF8200")
         from PyQt5.QtWidgets import QGraphicsRectItem
-        class HoverableBar(QGraphicsRectItem):
+        class ClickableBar(QGraphicsRectItem):
             def __init__(self, x, y, width, height, row, preview_label, *args, **kwargs):
                 super().__init__(x, y, width, height, *args, **kwargs)
                 self.row = row
                 self.preview_label = preview_label
                 self.setAcceptHoverEvents(True)
-            def hoverEnterEvent(self, event):
+            def mousePressEvent(self, event):
                 img_path = self.row.get("Images", "")
                 if img_path and str(img_path).strip():
                     import os
@@ -709,11 +719,15 @@ class GanttChartView(QWidget):
                         self.preview_label.setText("[Image not found]")
                         self.preview_label.setPixmap(QPixmap())
                 else:
-                    self.preview_label.clear()
-                super().hoverEnterEvent(event)
-            def hoverLeaveEvent(self, event):
-                self.preview_label.clear()
-                super().hoverLeaveEvent(event)
+                    self.preview_label.setText("")
+                # Show edit dialog for the clicked bar
+                try:
+                    parent_widget = self.preview_label.parentWidget()
+                    if parent_widget and hasattr(parent_widget, 'show_edit_dialog'):
+                        parent_widget.show_edit_dialog(self.row)
+                except Exception as e:
+                    print(f"ERROR in ClickableBar.mousePressEvent: {e}")
+                # Do not call super().mousePressEvent(event) after dialog, prevents RuntimeError
 
         # Place labels at a fixed position well to the left of the earliest bar (e.g., x=10)
         from PyQt5.QtGui import QColor
@@ -723,7 +737,7 @@ class GanttChartView(QWidget):
             y = idx * (bar_height + bar_gap) + 40
             width = max(duration * 10, 10)
             print(f"DEBUG: Drawing bar {name} at x={x}, y={y}, width={width}")
-            rect = HoverableBar(x, y, width, bar_height, row, self.preview_label)
+            rect = ClickableBar(x, y, width, bar_height, row, self.preview_label)
             rect.setBrush(gantt_color)
             self.scene.addItem(rect)
             # Place label at fixed x=10, vertically centered on the bar
@@ -811,58 +825,49 @@ class GanttChartView(QWidget):
             name_to_dates[name] = (start, end)
         for name, start, duration, idx, row in bars:
             deps = row.get("Dependencies", "")
-            if not deps:
-                continue
-            for dep_name in [d.strip() for d in deps.split(",") if d.strip()]:
-                # Case-insensitive match
-                dep_key = next((k for k in name_to_bar if k.strip().lower() == dep_name.lower()), None)
-                this_key = next((k for k in name_to_bar if k.strip().lower() == name.lower()), None)
-                if dep_key and this_key:
-                    dep_x, dep_y, dep_width, dep_height = name_to_bar[dep_key]
-                    this_x, this_y, _, _ = name_to_bar[this_key]
-                    # Determine arrow color
-                    dep_end = name_to_dates.get(dep_key, (None, None))[1]
-                    this_start = name_to_dates.get(this_key, (None, None))[0]
-                    if dep_end and this_start and this_start > dep_end:
-                        bar_items = []
-                        from PyQt5.QtWidgets import QGraphicsRectItem
-                        import os
-                        class ClickableBar(QGraphicsRectItem):
-                            def __init__(self, x, y, width, height, row, preview_label, *args, **kwargs):
-                                super().__init__(x, y, width, height, *args, **kwargs)
-                                self.row = row
-                                self.preview_label = preview_label
-                            def mousePressEvent(self, event):
-                                img_path = self.row.get("Images", "")
-                                if img_path:
-                                    # If not absolute, resolve relative to project dir
-                                    if not os.path.isabs(img_path):
-                                        base_dir = os.path.dirname(os.path.abspath(__file__))
-                                        img_path_full = os.path.join(base_dir, img_path)
-                                    else:
-                                        img_path_full = img_path
-                                    from PyQt5.QtGui import QPixmap
-                                    pixmap = QPixmap(img_path_full)
-                                    if not pixmap.isNull():
-                                        self.preview_label.setPixmap(pixmap.scaledToHeight(90, Qt.SmoothTransformation))
-                                    else:
-                                        self.preview_label.setText("[Image not found]")
-                                else:
-                                    self.preview_label.setText("")
-                                super().mousePressEvent(event)
+            def save():
+                import sys
+                import traceback
+                print("DEBUG: Entered save() in GanttChartView")
+                sys.stdout.flush()
+                try:
+                    for col in self.model.COLUMNS:
+                        widget = edits[col]
+                        print(f"DEBUG: Processing column {col} with widget {type(widget)}")
+                        sys.stdout.flush()
+                        if isinstance(widget, QLineEdit):
+                            row[col] = widget.text()
+                        elif isinstance(widget, QComboBox):
+                            row[col] = widget.currentText()
+                        elif isinstance(widget, QDateEdit):
+                            d = widget.date()
+                            min_blank = QDate(1753, 1, 1)
+                            print(f"DEBUG: QDateEdit value for {col}: {d.toString('MM-dd-yyyy')}, isValid={d.isValid()}, min_blank={d == min_blank}")
+                            sys.stdout.flush()
+                            if not d.isValid() or d == min_blank:
+                                row[col] = ""
+                            else:
+                                row[col] = d.toString("MM-dd-yyyy")
+                        elif isinstance(widget, QTextEdit):
+                            row[col] = widget.toPlainText()
+                    print("DEBUG: About to call self.model.save_to_db()")
+                    sys.stdout.flush()
+                    self.model.save_to_db()
+                    print("DEBUG: About to call self.render_gantt()")
+                    sys.stdout.flush()
+                    self.render_gantt(self.model)
+                    print("DEBUG: About to accept dialog")
+                    sys.stdout.flush()
+                    dialog.accept()
+                except Exception as e:
+                    print(f"ERROR in GanttChartView.save(): {e}")
+                    traceback.print_exc()
+                    sys.stdout.flush()
+                    QMessageBox.critical(dialog, "Save Error", f"An error occurred while saving: {e}")
 
-                        for name, start, duration, idx, row in bars:
-                            x = (start - min_date).days * 10 + 100  # 10px per day, offset for labels
-                            y = idx * (bar_height + bar_gap) + 40
-                            width = max(duration * 10, 10)
-                            rect = ClickableBar(x, y, width, bar_height, row, self.preview_label)
-                            rect.setBrush(gantt_color)
-                            self.scene.addItem(rect)
-                            label = self.scene.addText(name)
-                            label.setPos(10, y)
-                            date_label = self.scene.addText(start.strftime("%Y-%m-%d"))
-                            date_label.setPos(x, y + bar_height)
-                            name_to_bar[name] = (x, y, width, bar_height)
+    # ClickableBar.mousePressEvent should be inside its class, not dedented here
+
+        # Removed stray indented block after exception handler
         # Parse dates and durations
         import datetime
         bar_height = 24
@@ -1120,6 +1125,10 @@ class TimelineView(QWidget):
         self.scene = QGraphicsScene()
         self.view = QGraphicsView(self.scene)
         layout.addWidget(self.view)
+        self.preview_label = QLabel()
+        self.preview_label.setFixedHeight(200)
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.preview_label)
         self.setLayout(layout)
         self.render_timeline()
 
@@ -1255,7 +1264,7 @@ class TimelineView(QWidget):
                             img_path_full = img_path
                         pixmap = QPixmap(img_path_full)
                         if not pixmap.isNull():
-                            preview_label.setPixmap(pixmap.scaledToHeight(90, Qt.SmoothTransformation))
+                            preview_label.setPixmap(pixmap.scaledToHeight(180, Qt.SmoothTransformation))
                             preview_label.setText("")
                         else:
                             preview_label.setText("[Image not found]")
@@ -1640,7 +1649,8 @@ class MainWindow(QMainWindow):
             header_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "header.png")
             if os.path.exists(header_path):
                 header_pixmap = QPixmap(header_path)
-                header_label.setPixmap(header_pixmap.scaledToHeight(64, Qt.SmoothTransformation))
+                # Double the previous height: 64 -> 128
+                header_label.setPixmap(header_pixmap.scaledToHeight(128, Qt.SmoothTransformation))
             else:
                 header_label.setText("[header.png not found]")
             header_layout.addWidget(header_label, alignment=Qt.AlignCenter)
@@ -1715,6 +1725,7 @@ class MainWindow(QMainWindow):
         # No automatic view switching. Optionally, highlight in Gantt if already there.
         if self.sidebar.currentRow() == 1 and hasattr(self.gantt_chart_view, 'highlight_bar'):
             self.gantt_chart_view.highlight_bar(part_name)
+
 
 if __name__ == "__main__":
     print('DEBUG: Entered __main__ block')
