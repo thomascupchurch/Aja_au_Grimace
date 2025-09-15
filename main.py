@@ -348,7 +348,7 @@ class ZoomableGraphicsView(QGraphicsView):
 
 
 class GanttChartView(QWidget):
-
+   
     def show_edit_dialog(self, row):
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Edit Project Part: {row.get('Project Part', '')}")
@@ -592,30 +592,43 @@ class GanttChartView(QWidget):
                 parent = row.get("Parent", "")
                 if parent:
                     children.setdefault(parent, []).append(row)
-            def update_span(row):
-                name = row.get("Project Part", "")
-                if name not in children:
-                    try:
-                        start = datetime.datetime.strptime(row.get("Start Date", ""), "%m-%d-%Y")
-                        duration = int(row.get("Duration (days)", 0))
-                        end = start + datetime.timedelta(days=duration)
-                        return start, end
-                    except Exception:
+        def update_span(row, visited=None):
+            if visited is None:
+                visited = set()
+            name = row.get("Project Part", "")
+            if name in visited:
+                print(f"ERROR: Cycle detected at {name}, breaking recursion.")
+                return None, None
+            visited.add(name)
+            if name not in children:
+                try:
+                    start_str = row.get("Start Date", "")
+                    duration_val = row.get("Duration (days)", 0)
+                    print(f"DEBUG: update_span leaf {name}, start_str={start_str}, duration_val={duration_val}")
+                    if not start_str or not duration_val:
                         return None, None
-                else:
-                    child_spans = [update_span(child) for child in children[name]]
-                    child_starts = [s for s, e in child_spans if s]
-                    child_ends = [e for s, e in child_spans if e]
-                    if child_starts and child_ends:
-                        min_start = min(child_starts)
-                        max_end = max(child_ends)
-                        row["_auto_start"] = min_start
-                        row["_auto_end"] = max_end
-                        # Update parent's Start Date and Calculated End Date fields
-                        row["Start Date"] = min_start.strftime("%m-%d-%Y")
-                        row["Calculated End Date"] = max_end.strftime("%m-%d-%Y")
-                        return min_start, max_end
+                    start = datetime.datetime.strptime(start_str, "%m-%d-%Y")
+                    duration = int(duration_val)
+                    end = start + datetime.timedelta(days=duration)
+                    return start, end
+                except Exception as e:
+                    print(f"ERROR in update_span leaf {name}: {e}")
                     return None, None
+            else:
+                print(f"DEBUG: update_span parent {name}, children={[c.get('Project Part', '') for c in children[name]]}")
+                child_spans = [update_span(child, visited.copy()) for child in children[name]]
+                child_starts = [s for s, e in child_spans if s]
+                child_ends = [e for s, e in child_spans if e]
+                if child_starts and child_ends:
+                    min_start = min(child_starts)
+                    max_end = max(child_ends)
+                    row["_auto_start"] = min_start
+                    row["_auto_end"] = max_end
+                    # Update parent's Start Date and Calculated End Date fields
+                    row["Start Date"] = min_start.strftime("%m-%d-%Y")
+                    row["Calculated End Date"] = max_end.strftime("%m-%d-%Y")
+                    return min_start, max_end
+                return None, None
             for row in rows:
                 update_span(row)
         # Include all rows that have either real or auto-calculated dates
@@ -644,12 +657,18 @@ class GanttChartView(QWidget):
                 duration = (end - start).days
             else:
                 try:
-                    start = datetime.datetime.strptime(row["Start Date"], "%m-%d-%Y")
-                    duration = int(row["Duration (days)"])
+                    start_str = row.get("Start Date", "")
+                    duration_val = row.get("Duration (days)", 0)
+                    if not start_str or not duration_val:
+                        continue
+                    start = datetime.datetime.strptime(start_str, "%m-%d-%Y")
+                    duration = int(duration_val)
                     end = start + datetime.timedelta(days=duration)
                 except Exception as e:
                     print(f"DEBUG: Failed to parse row {row}: {e}")
                     continue
+            if not start or not end:
+                continue
             if min_date is None or start < min_date:
                 min_date = start
             if max_date is None or end > max_date:
@@ -659,6 +678,9 @@ class GanttChartView(QWidget):
         if not bars:
             print("DEBUG: No bars to draw in Gantt chart.")
             return
+
+        # Set chart_min_date to the actual earliest start date (no cushion)
+        chart_min_date = min_date
         # Draw bars and record their positions
         from PyQt5.QtGui import QColor
         gantt_color = QColor("#FF8200")
@@ -693,17 +715,21 @@ class GanttChartView(QWidget):
                 self.preview_label.clear()
                 super().hoverLeaveEvent(event)
 
+        # Place labels at a fixed position well to the left of the earliest bar (e.g., x=10)
+        from PyQt5.QtGui import QColor
+        label_x = 10
         for name, start, duration, idx, row in bars:
-            x = (start - min_date).days * 10 + 100  # 10px per day, offset for labels
+            x = (start - chart_min_date).days * 10 + 100  # 10px per day, offset for bars
             y = idx * (bar_height + bar_gap) + 40
             width = max(duration * 10, 10)
             print(f"DEBUG: Drawing bar {name} at x={x}, y={y}, width={width}")
             rect = HoverableBar(x, y, width, bar_height, row, self.preview_label)
             rect.setBrush(gantt_color)
             self.scene.addItem(rect)
+            # Place label at fixed x=10, vertically centered on the bar
             label = self.scene.addText(name)
-            label.setPos(10, y)
-            # Removed automatic display of start date label on Gantt chart bars
+            label.setDefaultTextColor(QColor("white"))
+            label.setPos(label_x, y + (bar_height - label.boundingRect().height()) / 2)
             name_to_bar[name] = (x, y, width, bar_height)
             # Store bar rect and row for selection/edit events
             bar_items.append((rect, row))
@@ -758,16 +784,17 @@ class GanttChartView(QWidget):
         if min_date and max_date:
             axis_y = 30
             axis_x0 = 100
-            axis_x1 = (max_date - min_date).days * 10 + 100 + 40
+            axis_x1 = (max_date - chart_min_date).days * 10 + 100 + 40
             self.scene.addLine(axis_x0, axis_y, axis_x1, axis_y)
             # Draw tick marks and date labels every 7 days
             tick_interval = 7
-            total_days = (max_date - min_date).days
+            total_days = (max_date - chart_min_date).days
             for d in range(0, total_days + 1, tick_interval):
                 tick_x = axis_x0 + d * 10
                 self.scene.addLine(tick_x, axis_y - 5, tick_x, axis_y + 5)
-                tick_date = min_date + datetime.timedelta(days=d)
+                tick_date = chart_min_date + datetime.timedelta(days=d)
                 tick_label = self.scene.addText(tick_date.strftime("%m-%d-%Y"))
+                tick_label.setDefaultTextColor(QColor("white"))
                 tick_label.setPos(tick_x - 30, axis_y - 25)
 
         # Draw dependency lines (red, thick, robust to whitespace/case)
@@ -943,17 +970,94 @@ class CalendarView(QWidget):
         layout.addWidget(self.calendar)
         self.task_list = QListWidget()
         layout.addWidget(self.task_list)
-        # Add 'Today' button
+        # Add 'Today' and 'Export Calendar' buttons
         btn_layout = QHBoxLayout()
         today_btn = QPushButton("Today")
         today_btn.clicked.connect(self.go_to_today)
         btn_layout.addWidget(today_btn)
+        export_btn = QPushButton("Export Calendar (.ics)")
+        export_btn.clicked.connect(self.export_calendar_ics)
+        btn_layout.addWidget(export_btn)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
         self.calendar.selectionChanged.connect(self.update_task_list)
         self.calendar.clicked.connect(self.show_task_details)
         self.highlight_task_dates()
         self.update_task_list()
+
+    def export_calendar_ics(self):
+        """Export all tasks as iCalendar (.ics) file, including Pace Link, Responsible, and Type."""
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        import datetime
+        if not self.model or not hasattr(self.model, 'rows'):
+            QMessageBox.warning(self, "Export Failed", "No data to export.")
+            return
+        # Ask for file path
+        path, _ = QFileDialog.getSaveFileName(self, "Export Calendar", "project_calendar.ics", "iCalendar Files (*.ics)")
+        if not path:
+            return
+        # Build .ics content
+        def escape_ics(text):
+            return str(text).replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+        ics_lines = [
+            "BEGIN:VCALENDAR",
+            "VERSION:2.0",
+            "PRODID:-//Aja au Grimace//Project Calendar//EN"
+        ]
+        import re
+        email_regex = r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+"
+        for row in self.model.rows:
+            part = row.get("Project Part", "(Unnamed)")
+            start_str = row.get("Start Date", "")
+            duration = row.get("Duration (days)", "")
+            notes = row.get("Notes", "")
+            pace_link = row.get("Pace Link", "")
+            responsible = row.get("Responsible", "")
+            type_ = row.get("Type", "")
+            if not start_str or not duration:
+                continue
+            try:
+                start_dt = datetime.datetime.strptime(start_str, "%m-%d-%Y")
+                days = int(duration)
+                # End date is exclusive in iCalendar, so add 1 day
+                end_dt = start_dt + datetime.timedelta(days=days)
+                dtstart = start_dt.strftime("%Y%m%d")
+                dtend = end_dt.strftime("%Y%m%d")
+            except Exception:
+                continue
+            # Compose description with all requested fields
+            desc_lines = []
+            if notes:
+                desc_lines.append(notes)
+            if pace_link:
+                desc_lines.append(f"Pace Link: {pace_link}")
+            if responsible:
+                desc_lines.append(f"Responsible: {responsible}")
+            if type_:
+                desc_lines.append(f"Type: {type_}")
+            description = "\n".join(desc_lines)
+            # Find all email addresses in Responsible field
+            attendee_lines = []
+            if responsible:
+                emails = re.findall(email_regex, responsible)
+                for email in emails:
+                    attendee_lines.append(f"ATTENDEE;CN={email}:mailto:{email}")
+            ics_lines.extend([
+                "BEGIN:VEVENT",
+                f"SUMMARY:{escape_ics(part)}",
+                f"DTSTART;VALUE=DATE:{dtstart}",
+                f"DTEND;VALUE=DATE:{dtend}",
+                f"DESCRIPTION:{escape_ics(description)}",
+            ] + attendee_lines + [
+                "END:VEVENT"
+            ])
+        ics_lines.append("END:VCALENDAR")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\r\n".join(ics_lines))
+            QMessageBox.information(self, "Export Complete", f"Calendar exported to {path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", f"Could not write file: {e}")
 
     def highlight_task_dates(self):
         if not self.model:
@@ -1051,8 +1155,14 @@ class TimelineView(QWidget):
                 parent = row.get("Parent", "")
                 if parent:
                     children.setdefault(parent, []).append(row)
-            def update_span(row):
+            def update_span(row, visited=None):
+                if visited is None:
+                    visited = set()
                 name = row.get("Project Part", "")
+                if name in visited:
+                    # Cycle detected, break recursion
+                    return None, None
+                visited.add(name)
                 if name not in children:
                     try:
                         start = datetime.datetime.strptime(row.get("Start Date", ""), "%m-%d-%Y")
@@ -1062,7 +1172,7 @@ class TimelineView(QWidget):
                     except Exception:
                         return None, None
                 else:
-                    child_spans = [update_span(child) for child in children[name]]
+                    child_spans = [update_span(child, visited.copy()) for child in children[name]]
                     child_starts = [s for s, e in child_spans if s]
                     child_ends = [e for s, e in child_spans if e]
                     if child_starts and child_ends:
@@ -1443,33 +1553,47 @@ class DatabaseView(QWidget):
 
     def dropdown_changed(self, row, col, value):
         colname = ProjectDataModel.COLUMNS[col]
-        self.model.rows[row][colname] = value
-        self.table.blockSignals(True)
-        self.table.setItem(row, col, QTableWidgetItem(value))
-        self.table.blockSignals(False)
-        if self.on_data_changed:
-            self.on_data_changed()
-
+        print(f"DEBUG: dropdown_changed row={row}, col={col}, value={value}")
+        try:
+            self.model.rows[row][colname] = value
+            self.table.blockSignals(True)
+            self.table.setItem(row, col, QTableWidgetItem(value))
+            self.table.blockSignals(False)
+            if self.on_data_changed:
+                self.on_data_changed()
+        except Exception as e:
+            print(f"ERROR in dropdown_changed: {e}")
     def date_changed(self, row, col, qdate):
         colname = ProjectDataModel.COLUMNS[col]
         min_blank = QDate(1753, 1, 1)
-        if qdate == min_blank:
-            self.model.rows[row][colname] = ""
-            date_val = ""
-        else:
-            date_val = qdate.toString("MM-dd-yyyy")
-            self.model.rows[row][colname] = date_val
-        self.table.blockSignals(True)
-        self.table.setItem(row, col, QTableWidgetItem(date_val))
-        self.table.blockSignals(False)
-        if self.on_data_changed:
-            self.on_data_changed()
+        print(f"DEBUG: date_changed row={row}, col={col}, qdate={qdate}")
+        try:
+            if qdate == min_blank:
+                self.model.rows[row][colname] = ""
+                date_val = ""
+            else:
+                date_val = qdate.toString("MM-dd-yyyy")
+                self.model.rows[row][colname] = date_val
+            self.table.blockSignals(True)
+            self.table.setItem(row, col, QTableWidgetItem(date_val))
+            self.table.blockSignals(False)
+            if self.on_data_changed:
+                self.on_data_changed()
+        except Exception as e:
+            print(f"ERROR in date_changed: {e}")
 
 
 class MainWindow(QMainWindow):
     def on_data_changed(self):
-        # Handle data changes if needed (refresh views, etc.)
-        pass
+        # Refresh all views when data changes
+        if hasattr(self, 'project_tree_view'):
+            self.project_tree_view.refresh()
+        if hasattr(self, 'gantt_chart_view'):
+            self.gantt_chart_view.render_gantt(self.model)
+        if hasattr(self, 'timeline_view'):
+            self.timeline_view.render_timeline()
+        if hasattr(self, 'database_view'):
+            self.database_view.refresh_table()
     def display_view(self, index):
         print(f"DEBUG: display_view called with index={index}")
         self.views.setCurrentIndex(index)
