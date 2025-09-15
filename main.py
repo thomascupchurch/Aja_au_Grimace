@@ -765,6 +765,68 @@ class GanttChartView(QWidget):
                 # Vertical line down to child
                 self.scene.addLine(child_mid_x, (parent_bottom + child_top) // 2, child_mid_x, child_top)
 
+            # Draw dependency arrows in #FF8200 orange
+            from PyQt5.QtCore import QPointF
+            dep_names = row.get("Dependencies", "")
+            if dep_names:
+                from PyQt5.QtGui import QPen, QPolygonF
+                dep_list = [d.strip() for d in dep_names.split(",") if d.strip()]
+                for dep in dep_list:
+                    if dep in name_to_bar:
+                        dx, dy, dwidth, dheight = name_to_bar[dep]
+                        # Arrow from end of dependency bar to start of this bar
+                        start_x = dx + dwidth
+                        start_y = dy + dheight // 2
+                        end_x = cx
+                        end_y = cy + cheight // 2
+                        # Check for dependency conflict: dependency end >= dependent start
+                        dep_row = None
+                        for bname, bstart, bduration, bidx, brow in bars:
+                            if bname == dep:
+                                dep_row = brow
+                                break
+                        dep_end = None
+                        if dep_row:
+                            try:
+                                dep_start_str = dep_row.get("Start Date", "")
+                                dep_duration_val = dep_row.get("Duration (days)", 0)
+                                if dep_start_str and dep_duration_val:
+                                    import datetime
+                                    dep_start = datetime.datetime.strptime(dep_start_str, "%m-%d-%Y")
+                                    dep_end = dep_start + datetime.timedelta(days=int(dep_duration_val))
+                            except Exception:
+                                dep_end = None
+                        # Get this bar's start
+                        this_start = None
+                        try:
+                            this_start_str = row.get("Start Date", "")
+                            if this_start_str:
+                                import datetime
+                                this_start = datetime.datetime.strptime(this_start_str, "%m-%d-%Y")
+                        except Exception:
+                            this_start = None
+                        # If dependency ends after or at this bar's start, it's a conflict
+                        if dep_end and this_start and dep_end >= this_start:
+                            pen = QPen(QColor("red"), 2)
+                            arrow_color = QColor("red")
+                        else:
+                            pen = QPen(QColor("#FF8200"), 2)
+                            arrow_color = QColor("#FF8200")
+                        self.scene.addLine(start_x, start_y, end_x, end_y, pen)
+                        # Draw arrowhead
+                        arrow_size = 8
+                        import math
+                        angle = math.atan2(end_y - start_y, end_x - start_x)
+                        arrow_p1 = end_x - arrow_size * math.cos(angle - math.pi / 6)
+                        arrow_p2 = end_y - arrow_size * math.sin(angle - math.pi / 6)
+                        arrow_p3 = end_x - arrow_size * math.cos(angle + math.pi / 6)
+                        arrow_p4 = end_y - arrow_size * math.sin(angle + math.pi / 6)
+                        arrow_head = QPolygonF([
+                            QPointF(end_x, end_y),
+                            QPointF(arrow_p1, arrow_p2),
+                            QPointF(arrow_p3, arrow_p4)
+                        ])
+                        self.scene.addPolygon(arrow_head, pen, arrow_color)
             # Removed image indicator ellipse for image association
 
         # Add mouse click events to bars
@@ -1349,11 +1411,29 @@ class DatabaseView(QWidget):
         del_btn = QPushButton("Delete Row")
         del_btn.clicked.connect(self.delete_row)
         btn_layout.addWidget(del_btn)
+        export_btn = QPushButton("Export Database")
+        export_btn.clicked.connect(self.export_database)
+        btn_layout.addWidget(export_btn)
         layout.addLayout(btn_layout)
 
         self.setLayout(layout)
         self.refresh_table()
         self.table.cellChanged.connect(self.cell_edited)
+    def export_database(self):
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        import csv
+        path, _ = QFileDialog.getSaveFileName(self, "Export Database", "database_export.csv", "CSV Files (*.csv)")
+        if not path:
+            return
+        try:
+            with open(path, "w", newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(ProjectDataModel.COLUMNS)
+                for row in self.model.rows:
+                    writer.writerow([row.get(col, "") for col in ProjectDataModel.COLUMNS])
+            QMessageBox.information(self, "Export Successful", f"Database exported to {path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", f"Error exporting database: {e}")
 
     def refresh_table(self):
         self.table.blockSignals(True)
