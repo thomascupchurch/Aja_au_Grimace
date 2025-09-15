@@ -754,6 +754,29 @@ class GanttChartView(QWidget):
                     print(f"ERROR in ClickableBar.mousePressEvent: {e}")
                 # Do not call super().mousePressEvent(event) after dialog, prevents RuntimeError
 
+            def hoverEnterEvent(self, event):
+                img_path = self.row.get("Images", "")
+                if img_path and str(img_path).strip():
+                    import os
+                    from PyQt5.QtGui import QPixmap
+                    if not os.path.isabs(img_path):
+                        base_dir = os.path.dirname(os.path.abspath(__file__))
+                        img_path_full = os.path.join(base_dir, img_path)
+                    else:
+                        img_path_full = img_path
+                    pixmap = QPixmap(img_path_full)
+                    if not pixmap.isNull():
+                        self.preview_label.setPixmap(pixmap.scaledToHeight(90, Qt.SmoothTransformation))
+                        self.preview_label.setText("")
+                    else:
+                        self.preview_label.setText("[Image not found]")
+                        self.preview_label.setPixmap(QPixmap())
+                else:
+                    self.preview_label.setText("")
+
+            def hoverLeaveEvent(self, event):
+                self.preview_label.clear()
+
         # Place labels at a fixed position well to the left of the earliest bar (e.g., x=10)
         from PyQt5.QtGui import QColor
         label_x = 10
