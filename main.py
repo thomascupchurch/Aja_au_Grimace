@@ -1368,6 +1368,13 @@ class DatabaseView(QWidget):
                     min_blank = QDate(1753, 1, 1)
                     date_edit.setMinimumDate(min_blank)
                     date_edit.setSpecialValueText("")
+                    # Prevent wheel events unless focused (clicked)
+                    def block_wheel(event):
+                        if not date_edit.hasFocus():
+                            event.ignore()
+                        else:
+                            QDateEdit.wheelEvent(date_edit, event)
+                    date_edit.wheelEvent = block_wheel
                     if date_val:
                         try:
                             date = QDate.fromString(date_val, "MM-dd-yyyy")
@@ -1402,6 +1409,13 @@ class DatabaseView(QWidget):
                 elif colname in self.DROPDOWN_FIELDS or colname == "Parent":
                     from PyQt5.QtWidgets import QComboBox
                     combo = QComboBox()
+                    # Prevent wheel events unless focused (clicked)
+                    def block_wheel_combo(event):
+                        if not combo.hasFocus():
+                            event.ignore()
+                        else:
+                            QComboBox.wheelEvent(combo, event)
+                    combo.wheelEvent = block_wheel_combo
                     if colname == "Parent":
                         # List all other project part names except this row
                         part_names = [self.model.rows[i]["Project Part"] for i in range(len(self.model.rows)) if i != row]
