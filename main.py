@@ -647,6 +647,23 @@ class GanttChartView(QWidget):
             # Store bar rect and row for selection/edit events
             bar_items.append((rect, row))
 
+        # Draw parent-child connector lines (tree lines)
+        for name, start, duration, idx, row in bars:
+            parent_name = row.get("Parent", "")
+            if parent_name and parent_name in name_to_bar:
+                px, py, pwidth, pheight = name_to_bar[parent_name]
+                cx, cy, cwidth, cheight = name_to_bar[name]
+                parent_mid_x = px + pwidth // 2
+                child_mid_x = cx + cwidth // 2
+                parent_bottom = py + bar_height
+                child_top = cy
+                # Vertical line from parent to horizontal level
+                self.scene.addLine(parent_mid_x, parent_bottom, parent_mid_x, (parent_bottom + child_top) // 2)
+                # Horizontal line to child
+                self.scene.addLine(parent_mid_x, (parent_bottom + child_top) // 2, child_mid_x, (parent_bottom + child_top) // 2)
+                # Vertical line down to child
+                self.scene.addLine(child_mid_x, (parent_bottom + child_top) // 2, child_mid_x, child_top)
+
             # Removed image indicator ellipse for image association
 
         # Add mouse click events to bars
@@ -953,7 +970,8 @@ class TimelineView(QWidget):
             return
         # Parse dates and durations
         bars = []
-        for row in rows:
+        name_to_idx = {}
+        for idx, row in enumerate(rows):
             start_str = row.get("Start Date", "")
             duration = row.get("Duration (days)", 0)
             try:
@@ -961,24 +979,45 @@ class TimelineView(QWidget):
                 duration = int(duration)
             except Exception:
                 continue
-            bars.append((row.get("Project Part", "(Unnamed)"), start, duration, row))
+            bars.append((row.get("Project Part", "(Unnamed)"), start, duration, row, idx))
+            name_to_idx[row.get("Project Part", "(Unnamed)")] = idx
         if not bars:
             return
         # Find min and max dates
         min_date = min([b[1] for b in bars])
         max_date = max([b[1] + datetime.timedelta(days=b[2]) for b in bars])
         total_days = (max_date - min_date).days
-        # Draw bars
+        # Draw bars and record their positions for connectors
         bar_height = 24
         bar_gap = 12
         y = 40
-        for name, start, duration, row in bars:
+        bar_positions = {}  # idx -> (x, y, width)
+        for name, start, duration, row, idx in bars:
             x = 100 + (start - min_date).days * 8
             width = max(8, duration * 8)
             color = QColor("#90caf9")  # Blue
             self.scene.addRect(x, y, width, bar_height, brush=QBrush(color))
             self.scene.addText(name).setPos(10, y)
+            bar_positions[idx] = (x, y, width)
             y += bar_height + bar_gap
+        # Draw connector lines for parent-child relationships
+        for name, start, duration, row, idx in bars:
+            parent_name = row.get("Parent", "")
+            if parent_name and parent_name in name_to_idx:
+                parent_idx = name_to_idx[parent_name]
+                if parent_idx in bar_positions and idx in bar_positions:
+                    px, py, pwidth = bar_positions[parent_idx]
+                    cx, cy, cwidth = bar_positions[idx]
+                    parent_mid_x = px + pwidth // 2
+                    child_mid_x = cx + cwidth // 2
+                    parent_bottom = py + bar_height
+                    child_top = cy
+                    # Vertical line from parent to horizontal level
+                    self.scene.addLine(parent_mid_x, parent_bottom, parent_mid_x, (parent_bottom + child_top) // 2)
+                    # Horizontal line to child
+                    self.scene.addLine(parent_mid_x, (parent_bottom + child_top) // 2, child_mid_x, (parent_bottom + child_top) // 2)
+                    # Vertical line down to child
+                    self.scene.addLine(child_mid_x, (parent_bottom + child_top) // 2, child_mid_x, child_top)
         # Draw x-axis with date marks every 7 days
         axis_y = 20
         axis_x0 = 100
