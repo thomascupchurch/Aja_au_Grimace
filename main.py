@@ -568,7 +568,32 @@ class GanttChartView(QWidget):
         export_btn.clicked.connect(self.export_gantt_chart)
         layout.addWidget(export_btn)
 
+        # Refresh button
+        refresh_btn = QPushButton("Refresh Gantt Chart")
+        refresh_btn.clicked.connect(self.refresh_gantt)
+        layout.addWidget(refresh_btn)
+
+        # Zoom controls
+        zoom_layout = QHBoxLayout()
+        zoom_in_btn = QPushButton("Zoom In")
+        zoom_out_btn = QPushButton("Zoom Out")
+        zoom_reset_btn = QPushButton("Reset Zoom")
+        zoom_in_btn.clicked.connect(lambda: self.view.scale(1.2, 1.2))
+        zoom_out_btn.clicked.connect(lambda: self.view.scale(1/1.2, 1/1.2))
+        zoom_reset_btn.clicked.connect(self.reset_zoom)
+        zoom_layout.addWidget(zoom_in_btn)
+        zoom_layout.addWidget(zoom_out_btn)
+        zoom_layout.addWidget(zoom_reset_btn)
+        layout.addLayout(zoom_layout)
+
         self.setLayout(layout)
+
+    def reset_zoom(self):
+        self.view.resetTransform()
+
+    def refresh_gantt(self):
+        if hasattr(self, 'model') and self.model:
+            self.render_gantt(self.model)
 
 
     def render_gantt(self, model):
@@ -1559,6 +1584,10 @@ class DatabaseView(QWidget):
                     widget = self.table.cellWidget(row, col)
                     if widget and hasattr(widget, "refresh"):
                         widget.refresh()
+
+        # Automatically resize Project Part column to fit contents
+        part_col = ProjectDataModel.COLUMNS.index("Project Part")
+        self.table.resizeColumnToContents(part_col)
 
     def add_row(self):
         data = []
