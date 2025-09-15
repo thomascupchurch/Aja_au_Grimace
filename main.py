@@ -568,7 +568,60 @@ class GanttChartView(QWidget):
         self.preview_label.clear()
         # Get all rows with valid start date and duration
         print(f"DEBUG: model.rows = {model.rows}")
-        rows = [r for r in model.rows if r.get("Start Date") and r.get("Duration (days)")]
+        def topo_sort(rows):
+            name_to_row = {row.get("Project Part", ""): row for row in rows}
+            visited = set()
+            result = []
+            def visit(row):
+                name = row.get("Project Part", "")
+                if name in visited:
+                    return
+                parent = row.get("Parent", "")
+                if parent and parent in name_to_row:
+                    visit(name_to_row[parent])
+                visited.add(name)
+                result.append(row)
+            for row in rows:
+                visit(row)
+            return result
+        def compute_parent_spans(rows):
+            import datetime
+            name_to_row = {row.get("Project Part", ""): row for row in rows}
+            children = {}
+            for row in rows:
+                parent = row.get("Parent", "")
+                if parent:
+                    children.setdefault(parent, []).append(row)
+            def update_span(row):
+                name = row.get("Project Part", "")
+                if name not in children:
+                    try:
+                        start = datetime.datetime.strptime(row.get("Start Date", ""), "%m-%d-%Y")
+                        duration = int(row.get("Duration (days)", 0))
+                        end = start + datetime.timedelta(days=duration)
+                        return start, end
+                    except Exception:
+                        return None, None
+                else:
+                    child_spans = [update_span(child) for child in children[name]]
+                    child_starts = [s for s, e in child_spans if s]
+                    child_ends = [e for s, e in child_spans if e]
+                    if child_starts and child_ends:
+                        min_start = min(child_starts)
+                        max_end = max(child_ends)
+                        row["_auto_start"] = min_start
+                        row["_auto_end"] = max_end
+                        # Update parent's Start Date and Calculated End Date fields
+                        row["Start Date"] = min_start.strftime("%m-%d-%Y")
+                        row["Calculated End Date"] = max_end.strftime("%m-%d-%Y")
+                        return min_start, max_end
+                    return None, None
+            for row in rows:
+                update_span(row)
+        # Include all rows that have either real or auto-calculated dates
+        rows = list(model.rows)  # Use all rows
+        compute_parent_spans(rows)
+        rows = topo_sort(rows)
         print(f"DEBUG: rows for Gantt = {rows}")
         if not rows:
             print("DEBUG: No rows to render in Gantt chart.")
@@ -584,19 +637,25 @@ class GanttChartView(QWidget):
         name_to_bar = {}
         bar_items = []
         for i, row in enumerate(rows):
-            try:
-                start = datetime.datetime.strptime(row["Start Date"], "%m-%d-%Y")
-                duration = int(row["Duration (days)"])
-                end = start + datetime.timedelta(days=duration)
-                if min_date is None or start < min_date:
-                    min_date = start
-                if max_date is None or end > max_date:
-                    max_date = end
-                bars.append((row["Project Part"], start, duration, i, row))
-                print(f"DEBUG: Added bar: {row['Project Part']}, start={start}, duration={duration}, end={end}")
-            except Exception as e:
-                print(f"DEBUG: Failed to parse row {row}: {e}")
-                continue
+            # Use auto-calculated span for parents if present
+            if "_auto_start" in row and "_auto_end" in row:
+                start = row["_auto_start"]
+                end = row["_auto_end"]
+                duration = (end - start).days
+            else:
+                try:
+                    start = datetime.datetime.strptime(row["Start Date"], "%m-%d-%Y")
+                    duration = int(row["Duration (days)"])
+                    end = start + datetime.timedelta(days=duration)
+                except Exception as e:
+                    print(f"DEBUG: Failed to parse row {row}: {e}")
+                    continue
+            if min_date is None or start < min_date:
+                min_date = start
+            if max_date is None or end > max_date:
+                max_date = end
+            bars.append((row["Project Part"], start, duration, i, row))
+            print(f"DEBUG: Added bar: {row['Project Part']}, start={start}, duration={duration}, end={end}")
         if not bars:
             print("DEBUG: No bars to draw in Gantt chart.")
             return
@@ -623,10 +682,12 @@ class GanttChartView(QWidget):
                     pixmap = QPixmap(img_path_full)
                     if not pixmap.isNull():
                         self.preview_label.setPixmap(pixmap.scaledToHeight(90, Qt.SmoothTransformation))
+                        self.preview_label.setText("")
                     else:
                         self.preview_label.setText("[Image not found]")
+                        self.preview_label.setPixmap(QPixmap())
                 else:
-                    self.preview_label.setText("")
+                    self.preview_label.clear()
                 super().hoverEnterEvent(event)
             def hoverLeaveEvent(self, event):
                 self.preview_label.clear()
@@ -965,20 +1026,75 @@ class TimelineView(QWidget):
         self.scene.clear()
         if not self.model or not hasattr(self.model, 'rows'):
             return
+        def topo_sort(rows):
+            name_to_row = {row.get("Project Part", ""): row for row in rows}
+            visited = set()
+            result = []
+            def visit(row):
+                name = row.get("Project Part", "")
+                if name in visited:
+                    return
+                parent = row.get("Parent", "")
+                if parent and parent in name_to_row:
+                    visit(name_to_row[parent])
+                visited.add(name)
+                result.append(row)
+            for row in rows:
+                visit(row)
+            return result
         rows = [row for row in self.model.rows if row.get("Start Date") and row.get("Duration (days)")]
+        def compute_parent_spans(rows):
+            import datetime
+            name_to_row = {row.get("Project Part", ""): row for row in rows}
+            children = {}
+            for row in rows:
+                parent = row.get("Parent", "")
+                if parent:
+                    children.setdefault(parent, []).append(row)
+            def update_span(row):
+                name = row.get("Project Part", "")
+                if name not in children:
+                    try:
+                        start = datetime.datetime.strptime(row.get("Start Date", ""), "%m-%d-%Y")
+                        duration = int(row.get("Duration (days)", 0))
+                        end = start + datetime.timedelta(days=duration)
+                        return start, end
+                    except Exception:
+                        return None, None
+                else:
+                    child_spans = [update_span(child) for child in children[name]]
+                    child_starts = [s for s, e in child_spans if s]
+                    child_ends = [e for s, e in child_spans if e]
+                    if child_starts and child_ends:
+                        min_start = min(child_starts)
+                        max_end = max(child_ends)
+                        row["_auto_start"] = min_start
+                        row["_auto_end"] = max_end
+                        return min_start, max_end
+                    return None, None
+            for row in rows:
+                update_span(row)
+        compute_parent_spans(rows)
+        rows = topo_sort(rows)
         if not rows:
             return
         # Parse dates and durations
         bars = []
         name_to_idx = {}
         for idx, row in enumerate(rows):
-            start_str = row.get("Start Date", "")
-            duration = row.get("Duration (days)", 0)
-            try:
-                start = datetime.datetime.strptime(start_str, "%m-%d-%Y")
-                duration = int(duration)
-            except Exception:
-                continue
+            if "_auto_start" in row and "_auto_end" in row:
+                start = row["_auto_start"]
+                end = row["_auto_end"]
+                duration = (end - start).days
+            else:
+                start_str = row.get("Start Date", "")
+                duration = row.get("Duration (days)", 0)
+                try:
+                    start = datetime.datetime.strptime(start_str, "%m-%d-%Y")
+                    duration = int(duration)
+                    end = start + datetime.timedelta(days=duration)
+                except Exception:
+                    continue
             bars.append((row.get("Project Part", "(Unnamed)"), start, duration, row, idx))
             name_to_idx[row.get("Project Part", "(Unnamed)")] = idx
         if not bars:
@@ -995,8 +1111,56 @@ class TimelineView(QWidget):
         for name, start, duration, row, idx in bars:
             x = 100 + (start - min_date).days * 8
             width = max(8, duration * 8)
-            color = QColor("#90caf9")  # Blue
-            self.scene.addRect(x, y, width, bar_height, brush=QBrush(color))
+            color = QColor("#FF8200")  # Orange
+            # Add hoverable rect for image preview
+            from PyQt5.QtWidgets import QGraphicsRectItem
+            class HoverableTimelineBar(QGraphicsRectItem):
+                def __init__(self, x, y, width, height, row, timeline_view):
+                    super().__init__(x, y, width, height)
+                    self.row = row
+                    self.timeline_view = timeline_view
+                    self.setAcceptHoverEvents(True)
+                def get_preview_label(self):
+                    # Try to get preview_label from parent widget
+                    parent = self.timeline_view.parent()
+                    if hasattr(parent, 'preview_label'):
+                        return parent.preview_label
+                    # Fallback: try timeline_view itself
+                    if hasattr(self.timeline_view, 'preview_label'):
+                        return self.timeline_view.preview_label
+                    return None
+                def hoverEnterEvent(self, event):
+                    preview_label = self.get_preview_label()
+                    if preview_label is None:
+                        super().hoverEnterEvent(event)
+                        return
+                    img_path = self.row.get("Images", "")
+                    if img_path and str(img_path).strip():
+                        import os
+                        from PyQt5.QtGui import QPixmap
+                        if not os.path.isabs(img_path):
+                            base_dir = os.path.dirname(os.path.abspath(__file__))
+                            img_path_full = os.path.join(base_dir, img_path)
+                        else:
+                            img_path_full = img_path
+                        pixmap = QPixmap(img_path_full)
+                        if not pixmap.isNull():
+                            preview_label.setPixmap(pixmap.scaledToHeight(90, Qt.SmoothTransformation))
+                            preview_label.setText("")
+                        else:
+                            preview_label.setText("[Image not found]")
+                            preview_label.setPixmap(QPixmap())
+                    else:
+                        preview_label.clear()
+                    super().hoverEnterEvent(event)
+                def hoverLeaveEvent(self, event):
+                    preview_label = self.get_preview_label()
+                    if preview_label is not None:
+                        preview_label.clear()
+                    super().hoverLeaveEvent(event)
+            bar_item = HoverableTimelineBar(x, y, width, bar_height, row, self)
+            bar_item.setBrush(QBrush(color))
+            self.scene.addItem(bar_item)
             self.scene.addText(name).setPos(10, y)
             bar_positions[idx] = (x, y, width)
             y += bar_height + bar_gap
@@ -1398,6 +1562,12 @@ class MainWindow(QMainWindow):
             content_layout.addWidget(self.views, 1)
             main_layout.addLayout(content_layout)
             print("DEBUG: Main layout and content layout created")
+
+            # Footer
+            footer_label = QLabel("Copyright 2025 © LSI Graphics, LLC. All Rights Reserved.")
+            footer_label.setAlignment(Qt.AlignCenter)
+            footer_label.setStyleSheet("color: #888; font-size: 11px; margin-top: 8px;")
+            main_layout.addWidget(footer_label)
 
             container = QWidget()
             container.setLayout(main_layout)
