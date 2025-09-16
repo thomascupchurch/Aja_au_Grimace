@@ -1,11 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 
+import os
+
+# Build datas list dynamically so missing optional folders don't break build
+datas_list = [('project_data.db', '.'), ('images/*', 'images')]
+if os.path.isdir('attachments'):
+    datas_list.append(('attachments/*', 'attachments'))
+
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('project_data.db', '.'), ('images/*', 'images')],
+    # Include database, images, and optionally attachments directory contents
+    datas=datas_list,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -26,7 +34,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=True,  # Enable UPX compression (ensure UPX is installed & on PATH)
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,

@@ -656,8 +656,12 @@ class GanttChartView(QWidget):
         self._filter_statuses = None          # set of status strings
         self._filter_internal_external = None # set like {"Internal","External"}
         self._filter_responsible_substr = None # lowercase substring
+        self._filter_critical_only = False     # boolean
+        self._filter_risk_only = False         # boolean (overdue OR at-risk)
+        self._current_critical_set = set()     # populated during render
 
-    def set_filters(self, statuses=None, internal_external=None, responsible_substr=None):
+    def set_filters(self, statuses=None, internal_external=None, responsible_substr=None,
+                    critical_only=None, risk_only=None):
         """Update filter criteria and refresh the Gantt chart.
         Parameters are optional; pass None to leave unchanged, pass empty iterable/string to clear.
         """
@@ -668,6 +672,10 @@ class GanttChartView(QWidget):
         if responsible_substr is not None:
             rs = responsible_substr.strip()
             self._filter_responsible_substr = rs.lower() if rs else None
+        if critical_only is not None:
+            self._filter_critical_only = bool(critical_only)
+        if risk_only is not None:
+            self._filter_risk_only = bool(risk_only)
         if hasattr(self, 'model') and self.model:
             self.render_gantt(self.model)
 
@@ -680,6 +688,40 @@ class GanttChartView(QWidget):
             if self._filter_responsible_substr:
                 resp = (row.get("Responsible") or "").lower()
                 if self._filter_responsible_substr not in resp:
+                    return False
+            # Critical path filter
+            if self._filter_critical_only:
+                name = row.get("Project Part", "")
+                if name not in self._current_critical_set:
+                    return False
+            # Risk filter (overdue OR at-risk)
+            if self._filter_risk_only:
+                import datetime as _dt_rf
+                overdue = False; at_risk = False
+                try:
+                    # Derive start & end
+                    start_str = row.get("Start Date", "")
+                    dur = int(row.get("Duration (days)") or 0)
+                    if start_str:
+                        start_dt = _dt_rf.datetime.strptime(start_str, "%m-%d-%Y")
+                    else:
+                        start_dt = None
+                    if row.get("Calculated End Date"):
+                        scheduled_end = _dt_rf.datetime.strptime(row.get("Calculated End Date"), "%m-%d-%Y")
+                    elif start_dt and dur:
+                        scheduled_end = start_dt + _dt_rf.timedelta(days=dur)
+                    else:
+                        scheduled_end = None
+                    today = _dt_rf.datetime.today()
+                    pc_val = int(row.get("% Complete") or 0)
+                    status_val = (row.get("Status") or "").strip()
+                    if scheduled_end and pc_val < 100 and today.date() > scheduled_end.date():
+                        overdue = True
+                    elif start_dt and pc_val == 0 and status_val in ("Planned", "Blocked") and today.date() > start_dt.date():
+                        at_risk = True
+                except Exception:
+                    pass
+                if not (overdue or at_risk):
                     return False
             return True
         except Exception:
@@ -1069,53 +1111,103 @@ class GanttChartView(QWidget):
                     pen = QPen(QColor("#00BFFF"))  # bright cyan accent
                     pen.setWidth(2)
                 else:
-                    pen = QPen(QColor(180,180,180))  # neutral base
+                    pen = QPen(QColor("#888"))
                     pen.setWidth(1)
                 for ln in lines:
                     try:
                         ln.setPen(pen)
                     except Exception:
                         pass
-        # 2. Label font + background (preserve persistent dark bg when turning off)
+        # 2. Label font + background (preserve original orange bg when turning off)
         if hasattr(self, '_name_to_text_item'):
             ti = self._name_to_text_item.get(part_name)
             if ti:
                 orig_font = ti.data(1)
                 bg = ti.data(3)
+                orig_brush = ti.data(4)  # stored original brush
                 if on:
-                    # Bold font
                     if isinstance(orig_font, QFont):
                         bold_font = QFont(orig_font)
                         bold_font.setBold(True)
                         ti.setFont(bold_font)
-                    # Orange glow overlay background (mix with existing)
                     if bg:
-                        bg.setBrush(QBrush(QColor(255,130,0,90)))
+                        base_col = QColor(255,130,0)
+                        glow = QColor(base_col.red(), base_col.green(), base_col.blue(), 160)
+                        bg.setBrush(QBrush(glow))
                 else:
-                    # Restore original font
                     if isinstance(orig_font, QFont):
                         ti.setFont(orig_font)
                     if bg:
-                        # Revert to standard semi-transparent dark backdrop for readability
-                        bg.setBrush(QBrush(QColor(0,0,0,160)))
+                        if orig_brush:
+                            bg.setBrush(orig_brush)
+                        else:
+                            bg.setBrush(QBrush(QColor("#FF8200")))
     def render_gantt(self, model):
-        self.model = model  # Store model for use in other methods
+        self.model = model
         self.scene.clear()
         self.preview_label.clear()
         if not hasattr(model, 'rows'):
             return
-        # Apply filters while keeping parents if any child passes (basic approach)
         raw_rows = model.rows
-        # First pass: determine which rows individually match
+        # Precompute critical path set for filtering/highlighting
+        self._current_critical_set = set()
+        try:
+            import datetime as _dt
+            name_to_row_cp = {r.get("Project Part", ""): r for r in raw_rows}
+            graph = {}
+            for r in raw_rows:
+                nm = r.get("Project Part", "")
+                preds_raw = (r.get("Predecessors") or "").strip()
+                preds = [p.strip() for p in preds_raw.split(',') if p.strip()] if preds_raw else []
+                graph[nm] = preds
+            visited = set(); order = []
+            def dfs(n):
+                if n in visited: return
+                visited.add(n)
+                for p in graph.get(n, []):
+                    if p in name_to_row_cp:
+                        dfs(p)
+                order.append(n)
+            for n in graph:
+                dfs(n)
+            es = {}; ef = {}
+            for n in order:
+                r = name_to_row_cp.get(n) or {}
+                s_str = r.get("Start Date", "")
+                try:
+                    s_dt = _dt.datetime.strptime(s_str, "%m-%d-%Y") if s_str else None
+                    dur = int(r.get("Duration (days)") or 0)
+                except Exception:
+                    s_dt = None; dur = 0
+                pred_finishes = [ef[p] for p in graph.get(n, []) if p in ef]
+                base = max(pred_finishes) if pred_finishes else s_dt
+                if base is None:
+                    base = _dt.datetime.today()
+                es[n] = base
+                ef[n] = base + _dt.timedelta(days=dur)
+            if order:
+                proj_finish = max(ef.values())
+                ls = {}; lf = {}
+                for n in reversed(order):
+                    succs = [s for s, preds in graph.items() if n in preds]
+                    if not succs:
+                        lf[n] = proj_finish
+                    else:
+                        lf[n] = min(ls[s] for s in succs)
+                    dur = (ef[n] - es[n]).days
+                    ls[n] = lf[n] - _dt.timedelta(days=dur)
+                self._current_critical_set = {n for n in order if abs((es[n]-ls[n]).days) <= 0}
+        except Exception:
+            self._current_critical_set = set()
+
         matched = []
         name_to_row = {}
         for r in raw_rows:
             name_to_row[r.get("Project Part", "")] = r
             if self._passes_filters(r):
                 matched.append(r)
-        if any([self._filter_statuses, self._filter_internal_external, self._filter_responsible_substr]):
-            # Include ancestors of matched tasks for context
-            names_included = set(r.get("Project Part", "") for r in matched)
+        if any([self._filter_statuses, self._filter_internal_external, self._filter_responsible_substr,
+                self._filter_critical_only, self._filter_risk_only]):
             parent_names_needed = set()
             for r in matched:
                 parent_name = r.get("Parent") or ""
@@ -1569,11 +1661,20 @@ class GanttChartView(QWidget):
                 prog_rect.setZValue(rect.zValue() + 1)
             full_name = name
             display_name = full_name
+            # Paperclip if attachments present
+            try:
+                import json as _json_attlabel
+                att_raw = r.get("Attachments") or "[]"
+                att_list = _json_attlabel.loads(att_raw) if att_raw else []
+                if isinstance(att_list, list) and len(att_list) > 0:
+                    display_name = "\uD83D\uDCCE " + display_name  # paperclip emoji
+            except Exception:
+                pass
             if len(display_name) > max_chars_fixed:
                 display_name = display_name[:max_chars_fixed-1] + "…"
             text_item = self.scene.addText(display_name)
             from PyQt5.QtGui import QColor as _QColor, QFont, QBrush, QPen
-            text_item.setDefaultTextColor(_QColor("#FF8200"))
+            text_item.setDefaultTextColor(_QColor("black"))
             orig_font = text_item.font()
             text_item.setData(1, orig_font)
             text_item.setData(2, full_name)  # store full for tooltip
@@ -1585,14 +1686,16 @@ class GanttChartView(QWidget):
             # Always-visible subtle contrasting background for readability
             br = text_item.boundingRect().translated(text_item.pos())
             from PyQt5.QtGui import QPen as _LblPen, QBrush as _LblBrush, QColor as _LblColor, QPainterPath as _LblPath
-            bg_color = _LblColor(0,0,0,160)  # semi-transparent dark
+            bg_color = _LblColor("#FF8200")  # orange background
             padded = br.adjusted(-3,-1,3,1)
             path = _LblPath()
             radius = 6
             path.addRoundedRect(padded, radius, radius)
-            bg_rect = self.scene.addPath(path, _LblPen(Qt.NoPen), _LblBrush(bg_color))
+            bg_brush = _LblBrush(bg_color)
+            bg_rect = self.scene.addPath(path, _LblPen(Qt.NoPen), bg_brush)
             bg_rect.setZValue(text_item.zValue()-1)
             text_item.setData(3, bg_rect)  # store bg rect
+            text_item.setData(4, bg_brush)  # store original brush
             self._name_to_text_item[name] = text_item
             name_to_bar[name] = (x, y, width, bar_height)
             bar_items.append((rect, r))
@@ -2820,6 +2923,117 @@ class MainWindow(QMainWindow):
             self.search_input.returnPressed.connect(do_jump)
             header_layout.addWidget(self.search_input)
             header_layout.addWidget(jump_btn)
+
+            # --- Filter Panel Dock (collapsible) ---
+            from PyQt5.QtWidgets import QDockWidget, QWidget as _QW, QVBoxLayout as _QVBox, QLabel as _QL, QCheckBox, QGroupBox, QHBoxLayout as _QHBox, QLineEdit as _QLE, QPushButton as _QPB
+            self.filter_dock = QDockWidget("Filters", self)
+            self.filter_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+            filt_container = _QW()
+            vbox = _QVBox(filt_container)
+            vbox.setContentsMargins(8,8,8,8)
+            vbox.setSpacing(6)
+            # Status checkboxes
+            status_group = QGroupBox("Status")
+            sg_layout = _QVBox()
+            self.chk_status = {}
+            for st in ["Planned","In Progress","Blocked","Done"]:
+                cb = QCheckBox(st)
+                self.chk_status[st] = cb
+                sg_layout.addWidget(cb)
+            status_group.setLayout(sg_layout)
+            vbox.addWidget(status_group)
+            # Internal/External
+            ie_group = QGroupBox("Internal / External")
+            ie_layout = _QVBox()
+            self.chk_internal = QCheckBox("Internal")
+            self.chk_external = QCheckBox("External")
+            ie_layout.addWidget(self.chk_internal)
+            ie_layout.addWidget(self.chk_external)
+            ie_group.setLayout(ie_layout)
+            vbox.addWidget(ie_group)
+            # Responsible substring
+            resp_group = QGroupBox("Responsible Contains")
+            rg_layout = _QVBox()
+            self.resp_input = _QLE()
+            self.resp_input.setPlaceholderText("Name substring...")
+            rg_layout.addWidget(self.resp_input)
+            resp_group.setLayout(rg_layout)
+            vbox.addWidget(resp_group)
+            # Critical & Risk toggles
+            flags_group = QGroupBox("Special")
+            fl_layout = _QVBox()
+            self.chk_critical_only = QCheckBox("Critical Path Only")
+            self.chk_risk_only = QCheckBox("Risk (Overdue / At-Risk) Only")
+            fl_layout.addWidget(self.chk_critical_only)
+            fl_layout.addWidget(self.chk_risk_only)
+            flags_group.setLayout(fl_layout)
+            vbox.addWidget(flags_group)
+            # Active summary label
+            self.filter_summary = _QL("No filters active")
+            self.filter_summary.setStyleSheet("color:#ccc; font-size:11px")
+            vbox.addWidget(self.filter_summary)
+            # Buttons
+            btn_row = _QHBox()
+            apply_btn = _QPB("Apply")
+            reset_btn = _QPB("Reset")
+            btn_row.addWidget(apply_btn)
+            btn_row.addWidget(reset_btn)
+            vbox.addLayout(btn_row)
+            vbox.addStretch(1)
+            filt_container.setLayout(vbox)
+            self.filter_dock.setWidget(filt_container)
+            self.addDockWidget(Qt.RightDockWidgetArea, self.filter_dock)
+
+            # Debounce timer for responsible input
+            from PyQt5.QtCore import QTimer as _QTimer
+            self._resp_timer = _QTimer(self)
+            self._resp_timer.setInterval(500)
+            self._resp_timer.setSingleShot(True)
+            def resp_changed():
+                self._resp_timer.start()
+            self.resp_input.textChanged.connect(resp_changed)
+            def apply_filters():
+                statuses = [s for s, cb in self.chk_status.items() if cb.isChecked()]
+                ie = []
+                if self.chk_internal.isChecked():
+                    ie.append("Internal")
+                if self.chk_external.isChecked():
+                    ie.append("External")
+                resp = self.resp_input.text().strip()
+                crit = self.chk_critical_only.isChecked()
+                risk = self.chk_risk_only.isChecked()
+                if hasattr(self, 'gantt_chart_view'):
+                    self.gantt_chart_view.set_filters(
+                        statuses=statuses if statuses else None,
+                        internal_external=ie if ie else None,
+                        responsible_substr=resp if resp else None,
+                        critical_only=crit,
+                        risk_only=risk
+                    )
+                # Update summary
+                parts = []
+                if statuses: parts.append(f"Status={len(statuses)}")
+                if ie: parts.append(f"IE={','.join(ie)}")
+                if resp: parts.append(f"Resp~{resp}")
+                if crit: parts.append("Critical")
+                if risk: parts.append("Risk")
+                self.filter_summary.setText(" | ".join(parts) if parts else "No filters active")
+            def timer_apply():
+                apply_filters()
+            self._resp_timer.timeout.connect(timer_apply)
+            apply_btn.clicked.connect(apply_filters)
+            def reset_filters():
+                for cb in self.chk_status.values(): cb.setChecked(False)
+                self.chk_internal.setChecked(False)
+                self.chk_external.setChecked(False)
+                self.resp_input.clear()
+                self.chk_critical_only.setChecked(False)
+                self.chk_risk_only.setChecked(False)
+                apply_filters()
+            reset_btn.clicked.connect(reset_filters)
+            # Initialize filter storage in gantt view if available
+            if hasattr(self, 'gantt_chart_view') and hasattr(self.gantt_chart_view, '_init_filters'):
+                self.gantt_chart_view._init_filters()
 
             # Sidebar for view selection (create and add to layout first)
             self.sidebar = QListWidget()
