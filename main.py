@@ -339,6 +339,146 @@ class ProjectDataModel:
             if not (r.get("Parent") or ""):
                 dfs(r.get("Project Part", ""))
 
+    # --- Aggregate metrics helper for dashboard ---
+    def progress_metrics(self):
+        import datetime
+        total_tasks = 0
+        sum_weighted = 0
+        total_weight = 0
+        critical_tasks = 0
+        critical_weighted = 0
+        critical_weight = 0
+        done = 0
+        today = datetime.datetime.today().date()
+        overdue = 0
+        at_risk = 0
+        # Identify critical path quickly (reuse minimal logic)
+        try:
+            name_to_row = {r.get("Project Part", ""): r for r in self.rows}
+            graph = {}
+            duration_map = {}
+            min_date = None
+            for r in self.rows:
+                n = r.get("Project Part", "")
+                deps = [d.strip() for d in (r.get("Dependencies", "") or '').split(',') if d.strip()]
+                graph[n] = deps
+                try:
+                    duration_map[n] = int(r.get("Duration (days)") or 0)
+                except Exception:
+                    duration_map[n] = 0
+                try:
+                    sd = r.get("Start Date", "")
+                    if sd:
+                        dt = datetime.datetime.strptime(sd, "%m-%d-%Y")
+                        if min_date is None or dt < min_date:
+                            min_date = dt
+                except Exception:
+                    pass
+            visited = set(); order = []
+            def dfs(n):
+                if n in visited: return
+                for d in graph.get(n, []): dfs(d)
+                visited.add(n); order.append(n)
+            for n in graph: dfs(n)
+            earliest_finish = {}; earliest_start = {}
+            base_min = min_date or datetime.datetime.today()
+            for n in order:
+                deps = graph.get(n, [])
+                if not deps:
+                    row = name_to_row.get(n, {})
+                    try:
+                        earliest_start[n] = datetime.datetime.strptime(row.get("Start Date", ""), "%m-%d-%Y")
+                    except Exception:
+                        earliest_start[n] = base_min
+                else:
+                    earliest_start[n] = max([earliest_finish.get(d, base_min) for d in deps])
+                earliest_finish[n] = earliest_start[n] + datetime.timedelta(days=duration_map.get(n,0))
+            project_finish = max(earliest_finish.values()) if earliest_finish else base_min
+            latest_start = {}; latest_finish = {}
+            for n in reversed(order):
+                succs = [k for k,v in graph.items() if n in v]
+                if not succs:
+                    latest_finish[n] = project_finish
+                else:
+                    latest_finish[n] = min([latest_start[s] for s in succs]) if succs else project_finish
+                latest_start[n] = latest_finish[n] - datetime.timedelta(days=duration_map.get(n,0))
+            critical_set = {n for n in order if abs((earliest_start[n]-latest_start[n]).days) <= 0}
+        except Exception:
+            critical_set = set()
+        for r in self.rows:
+            # Skip parent aggregator tasks for EV style metrics: treat non-leaf if it has children with durations
+            name = r.get("Project Part", "")
+            has_child = any(ch.get("Parent", "") == name for ch in self.rows if ch is not r)
+            try:
+                dur = int(r.get("Duration (days)") or 0)
+            except Exception:
+                dur = 0
+            try:
+                pc = int(r.get("% Complete") or 0)
+            except Exception:
+                pc = 0
+            status_val = (r.get("Status") or "").strip()
+            if dur and not has_child:
+                total_tasks += 1
+                total_weight += dur
+                sum_weighted += pc * dur
+                if status_val == "Done":
+                    done += 1
+                # Overdue / at-risk logic (mirrors Gantt drawing)
+                try:
+                    end_calc = r.get("Calculated End Date", "")
+                    if end_calc:
+                        end_dt = datetime.datetime.strptime(end_calc, "%m-%d-%Y").date()
+                    else:
+                        start_dt = datetime.datetime.strptime(r.get("Start Date", ""), "%m-%d-%Y").date()
+                        end_dt = start_dt + datetime.timedelta(days=dur)
+                    if pc < 100 and today > end_dt:
+                        overdue += 1
+                    elif pc == 0 and today > start_dt and status_val in ("Planned", "Blocked"):
+                        at_risk += 1
+                except Exception:
+                    pass
+            if name in critical_set and dur and not has_child:
+                critical_tasks += 1
+                critical_weight += dur
+                critical_weighted += pc * dur
+        overall_pc = (sum_weighted/total_weight) if total_weight else 0
+        critical_pc = (critical_weighted/critical_weight) if critical_weight else 0
+        return {
+            "overall_percent": round(overall_pc, 1),
+            "critical_percent": round(critical_pc, 1),
+            "leaf_count": total_tasks,
+            "done_count": done,
+            "overdue": overdue,
+            "at_risk": at_risk,
+            "critical_leaf_count": critical_tasks
+        }
+
+class ProgressDashboard(QWidget):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        self.vbox = QVBoxLayout()
+        self.vbox.addWidget(QLabel("Progress Dashboard"))
+        self.summary_label = QLabel()
+        self.summary_label.setStyleSheet("QLabel { font-family: Consolas, monospace; }")
+        self.vbox.addWidget(self.summary_label)
+        refresh_btn = QPushButton("Refresh Metrics")
+        refresh_btn.clicked.connect(self.refresh)
+        self.vbox.addWidget(refresh_btn)
+        self.setLayout(self.vbox)
+        self.refresh()
+    def refresh(self):
+        m = self.model.progress_metrics()
+        text = (
+            f"Overall % Complete: {m['overall_percent']}%\n"
+            f"Critical Path % Complete: {m['critical_percent']}%\n"
+            f"Leaf Tasks: {m['leaf_count']} | Done: {m['done_count']}\n"
+            f"Overdue: {m['overdue']} | At Risk: {m['at_risk']}\n"
+            f"Critical Leaf Tasks: {m['critical_leaf_count']}"
+        )
+        self.summary_label.setText(text)
+
 class ProjectTreeView(QWidget):
     def __init__(self, model, on_part_selected=None):
         super().__init__()
@@ -534,6 +674,42 @@ class GanttChartView(QWidget):
                     combo.setCurrentText(val)
                 edits[col] = combo
                 layout.addRow(col, combo)
+            elif col == "% Complete":
+                from PyQt5.QtWidgets import QSpinBox
+                spin = QSpinBox()
+                spin.setRange(0, 100)
+                try:
+                    spin.setValue(int(val or 0))
+                except Exception:
+                    spin.setValue(0)
+                # Disable if this row is a parent (rolled up)
+                name = row.get("Project Part", "")
+                has_children = any(r.get("Parent", "") == name for r in self.model.rows if r is not row)
+                if has_children:
+                    spin.setEnabled(False)
+                    spin.setToolTip("Parent progress rolls up from children.")
+                edits[col] = spin
+                layout.addRow(col, spin)
+            elif col == "Status":
+                combo = QComboBox()
+                combo.addItems(["Planned", "In Progress", "Blocked", "Done", "Deferred"])
+                if val:
+                    combo.setCurrentText(str(val))
+                name = row.get("Project Part", "")
+                has_children = any(r.get("Parent", "") == name for r in self.model.rows if r is not row)
+                if has_children:
+                    combo.setEnabled(False)
+                    combo.setToolTip("Parent status is derived from children.")
+                edits[col] = combo
+                layout.addRow(col, combo)
+            elif col in ("Actual Start Date", "Actual Finish Date", "Baseline Start Date", "Baseline End Date"):
+                # Show read-only line edits for audit trail
+                from PyQt5.QtWidgets import QLineEdit as _QLineEdit
+                le = _QLineEdit(str(val) if val else "")
+                le.setReadOnly(True)
+                le.setStyleSheet("QLineEdit { background-color: #222; color: #bbb; }")
+                edits[col] = le
+                layout.addRow(col, le)
             elif col == "Notes":
                 text = QTextEdit()
                 text.setPlainText(val)
@@ -586,7 +762,8 @@ class GanttChartView(QWidget):
                         link_label.setText("")
                 link_edit.textChanged.connect(update_link_label)
             else:
-                line = QLineEdit(val)
+                # Fallback generic text field; ensure string conversion
+                line = QLineEdit(str(val) if val is not None else "")
                 edits[col] = line
                 layout.addRow(col, line)
         save_btn = QPushButton("Save")
@@ -599,15 +776,37 @@ class GanttChartView(QWidget):
                         row[col] = widget.text()
                     elif isinstance(widget, QComboBox):
                         row[col] = widget.currentText()
+                        if col == "Status" and row[col] == "Done" and str(row.get("% Complete")) != "100":
+                            row["% Complete"] = 100
+                            import datetime as _dt
+                            if not row.get("Actual Start Date"):
+                                row["Actual Start Date"] = _dt.datetime.today().strftime("%m-%d-%Y")
+                            if not row.get("Actual Finish Date"):
+                                row["Actual Finish Date"] = _dt.datetime.today().strftime("%m-%d-%Y")
+                        if col == "Status" and row[col] == "In Progress" and not row.get("Actual Start Date"):
+                            import datetime as _dt
+                            row["Actual Start Date"] = _dt.datetime.today().strftime("%m-%d-%Y")
                     elif isinstance(widget, QDateEdit):
                         d = widget.date()
                         min_blank = QDate(1753, 1, 1)
-                        # Defensive: treat invalid or minimum date as blank
                         if not d.isValid() or d == min_blank:
                             row[col] = ""
                         else:
-                            # Defensive: always output in MM-dd-yyyy
                             row[col] = d.toString("MM-dd-yyyy")
+                    elif hasattr(widget, 'value') and col == "% Complete":
+                        try:
+                            row[col] = int(widget.value())
+                            if int(row[col]) >= 100:
+                                row[col] = 100
+                                if row.get("Status") != "Done":
+                                    row["Status"] = "Done"
+                                    import datetime as _dt
+                                    if not row.get("Actual Start Date"):
+                                        row["Actual Start Date"] = _dt.datetime.today().strftime("%m-%d-%Y")
+                                    if not row.get("Actual Finish Date"):
+                                        row["Actual Finish Date"] = _dt.datetime.today().strftime("%m-%d-%Y")
+                        except Exception:
+                            row[col] = 0
                     elif isinstance(widget, QTextEdit):
                         row[col] = widget.toPlainText()
                 self.model.save_to_db()
@@ -679,7 +878,11 @@ class GanttChartView(QWidget):
                     (QColor("#FF8200"), "Dependency (On Time)"),
                     (QColor("red"), "Dependency Conflict"),
                     (QColor(180,180,180), "Hierarchy Connector"),
-                    (QColor("#00BFFF"), "Hover Highlight")
+                    (QColor("#00BFFF"), "Hover Highlight"),
+                    (QColor("#FF8200"), "% Complete Fill"),
+                    (QColor("#DAA520"), "Critical Path Fill"),
+                    (QColor("#FFA500"), "At Risk Outline"),
+                    (QColor("red"), "Overdue Outline")
                 ]
                 lx, ly, lh = 10, 10, 18
                 for i, (color, label) in enumerate(legend_entries):
@@ -1029,22 +1232,82 @@ class GanttChartView(QWidget):
 
         name_to_bar = {}
         bar_items = []
-        label_x = 10
+        # Determine left label area width to prevent overlap with bars.
+        # First, create temporary text items to measure widths.
+        temp_items = []
+        from PyQt5.QtGui import QFontMetrics, QFont
+        font = self.font() if hasattr(self, 'font') else None
+        fm = QFontMetrics(font) if font else None
+        max_label_width = 0
         for name, start, duration, i, r in bars:
-            x = (start - chart_min_date).days * 10 + 100
+            if fm:
+                w = fm.width(name)
+            else:
+                # Fallback approximate width: 7px * chars
+                w = len(name) * 7
+            if w > max_label_width:
+                max_label_width = w
+        label_padding = 20
+        label_x = 10
+        bar_offset_x = label_x + max_label_width + label_padding
+        # Store mapping of name->text item for hover highlighting
+        self._name_to_text_item = {}
+        for name, start, duration, i, r in bars:
+            x = (start - chart_min_date).days * 10 + bar_offset_x
             y = i * (bar_height + bar_gap) + 40
             width = max(duration * 10, 10)
             rect = ClickableBar(x, y, width, bar_height, r, self.preview_label, self)
-            # Critical path styling: use gold accent while keeping text readable
-            if name in critical_set:
-                rect.setBrush(QColor("#DAA520"))  # goldenrod
-            else:
-                rect.setBrush(gantt_color)
+            # Base background always dark; progress drawn as overlay portion
+            rect.setBrush(QColor("#333333"))
+            # Overdue / At-Risk outline logic
+            from PyQt5.QtGui import QPen as _QPen4
+            import datetime as _dt_ov
+            overdue = False
+            at_risk = False
+            try:
+                # Determine scheduled end (use Calculated End Date if present else start+duration)
+                if "_auto_end" in r:
+                    scheduled_end = r["_auto_end"]
+                else:
+                    end_calc = r.get("Calculated End Date", "")
+                    if end_calc:
+                        scheduled_end = _dt_ov.datetime.strptime(end_calc, "%m-%d-%Y")
+                    else:
+                        scheduled_end = start + _dt_ov.timedelta(days=duration)
+                today = _dt_ov.datetime.today()
+                pc_val = int(r.get("% Complete") or 0)
+                status_val = (r.get("Status") or "").strip()
+                if pc_val < 100 and today.date() > scheduled_end.date():
+                    overdue = True
+                elif pc_val == 0 and status_val in ("Planned", "Blocked") and today.date() > start.date():
+                    at_risk = True
+            except Exception:
+                pass
+            outline_pen = _QPen4(Qt.NoPen)
+            if overdue:
+                outline_pen = _QPen4(QColor("red")); outline_pen.setWidth(2)
+            elif at_risk:
+                outline_pen = _QPen4(QColor("#FFA500")); outline_pen.setWidth(2)
+            rect.setPen(outline_pen)
             self.scene.addItem(rect)
+            # Progress overlay (percentage complete)
+            try:
+                pc = int(r.get("% Complete") or 0)
+            except Exception:
+                pc = 0
+            if pc > 0:
+                prog_w = max(2, int(width * pc / 100))
+                prog_color = QColor("#DAA520") if name in critical_set else gantt_color
+                from PyQt5.QtGui import QPen as _QPen3
+                prog_rect = self.scene.addRect(x, y, prog_w, bar_height, _QPen3(Qt.NoPen), prog_color)
+                # Do not intercept clicks; underlying ClickableBar handles interaction
+                prog_rect.setAcceptedMouseButtons(Qt.NoButton)
+                prog_rect.setZValue(rect.zValue() + 1)
             text_item = self.scene.addText(name)
             from PyQt5.QtGui import QColor as _QColor
-            text_item.setDefaultTextColor(_QColor("white"))
+            text_item.setDefaultTextColor(_QColor("#FF8200"))
             text_item.setPos(label_x, y + (bar_height - text_item.boundingRect().height())/2)
+            self._name_to_text_item[name] = text_item
             name_to_bar[name] = (x, y, width, bar_height)
             bar_items.append((rect, r))
 
@@ -1073,8 +1336,8 @@ class GanttChartView(QWidget):
         # ---------- Axis ----------
         if min_date and max_date:
             axis_y = 30
-            axis_x0 = 100
-            axis_x1 = (max_date - chart_min_date).days * 10 + 100 + 40
+            axis_x0 = bar_offset_x
+            axis_x1 = (max_date - chart_min_date).days * 10 + bar_offset_x + 40
             self.scene.addLine(axis_x0, axis_y, axis_x1, axis_y)
             tick_interval = 7
             total_days = (max_date - chart_min_date).days
@@ -1172,6 +1435,25 @@ class GanttChartView(QWidget):
 
         # ---------- Scene rect ----------
         self.view.setSceneRect(0, 0, 800, max(300, len(bars)*(bar_height+bar_gap)+60))
+        # Adjust scene width to fit axis_x1 if larger
+        current_rect = self.view.sceneRect()
+        if current_rect.width() < axis_x1 + 100:
+            self.view.setSceneRect(0, 0, axis_x1 + 100, current_rect.height())
+
+    # Extend highlighting of connectors to also highlight label text
+    def _highlight_connectors(self, part_name, on):
+        super_method = getattr(super(), '_highlight_connectors', None)
+        if super_method:
+            try:
+                super_method(part_name, on)
+            except Exception:
+                pass
+        # Highlight label text item if exists
+        if hasattr(self, '_name_to_text_item'):
+            ti = self._name_to_text_item.get(part_name)
+            if ti:
+                from PyQt5.QtGui import QColor
+                ti.setDefaultTextColor(QColor("#00BFFF") if on else QColor("#FF8200"))
 
 class CalendarView(QWidget):
     def __init__(self, model=None):
@@ -1494,10 +1776,26 @@ class TimelineView(QWidget):
         # Draw bars and record their positions for connectors
         bar_height = 24
         bar_gap = 12
+        # Measure label widths to offset bars and avoid overlap
+        from PyQt5.QtGui import QFontMetrics
+        font = self.font() if hasattr(self, 'font') else None
+        fm = QFontMetrics(font) if font else None
+        max_label_width = 0
+        for name, start, duration, row, idx in bars:
+            if fm:
+                w = fm.width(name)
+            else:
+                w = len(name) * 7
+            if w > max_label_width:
+                max_label_width = w
+        label_padding = 20
+        label_x = 10
+        bar_offset_x = label_x + max_label_width + label_padding
         y = 40
         bar_positions = {}  # idx -> (x, y, width)
+        self._timeline_name_to_text = {}
         for name, start, duration, row, idx in bars:
-            x = 100 + (start - min_date).days * 8
+            x = bar_offset_x + (start - min_date).days * 8
             width = max(8, duration * 8)
             # Highlight critical path bars in red
             color = QColor("red") if name in critical_path else QColor("#FF8200")
@@ -1550,7 +1848,10 @@ class TimelineView(QWidget):
             bar_item = HoverableTimelineBar(x, y, width, bar_height, row, self)
             bar_item.setBrush(QBrush(color))
             self.scene.addItem(bar_item)
-            self.scene.addText(name).setPos(10, y)
+            text_item = self.scene.addText(name)
+            text_item.setDefaultTextColor(QColor("white"))
+            text_item.setPos(label_x, y)
+            self._timeline_name_to_text[name] = text_item
             bar_positions[idx] = (x, y, width)
             y += bar_height + bar_gap
         # Draw connector lines for parent-child relationships
@@ -1576,15 +1877,46 @@ class TimelineView(QWidget):
                     self.scene.addLine(child_mid_x, (parent_bottom + child_top) // 2, child_mid_x, child_top, pen)
         # Draw x-axis with date marks every 7 days
         axis_y = 20
-        axis_x0 = 100
-        axis_x1 = 100 + total_days * 8 + 40
+        axis_x0 = bar_offset_x
+        axis_x1 = bar_offset_x + total_days * 8 + 40
         self.scene.addLine(axis_x0, axis_y, axis_x1, axis_y)
         for d in range(0, total_days + 1, 7):
             tick_x = axis_x0 + d * 8
             self.scene.addLine(tick_x, axis_y - 5, tick_x, axis_y + 5)
             tick_date = min_date + datetime.timedelta(days=d)
-            self.scene.addText(tick_date.strftime("%m-%d-%Y")).setPos(tick_x - 30, axis_y - 25)
+            tick_label = self.scene.addText(tick_date.strftime("%m-%d-%Y"))
+            tick_label.setDefaultTextColor(QColor("white"))
+            tick_label.setPos(tick_x - 30, axis_y - 25)
         self.view.setSceneRect(0, 0, axis_x1 + 40, max(300, y + 40))
+        # Extend hover bars to highlight labels (monkey patch hover events)
+        for item in self.scene.items():
+            if hasattr(item, 'row') and hasattr(item, 'hoverEnterEvent'):
+                original_enter = item.hoverEnterEvent
+                original_leave = item.hoverLeaveEvent
+                def make_enter(orig, bar_item=item):
+                    def _enter(ev):
+                        try:
+                            name = bar_item.row.get("Project Part", "")
+                            ti = self._timeline_name_to_text.get(name)
+                            if ti:
+                                ti.setDefaultTextColor(QColor("#00BFFF"))
+                        except Exception:
+                            pass
+                        return orig(ev)
+                    return _enter
+                def make_leave(orig, bar_item=item):
+                    def _leave(ev):
+                        try:
+                            name = bar_item.row.get("Project Part", "")
+                            ti = self._timeline_name_to_text.get(name)
+                            if ti:
+                                ti.setDefaultTextColor(QColor("white"))
+                        except Exception:
+                            pass
+                        return orig(ev)
+                    return _leave
+                item.hoverEnterEvent = make_enter(original_enter)
+                item.hoverLeaveEvent = make_leave(original_leave)
 
 
 # New DatabaseView class
@@ -1981,6 +2313,9 @@ class MainWindow(QMainWindow):
             self.timeline_view.render_timeline()
         if hasattr(self, 'database_view'):
             self.database_view.refresh_table()
+        if hasattr(self, 'progress_dashboard'):
+            # Refresh metrics summary
+            self.progress_dashboard.refresh()
     def display_view(self, index):
         self.views.setCurrentIndex(index)
         if index == 0:
@@ -1989,6 +2324,8 @@ class MainWindow(QMainWindow):
             self.gantt_chart_view.render_gantt(self.model)
         elif index == 4:
             self.database_view.refresh_table()
+        elif index == 5 and hasattr(self, 'progress_dashboard'):
+            self.progress_dashboard.refresh()
     def __init__(self, model):
         try:
             super().__init__()
@@ -2042,7 +2379,8 @@ class MainWindow(QMainWindow):
                 "Gantt Chart",
                 "Calendar",
                 "Project Timeline",
-                "Database"
+                "Database",
+                "Progress Dashboard"
             ])
 
             # Stacked widget for views
@@ -2051,6 +2389,7 @@ class MainWindow(QMainWindow):
             self.calendar_view = CalendarView(self.model)
             self.timeline_view = TimelineView(self.model)
             self.database_view = DatabaseView(self.model, on_data_changed=self.on_data_changed)
+            self.progress_dashboard = ProgressDashboard(self.model)
 
             self.views = QStackedWidget()
             self.views.addWidget(self.project_tree_view)
@@ -2058,6 +2397,7 @@ class MainWindow(QMainWindow):
             self.views.addWidget(self.calendar_view)
             self.views.addWidget(self.timeline_view)
             self.views.addWidget(self.database_view)
+            self.views.addWidget(self.progress_dashboard)
 
             # Layout
             main_layout = QVBoxLayout()
@@ -2079,7 +2419,7 @@ class MainWindow(QMainWindow):
 
             # Now that all views are constructed, connect sidebar signals and set current row
             self.sidebar.currentRowChanged.connect(self.display_view)
-            self.sidebar.setCurrentRow(4)  # Start on Database view for editing
+            self.sidebar.setCurrentRow(4)  # Start on Database view for editing (Dashboard is index 5)
             # If Gantt tab is selected at startup, render it
             if self.sidebar.currentRow() == 1:
                 if hasattr(self.gantt_chart_view, 'scene') and self.gantt_chart_view.scene is not None:
