@@ -527,6 +527,28 @@ class GanttChartView(QWidget):
         from PyQt5.QtGui import QPainter
         painter = QPainter(gantt_pixmap)
         self.scene.render(painter)
+        # Legend (feature 5)
+        if getattr(self, 'include_legend', False):
+            try:
+                from PyQt5.QtGui import QPen, QColor
+                legend_entries = [
+                    (QColor("#FF8200"), "Task / Span"),
+                    (QColor("#DAA520"), "Critical Path"),
+                    (QColor("#FF8200"), "Dependency (On Time)"),
+                    (QColor("red"), "Dependency Conflict"),
+                    (QColor(180,180,180), "Hierarchy Connector"),
+                    (QColor("#00BFFF"), "Hover Highlight")
+                ]
+                lx, ly, lh = 10, 10, 18
+                for i, (color, label) in enumerate(legend_entries):
+                    y = ly + i * lh
+                    pen = QPen(color)
+                    pen.setWidth(3 if 'Hover' in label else 2)
+                    painter.setPen(pen)
+                    painter.drawLine(lx, y+7, lx+34, y+7)
+                    painter.drawText(lx+42, y+12, label)
+            except Exception as e:
+                print(f"WARNING: Legend drawing failed: {e}")
         painter.end()
 
         # Load header image (adjust path as needed)
@@ -576,6 +598,22 @@ class GanttChartView(QWidget):
         refresh_btn = QPushButton("Refresh Gantt Chart")
         refresh_btn.clicked.connect(self.refresh_gantt)
         layout.addWidget(refresh_btn)
+        
+        # Hierarchy connectors toggle (feature 1)
+        from PyQt5.QtWidgets import QCheckBox
+        self.hierarchy_checkbox = QCheckBox("Show Hierarchy Lines")
+        self.hierarchy_checkbox.setChecked(True)
+        self.hierarchy_checkbox.stateChanged.connect(lambda _s: self.refresh_gantt())
+        layout.addWidget(self.hierarchy_checkbox)
+
+        # Legend inclusion flag (feature 5)
+        self.include_legend = True
+
+        # Critical path toggle (new feature) default off
+        self.critical_path_checkbox = QCheckBox("Show Critical Path")
+        self.critical_path_checkbox.setChecked(False)
+        self.critical_path_checkbox.stateChanged.connect(lambda _s: self.refresh_gantt())
+        layout.addWidget(self.critical_path_checkbox)
 
         # Zoom controls
         zoom_layout = QHBoxLayout()
@@ -728,6 +766,76 @@ class GanttChartView(QWidget):
         from PyQt5.QtWidgets import QGraphicsRectItem, QGraphicsItem
         gantt_color = QColor("#FF8200")
 
+        # Optional critical path calculation
+        critical_set = set()
+        if hasattr(self, 'critical_path_checkbox') and self.critical_path_checkbox.isChecked():
+            try:
+                # Build dependency graph and durations
+                name_to_row = {r.get("Project Part", ""): r for r in rows}
+                graph = {}
+                duration_map = {}
+                import datetime as _dt_cp
+                for r in rows:
+                    name = r.get("Project Part", "")
+                    deps = [d.strip() for d in (r.get("Dependencies", "") or "").split(',') if d.strip()]
+                    graph[name] = deps
+                    try:
+                        if "_auto_start" in r and "_auto_end" in r:
+                            duration_map[name] = (r["_auto_end"] - r["_auto_start"]).days
+                        else:
+                            duration_map[name] = int(r.get("Duration (days)", 0) or 0)
+                    except Exception:
+                        duration_map[name] = 0
+                # Topological order (simple DFS; assumes no complex cycles)
+                visited = set(); order = []
+                def dfs(n):
+                    if n in visited: return
+                    for d in graph.get(n, []): dfs(d)
+                    visited.add(n); order.append(n)
+                for n in graph: dfs(n)
+                # Forward pass: earliest finish
+                earliest_finish = {}
+                earliest_start = {}
+                for n in order:
+                    deps = graph.get(n, [])
+                    if not deps:
+                        # Use explicit start date if available for alignment; else zero
+                        row = name_to_row.get(n, {})
+                        try:
+                            if "_auto_start" in row:
+                                est = row["_auto_start"]
+                            else:
+                                est = datetime.datetime.strptime(row.get("Start Date", ""), "%m-%d-%Y")
+                        except Exception:
+                            est = min_date
+                        earliest_start[n] = est
+                    else:
+                        # earliest start is max earliest finish of deps
+                        ef_candidates = []
+                        for d in deps:
+                            if d in earliest_finish:
+                                ef_candidates.append(earliest_finish[d])
+                        base = max(ef_candidates) if ef_candidates else min_date
+                        earliest_start[n] = base
+                    earliest_finish[n] = earliest_start[n] + datetime.timedelta(days=duration_map.get(n,0))
+                project_finish = max(earliest_finish.values()) if earliest_finish else None
+                # Backward pass: latest start
+                latest_start = {}; latest_finish = {}
+                for n in reversed(order):
+                    # Successors: tasks that depend on n
+                    succs = [k for k,v in graph.items() if n in v]
+                    if not succs:
+                        latest_finish[n] = project_finish
+                    else:
+                        latest_finish[n] = min([latest_start[s] for s in succs]) if succs else project_finish
+                    latest_start[n] = latest_finish[n] - datetime.timedelta(days=duration_map.get(n,0))
+                # Critical tasks: zero total float (allow <= 0 days tolerance)
+                for n in order:
+                    if abs((earliest_start[n] - latest_start[n]).days) <= 0:
+                        critical_set.add(n)
+            except Exception as e:
+                print(f"WARNING: Critical path calculation failed: {e}")
+
         class ClickableBar(QGraphicsRectItem):
             def __init__(self, x, y, w, h, row_dict, preview_label, gantt_view):
                 super().__init__(x, y, w, h)
@@ -790,7 +898,11 @@ class GanttChartView(QWidget):
             y = i * (bar_height + bar_gap) + 40
             width = max(duration * 10, 10)
             rect = ClickableBar(x, y, width, bar_height, r, self.preview_label, self)
-            rect.setBrush(gantt_color)
+            # Critical path styling: use gold accent while keeping text readable
+            if name in critical_set:
+                rect.setBrush(QColor("#DAA520"))  # goldenrod
+            else:
+                rect.setBrush(gantt_color)
             self.scene.addItem(rect)
             text_item = self.scene.addText(name)
             from PyQt5.QtGui import QColor as _QColor
@@ -860,55 +972,66 @@ class GanttChartView(QWidget):
                     continue
                 dep_end = name_to_dates.get(dep_name, (None, None))[1]
                 this_start = name_to_dates.get(name, (None, None))[0]
-                if dep_end and this_start and dep_end >= this_start:
+                conflict = dep_end and this_start and dep_end >= this_start
+                if conflict:
                     pen = QPen(_QColor2("red"), 2)
                 else:
-                    pen = QPen(_QColor2("#FF8200"), 2)
+                    # Critical path dependency (both tasks critical and not conflict) use gold
+                    if dep_name in critical_set and name in critical_set:
+                        pen = QPen(_QColor2("#DAA520"), 2)
+                    else:
+                        pen = QPen(_QColor2("#FF8200"), 2)
                 start_x = dep_x + dep_w
                 start_y = dep_y + dep_h/2
                 end_x = this_x
                 end_y = this_y + this_h/2
-                self.scene.addLine(start_x, start_y, end_x, end_y, pen)
-
+                # L-shaped routing (feature 6)
+                self.scene.addLine(start_x, start_y, end_x, start_y, pen)
+                self.scene.addLine(end_x, start_y, end_x, end_y, pen)
         # ---------- Parent-child connectors (hierarchical fan-out) ----------
         from PyQt5.QtGui import QPen as _QPen, QColor as _QColor3
-        base_connector_pen = _QPen(_QColor3(180,180,180))
-        base_connector_pen.setWidth(1)
-        # Map parent -> list of child part names that have bars
-        parent_children = {}
-        for name, start, duration, i, r in bars:
-            parent_name = r.get("Parent", "") or ""
-            if parent_name and parent_name in name_to_bar and name in name_to_bar:
-                parent_children.setdefault(parent_name, []).append(name)
-        # Prepare mapping for highlighting
+        draw_hierarchy = True
+        if hasattr(self, 'hierarchy_checkbox'):
+            try:
+                draw_hierarchy = self.hierarchy_checkbox.isChecked()
+            except Exception:
+                draw_hierarchy = True
         self._connector_lines_map = {}
-        def _register(part, line_item):
-            self._connector_lines_map.setdefault(part, []).append(line_item)
-        for parent, children in parent_children.items():
-            if not children:
-                continue
-            px, py, pw, ph = name_to_bar[parent]
-            parent_mid_x = px + pw/2
-            parent_bottom_y = py + ph
-            # Collect child vertical positions
-            child_positions = []  # (child_name, child_mid_x, child_top_y)
-            for child in children:
-                cx, cy, cw, ch = name_to_bar[child]
-                child_positions.append((child, cx + cw/2, cy))
-            # Sort by y for consistent trunk
-            child_positions.sort(key=lambda t: t[2])
-            trunk_top = parent_bottom_y
-            trunk_bottom = child_positions[-1][2]
-            trunk_line = self.scene.addLine(parent_mid_x, trunk_top, parent_mid_x, trunk_bottom, base_connector_pen)
-            _register(parent, trunk_line)
-            for child, cmx, cty in child_positions:
-                # Horizontal from trunk to child center
-                h_line = self.scene.addLine(min(parent_mid_x, cmx), cty, max(parent_mid_x, cmx), cty, base_connector_pen)
-                v_line = self.scene.addLine(cmx, cty, cmx, cty, base_connector_pen)  # degenerate (placeholder for uniform handling)
-                _register(parent, h_line)
-                _register(child, h_line)
-                _register(child, v_line)
-                _register(parent, v_line)
+        if draw_hierarchy:
+            base_connector_pen = _QPen(_QColor3(180,180,180))
+            base_connector_pen.setWidth(1)
+            parent_children = {}
+            for name, start, duration, i, r in bars:
+                parent_name = r.get("Parent", "") or ""
+                if parent_name and parent_name in name_to_bar and name in name_to_bar:
+                    parent_children.setdefault(parent_name, []).append(name)
+            def _register(part, line_item):
+                self._connector_lines_map.setdefault(part, []).append(line_item)
+            for parent, children in parent_children.items():
+                if not children:
+                    continue
+                px, py, pw, ph = name_to_bar[parent]
+                parent_mid_x = px + pw/2
+                parent_bottom_y = py + ph
+                # Collect child vertical positions
+                child_positions = []  # (child_name, child_mid_x, child_top_y)
+                for child in children:
+                    cx, cy, cw, ch = name_to_bar[child]
+                    child_positions.append((child, cx + cw/2, cy))
+                # Sort by y for consistent trunk
+                child_positions.sort(key=lambda t: t[2])
+                trunk_top = parent_bottom_y
+                trunk_bottom = child_positions[-1][2]
+                trunk_line = self.scene.addLine(parent_mid_x, trunk_top, parent_mid_x, trunk_bottom, base_connector_pen)
+                _register(parent, trunk_line)
+                for child, cmx, cty in child_positions:
+                    # Horizontal from trunk to child center
+                    h_line = self.scene.addLine(min(parent_mid_x, cmx), cty, max(parent_mid_x, cmx), cty, base_connector_pen)
+                    v_line = self.scene.addLine(cmx, cty, cmx, cty, base_connector_pen)  # degenerate (placeholder for uniform handling)
+                    _register(parent, h_line)
+                    _register(child, h_line)
+                    _register(child, v_line)
+                    _register(parent, v_line)
 
         # ---------- Scene rect ----------
         self.view.setSceneRect(0, 0, 800, max(300, len(bars)*(bar_height+bar_gap)+60))
@@ -1596,44 +1719,6 @@ class DatabaseView(QWidget):
             self.refresh_table()
         if self.on_data_changed:
             self.on_data_changed()
-    
-        def export_gantt_chart(self):
-            # Open file dialog for PNG
-            path, _ = QFileDialog.getSaveFileName(self, "Export Gantt Chart", "gantt_chart.png", "PNG Files (*.png)")
-            if not path:
-                return
-            # Render scene to QPixmap
-            rect = self.scene.sceneRect().toRect()
-            if rect.width() == 0 or rect.height() == 0:
-                print("Gantt chart scene is empty, nothing to export.")
-                return
-            gantt_pixmap = QPixmap(rect.size())
-            gantt_pixmap.fill()
-            painter = QPainter(gantt_pixmap)
-            self.scene.render(painter)
-            painter.end()
-
-            # Load header image (adjust path as needed)
-            header_path = os.path.join(os.path.dirname(__file__), "header.png")
-            if not os.path.exists(header_path):
-                print(f"Header image not found at {header_path}, exporting without header.")
-                combined_pixmap = gantt_pixmap
-            else:
-                header_pixmap = QPixmap(header_path)
-                # Create a new pixmap tall enough for header + gantt
-                combined_width = max(header_pixmap.width(), gantt_pixmap.width())
-                combined_height = header_pixmap.height() + gantt_pixmap.height()
-                combined_pixmap = QPixmap(combined_width, combined_height)
-                combined_pixmap.fill()
-                painter = QPainter(combined_pixmap)
-                # Draw header at top
-                painter.drawPixmap(0, 0, header_pixmap)
-                # Draw gantt below header
-                painter.drawPixmap(0, header_pixmap.height(), gantt_pixmap)
-                painter.end()
-
-            combined_pixmap.save(path, "PNG")
-            print(f"Gantt chart exported to {path}")
 
     def dropdown_changed(self, row, col, value):
         colname = ProjectDataModel.COLUMNS[col]
@@ -1805,16 +1890,26 @@ class MainWindow(QMainWindow):
         if self.sidebar.currentRow() == 1 and hasattr(self.gantt_chart_view, 'highlight_bar'):
             self.gantt_chart_view.highlight_bar(part_name)
 
-
+# ------------------------------------------------------------
+# Application Entry Point (was missing; caused immediate exit)
+# ------------------------------------------------------------
 if __name__ == "__main__":
-    print('DEBUG: Entered __main__ block')
-    print('ZZZ-TEST-123: About to instantiate MainWindow')
-    import sys
-    from PyQt5.QtWidgets import QApplication
-    app = QApplication(sys.argv)
-    model = ProjectDataModel()
-    window = MainWindow(model)
-    print('ZZZ-TEST-123: MainWindow instantiated')
-    window.show()
-    print('DEBUG: window.show() called')
-    sys.exit(app.exec_())
+    print("DEBUG: Entering __main__ startup block")
+    try:
+        import sys
+        from PyQt5.QtWidgets import QApplication
+        app = QApplication(sys.argv)
+        print("DEBUG: QApplication created")
+        model = ProjectDataModel()
+        print(f"DEBUG: Model loaded with {len(model.rows)} rows")
+        window = MainWindow(model)
+        window.show()
+        print("DEBUG: MainWindow shown; starting event loop")
+        exit_code = app.exec_()
+        print(f"DEBUG: QApplication exited with code {exit_code}")
+        sys.exit(exit_code)
+    except Exception as e:
+        import traceback, sys
+        print("FATAL: Unhandled exception during startup:", e)
+        traceback.print_exc()
+        sys.exit(1)
