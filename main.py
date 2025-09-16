@@ -1243,12 +1243,72 @@ class TimelineView(QWidget):
         self.render_timeline()
 
     def render_timeline(self):
+        # --- Critical Path Calculation ---
+        def find_critical_path(rows):
+            import datetime
+            # Build graph: node = part name, edges = dependencies
+            name_to_row = {row.get("Project Part", ""): row for row in rows}
+            graph = {}
+            for row in rows:
+                name = row.get("Project Part", "")
+                deps = row.get("Dependencies", "")
+                dep_list = [d.strip() for d in deps.split(",") if d.strip()]
+                graph[name] = dep_list
+            # Topo sort
+            visited = set()
+            order = []
+            def visit(n):
+                if n in visited:
+                    return
+                for dep in graph.get(n, []):
+                    visit(dep)
+                visited.add(n)
+                order.append(n)
+            for n in graph:
+                visit(n)
+            # Calculate earliest start/finish
+            est = {}
+            eft = {}
+            for n in order:
+                row = name_to_row.get(n, {})
+                duration = int(row.get("Duration (days)", 0) or 0)
+                if not duration:
+                    continue
+                deps = graph.get(n, [])
+                if not deps:
+                    start = row.get("Start Date", "")
+                    if start:
+                        est[n] = datetime.datetime.strptime(start, "%m-%d-%Y")
+                    else:
+                        est[n] = datetime.datetime.min
+                else:
+                    est[n] = max([eft.get(dep, datetime.datetime.min) for dep in deps])
+                eft[n] = est[n] + datetime.timedelta(days=duration)
+            # Calculate latest finish/start
+            lft = {n: max(eft.values()) for n in order}
+            lst = {}
+            for n in reversed(order):
+                row = name_to_row.get(n, {})
+                duration = int(row.get("Duration (days)", 0) or 0)
+                deps = graph.get(n, [])
+                if not deps:
+                    lft[n] = lft[n]
+                else:
+                    lft[n] = min([lst.get(dep, lft[n]) for dep in deps])
+                lst[n] = lft[n] - datetime.timedelta(days=duration)
+            # Critical path: nodes where est==lst
+            critical = set(n for n in order if est.get(n) == lst.get(n))
+            return critical
         import datetime
         from PyQt5.QtGui import QBrush, QColor
         from PyQt5.QtCore import QDate
         self.scene.clear()
         if not self.model or not hasattr(self.model, 'rows'):
             return
+        rows = [row for row in self.model.rows if row.get("Start Date") and row.get("Duration (days)")]
+        # --- Critical Path ---
+        critical_path = find_critical_path(rows)
+        # ...existing code...
         def topo_sort(rows):
             name_to_row = {row.get("Project Part", ""): row for row in rows}
             visited = set()
@@ -1265,7 +1325,6 @@ class TimelineView(QWidget):
             for row in rows:
                 visit(row)
             return result
-        rows = [row for row in self.model.rows if row.get("Start Date") and row.get("Duration (days)")]
         def compute_parent_spans(rows):
             import datetime
             name_to_row = {row.get("Project Part", ""): row for row in rows}
@@ -1340,7 +1399,8 @@ class TimelineView(QWidget):
         for name, start, duration, row, idx in bars:
             x = 100 + (start - min_date).days * 8
             width = max(8, duration * 8)
-            color = QColor("#FF8200")  # Orange
+            # Highlight critical path bars in red
+            color = QColor("red") if name in critical_path else QColor("#FF8200")
             # Add hoverable rect for image preview
             from PyQt5.QtWidgets import QGraphicsRectItem
             class HoverableTimelineBar(QGraphicsRectItem):
@@ -1405,12 +1465,15 @@ class TimelineView(QWidget):
                     child_mid_x = cx + cwidth // 2
                     parent_bottom = py + bar_height
                     child_top = cy
+                    # Highlight critical path connectors in red
+                    from PyQt5.QtGui import QPen
+                    pen = QPen(QColor("red"), 2) if name in critical_path and parent_name in critical_path else QPen(QColor("#FF8200"), 2)
                     # Vertical line from parent to horizontal level
-                    self.scene.addLine(parent_mid_x, parent_bottom, parent_mid_x, (parent_bottom + child_top) // 2)
+                    self.scene.addLine(parent_mid_x, parent_bottom, parent_mid_x, (parent_bottom + child_top) // 2, pen)
                     # Horizontal line to child
-                    self.scene.addLine(parent_mid_x, (parent_bottom + child_top) // 2, child_mid_x, (parent_bottom + child_top) // 2)
+                    self.scene.addLine(parent_mid_x, (parent_bottom + child_top) // 2, child_mid_x, (parent_bottom + child_top) // 2, pen)
                     # Vertical line down to child
-                    self.scene.addLine(child_mid_x, (parent_bottom + child_top) // 2, child_mid_x, child_top)
+                    self.scene.addLine(child_mid_x, (parent_bottom + child_top) // 2, child_mid_x, child_top, pen)
         # Draw x-axis with date marks every 7 days
         axis_y = 20
         axis_x0 = 100
