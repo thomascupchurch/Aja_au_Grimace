@@ -85,14 +85,50 @@ class ImageCellWidget(QWidget):
         dlg.exec_()
 
 class ProjectDataModel:
+    # NOTE: Append-only pattern; new progress-related columns added at end to avoid breaking older rows
     COLUMNS = [
-        "Project Part", "Parent", "Children", "Start Date", "Duration (days)", "Internal/External", "Dependencies", "Type", "Calculated End Date", "Resources", "Notes", "Responsible", "Images", "Pace Link"
+        "Project Part", "Parent", "Children", "Start Date", "Duration (days)", "Internal/External", "Dependencies", "Type", "Calculated End Date", "Resources", "Notes", "Responsible", "Images", "Pace Link",
+        # Progress tracking fields
+        "% Complete",            # Integer 0-100 (leaf editable, parents rolled up)
+        "Status",                 # Planned | In Progress | Blocked | Done | Deferred
+        "Actual Start Date",      # Set when Status transitions to In Progress
+        "Actual Finish Date",     # Set when Status transitions to Done
+        "Baseline Start Date",    # Captured first time valid start/duration appear
+        "Baseline End Date"       # Derived from baseline start + duration (working days not yet applied)
     ]
     DB_FILE = "project_data.db"
 
     def __init__(self):
         self.rows = []  # Each row is a dict with keys as COLUMNS
+        self.ensure_schema()
         self.load_from_db()
+
+    # --- Schema migration to add progress columns if missing ---
+    def ensure_schema(self):
+        import sqlite3, os
+        if not os.path.exists(self.DB_FILE):
+            # Table will be created later in create_table()
+            return
+        with sqlite3.connect(self.DB_FILE) as conn:
+            c = conn.cursor()
+            # Inspect existing columns
+            try:
+                c.execute("PRAGMA table_info(project_parts)")
+                existing = [row[1] for row in c.fetchall()]  # name in 2nd column
+            except Exception:
+                existing = []
+            to_add = [col for col in self.COLUMNS if col not in existing]
+            for col in to_add:
+                # Decide type based on semantic
+                if col == "% Complete":
+                    col_type = "INTEGER"
+                else:
+                    col_type = "TEXT"
+                try:
+                    c.execute(f'ALTER TABLE project_parts ADD COLUMN "{col}" {col_type}')
+                except Exception:
+                    pass
+            conn.commit()
 
     def add_row(self, data, parent=None):
         row = {col: val for col, val in zip(self.COLUMNS, data)}
@@ -140,13 +176,39 @@ class ProjectDataModel:
             c.execute(f"SELECT {', '.join([f'\"{col}\"' for col in self.COLUMNS])} FROM project_parts")
             for row in c.fetchall():
                 row_dict = {col: val for col, val in zip(self.COLUMNS, row)}
+                # Default missing progress fields (older rows) if any are absent or None
+                if row_dict.get("% Complete") in (None, ""):
+                    row_dict["% Complete"] = 0
+                if not row_dict.get("Status"):
+                    row_dict["Status"] = "Planned"
                 print(f"Loaded from DB: {row_dict}")
                 self.rows.append(row_dict)
         self.update_calculated_end_dates()
+        # After loading & computing end dates, establish baseline if missing
+        self.capture_missing_baselines()
+
+    def capture_missing_baselines(self):
+        import datetime
+        for r in self.rows:
+            start = r.get("Start Date")
+            dur = r.get("Duration (days)")
+            if start and dur and (not r.get("Baseline Start Date") or not r.get("Baseline End Date")):
+                try:
+                    sd = datetime.datetime.strptime(start, "%m-%d-%Y")
+                    d = int(dur)
+                    end = sd + datetime.timedelta(days=d)
+                    if not r.get("Baseline Start Date"):
+                        r["Baseline Start Date"] = sd.strftime("%m-%d-%Y")
+                    if not r.get("Baseline End Date"):
+                        r["Baseline End Date"] = end.strftime("%m-%d-%Y")
+                except Exception:
+                    pass
 
     def save_to_db(self):
         import sqlite3
         self.update_calculated_end_dates()
+        # Roll-ups before save to persist auto-calculated parent progress
+        self.rollup_progress()
         self.create_table()
         with sqlite3.connect(self.DB_FILE) as conn:
             c = conn.cursor()
@@ -191,6 +253,91 @@ class ProjectDataModel:
                     row["Calculated End Date"] = ""
             except Exception:
                 row["Calculated End Date"] = ""
+
+    # --- Progress Roll-up Logic ---
+    def rollup_progress(self):
+        # Build children mapping by parent part name (string)
+        name_to_row = {r.get("Project Part", ""): r for r in self.rows}
+        children = {}
+        for r in self.rows:
+            p = r.get("Parent") or ""
+            if p:
+                children.setdefault(p, []).append(r)
+
+        # Depth-first post-order to compute parent % Complete
+        visited = set()
+        def dfs(name):
+            if name in visited:
+                return
+            visited.add(name)
+            row = name_to_row.get(name)
+            if not row:
+                return
+            # Leaf: ensure numeric % Complete & Status defaults
+            if name not in children:
+                try:
+                    pc = int(row.get("% Complete") or 0)
+                except Exception:
+                    pc = 0
+                row["% Complete"] = max(0, min(100, pc))
+                if row.get("Status") == "Done" and row["% Complete"] < 100:
+                    row["% Complete"] = 100
+                return
+            # Recurse children first
+            total_weight = 0
+            weighted = 0
+            all_done = True
+            any_in_progress = False
+            any_blocked = False
+            for child in children[name]:
+                cname = child.get("Project Part", "")
+                dfs(cname)
+                try:
+                    dur = int(child.get("Duration (days)") or 0)
+                except Exception:
+                    dur = 0
+                try:
+                    cpc = int(child.get("% Complete") or 0)
+                except Exception:
+                    cpc = 0
+                weighted += cpc * dur
+                total_weight += dur
+                st = child.get("Status") or "Planned"
+                if st != "Done":
+                    all_done = False
+                if st == "In Progress":
+                    any_in_progress = True
+                if st == "Blocked":
+                    any_blocked = True
+            if total_weight > 0:
+                row["% Complete"] = int(round(weighted / total_weight))
+            else:
+                # No duration children: average raw
+                vals = []
+                for child in children[name]:
+                    try:
+                        vals.append(int(child.get("% Complete") or 0))
+                    except Exception:
+                        pass
+                row["% Complete"] = int(round(sum(vals)/len(vals))) if vals else 0
+            # Derive parent status
+            if all_done and children[name]:
+                row["Status"] = "Done"
+                row["% Complete"] = 100
+            else:
+                # Preserve explicit Blocked if all children blocked
+                if any_blocked and not any_in_progress:
+                    row["Status"] = "Blocked"
+                elif any_in_progress:
+                    row["Status"] = "In Progress"
+                else:
+                    # Keep existing or default
+                    row["Status"] = row.get("Status") or "Planned"
+
+        # Start DFS from top-level rows (no Parent or blank)
+        for r in self.rows:
+            if not (r.get("Parent") or ""):
+                dfs(r.get("Project Part", ""))
 
 class ProjectTreeView(QWidget):
     def __init__(self, model, on_part_selected=None):
@@ -1450,8 +1597,11 @@ class DatabaseView(QWidget):
     DATE_FIELDS = {"Start Date", "Calculated End Date"}
     DROPDOWN_FIELDS = {
         "Internal/External": ["Internal", "External"],
-    "Type": ["Milestone", "Phase", "Feature", "Item"]
+    "Type": ["Milestone", "Phase", "Feature", "Item"],
+    # Progress status field handled similarly
+    "Status": ["Planned", "In Progress", "Blocked", "Done", "Deferred"]
     }
+    PROGRESS_STATUSES = ["Planned", "In Progress", "Blocked", "Done", "Deferred"]
 
     def __init__(self, model, on_data_changed=None):
         super().__init__()
@@ -1526,6 +1676,9 @@ class DatabaseView(QWidget):
         self.table.blockSignals(True)
         self.table.setRowCount(len(self.model.rows))
         for row, rowdata in enumerate(self.model.rows):
+            # Determine if this row is a parent (has at least one child referencing its Project Part)
+            part_name = rowdata.get("Project Part", "")
+            has_children = any(r.get("Parent", "") == part_name for r in self.model.rows if r is not rowdata)
             for col, colname in enumerate(ProjectDataModel.COLUMNS):
                 # Only use QDateEdit for editable date fields, not Calculated End Date
                 if colname in self.DATE_FIELDS and colname != "Calculated End Date":
@@ -1573,6 +1726,28 @@ class DatabaseView(QWidget):
                     # Show as read-only text
                     val = rowdata.get(colname, "")
                     self.table.setItem(row, col, QTableWidgetItem(val))
+                elif colname == "% Complete":
+                    from PyQt5.QtWidgets import QSpinBox
+                    spin = QSpinBox()
+                    spin.setRange(0, 100)
+                    try:
+                        spin.setValue(int(rowdata.get(colname) or 0))
+                    except Exception:
+                        spin.setValue(0)
+                    # Prevent wheel without focus
+                    def block_wheel_spin(event, sb=spin):
+                        if not sb.hasFocus():
+                            event.ignore()
+                        else:
+                            QSpinBox.wheelEvent(sb, event)
+                    spin.wheelEvent = block_wheel_spin
+                    if has_children:
+                        spin.setEnabled(False)
+                        spin.setToolTip("Parent progress is rolled up automatically from children.")
+                    else:
+                        spin.valueChanged.connect(lambda val, r=row, c=col: self.percent_changed(r, c, val))
+                    self.table.setCellWidget(row, col, spin)
+                    self.table.setItem(row, col, QTableWidgetItem(str(spin.value())))
                 elif colname in self.DROPDOWN_FIELDS or colname == "Parent":
                     from PyQt5.QtWidgets import QComboBox
                     combo = QComboBox()
@@ -1599,7 +1774,14 @@ class DatabaseView(QWidget):
                         current_val = rowdata.get(colname, "")
                         if current_val in self.DROPDOWN_FIELDS[colname]:
                             combo.setCurrentText(current_val)
-                        combo.currentTextChanged.connect(lambda val, r=row, c=col: self.dropdown_changed(r, c, val))
+                        if colname == "Status":
+                            if has_children:
+                                combo.setEnabled(False)
+                                combo.setToolTip("Parent status is derived from child statuses.")
+                            else:
+                                combo.currentTextChanged.connect(lambda val, r=row, c=col: self.status_changed(r, c, val))
+                        else:
+                            combo.currentTextChanged.connect(lambda val, r=row, c=col: self.dropdown_changed(r, c, val))
                         self.table.setCellWidget(row, col, combo)
                         self.table.setItem(row, col, QTableWidgetItem(combo.currentText()))
                 elif colname == "Images":
@@ -1658,6 +1840,10 @@ class DatabaseView(QWidget):
                 data.append("1")
             elif col == "Internal/External":
                 data.append("Internal")
+            elif col == "% Complete":
+                data.append("0")
+            elif col == "Status":
+                data.append("Planned")
             # Removed Deadline field
             else:
                 data.append("")
@@ -1684,10 +1870,6 @@ class DatabaseView(QWidget):
             if widget:
                 date_val = widget.date().toString("MM-dd-yyyy")
                 self.model.rows[row][colname] = date_val
-            # Add Export button
-            export_btn = QPushButton("Export Gantt Chart")
-            export_btn.clicked.connect(self.export_gantt_chart)
-            layout.addWidget(export_btn)
         elif colname in self.DROPDOWN_FIELDS or colname == "Parent":
             widget = self.table.cellWidget(row, col)
             if widget:
@@ -1714,6 +1896,10 @@ class DatabaseView(QWidget):
             self.table.blockSignals(True)
             self.table.setItem(row, col, QTableWidgetItem(value))
             self.table.blockSignals(False)
+            # Save & propagate roll-ups
+            self.model.save_to_db()
+            # Refresh to update parent rows (Children column / roll-ups)
+            self.refresh_table()
             if self.on_data_changed:
                 self.on_data_changed()
         except Exception as e:
@@ -1731,10 +1917,57 @@ class DatabaseView(QWidget):
             self.table.blockSignals(True)
             self.table.setItem(row, col, QTableWidgetItem(date_val))
             self.table.blockSignals(False)
+            self.model.save_to_db()
+            self.refresh_table()
             if self.on_data_changed:
                 self.on_data_changed()
         except Exception as e:
             print(f"ERROR in date_changed: {e}")
+
+    # --- Progress field handlers ---
+    def percent_changed(self, row, col, value):
+        try:
+            self.model.rows[row]["% Complete"] = int(value)
+            # Auto-mark Done if 100%
+            if int(value) >= 100 and self.model.rows[row].get("Status") != "Done":
+                self.model.rows[row]["Status"] = "Done"
+                # Set Actual Finish Date if missing
+                import datetime
+                if not self.model.rows[row].get("Actual Finish Date"):
+                    self.model.rows[row]["Actual Finish Date"] = datetime.datetime.today().strftime("%m-%d-%Y")
+                if not self.model.rows[row].get("Actual Start Date"):
+                    self.model.rows[row]["Actual Start Date"] = datetime.datetime.today().strftime("%m-%d-%Y")
+            self.model.save_to_db()
+            self.refresh_table()
+            if self.on_data_changed:
+                self.on_data_changed()
+        except Exception as e:
+            print(f"ERROR in percent_changed: {e}")
+
+    def status_changed(self, row, col, value):
+        try:
+            prev = self.model.rows[row].get("Status")
+            self.model.rows[row]["Status"] = value
+            import datetime
+            today_str = datetime.datetime.today().strftime("%m-%d-%Y")
+            if value == "In Progress":
+                if not self.model.rows[row].get("Actual Start Date"):
+                    self.model.rows[row]["Actual Start Date"] = today_str
+                # If % Complete is 0, maybe bump to 1 for visibility? (skip for now)
+            elif value == "Done":
+                # Ensure 100% and finish date
+                self.model.rows[row]["% Complete"] = 100
+                if not self.model.rows[row].get("Actual Start Date"):
+                    self.model.rows[row]["Actual Start Date"] = today_str
+                if not self.model.rows[row].get("Actual Finish Date"):
+                    self.model.rows[row]["Actual Finish Date"] = today_str
+            # Do not clear actual dates if reverting; keep historical record
+            self.model.save_to_db()
+            self.refresh_table()
+            if self.on_data_changed:
+                self.on_data_changed()
+        except Exception as e:
+            print(f"ERROR in status_changed: {e}")
 
 
 class MainWindow(QMainWindow):
