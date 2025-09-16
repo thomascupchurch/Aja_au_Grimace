@@ -1,5 +1,3 @@
-print("DEBUG: VERY TOP OF FILE")
-
 from PyQt5.QtWidgets import QDialog, QFormLayout, QLineEdit, QTextEdit, QComboBox, QDateEdit, QPushButton, QFileDialog, QLabel, QHBoxLayout
 from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtCore import QDate
@@ -11,8 +9,6 @@ from PyQt5.QtWidgets import QTreeWidgetItem
 import os
 from PyQt5.QtGui import QPixmap
 import shutil
-
-print("ZZZ-TEST-123: This is the top of main.py you are editing!")
 
 class ImageCellWidget(QWidget):
     def __init__(self, parent, row, col, model, on_data_changed=None):
@@ -198,7 +194,6 @@ class ProjectDataModel:
 
 class ProjectTreeView(QWidget):
     def __init__(self, model, on_part_selected=None):
-        print("ProjectTreeView: __init__ called")
         super().__init__()
         self.model = model
         self.on_part_selected = on_part_selected
@@ -657,12 +652,10 @@ class GanttChartView(QWidget):
             except Exception:
                 pass
     def render_gantt(self, model):
-        print("DEBUG: Entered render_gantt")
         self.model = model  # Store model for use in other methods
         self.scene.clear()
         self.preview_label.clear()
         if not hasattr(model, 'rows'):
-            print("DEBUG: Model has no 'rows' attribute")
             return
         rows = model.rows
 
@@ -720,7 +713,6 @@ class GanttChartView(QWidget):
         compute_parent_spans(rows)
         rows = topo_sort(rows)
         if not rows:
-            print("DEBUG: No rows to render in Gantt chart.")
             return
 
         # ---------- Build bar data ----------
@@ -744,8 +736,7 @@ class GanttChartView(QWidget):
                     start = datetime.datetime.strptime(start_str, "%m-%d-%Y")
                     duration = int(dur_val)
                     end = start + datetime.timedelta(days=duration)
-                except Exception as e:
-                    print(f"DEBUG: Failed to parse row {r}: {e}")
+                except Exception:
                     continue
             if not start:
                 continue
@@ -756,7 +747,6 @@ class GanttChartView(QWidget):
             bars.append((r.get("Project Part", ""), start, duration, idx, r))
 
         if not bars:
-            print("DEBUG: No valid bars after parsing.")
             return
 
         chart_min_date = min_date  # earliest start
@@ -1038,7 +1028,6 @@ class GanttChartView(QWidget):
 
 class CalendarView(QWidget):
     def __init__(self, model=None):
-        print("CalendarView: __init__ called")
         super().__init__()
         self.model = model
         from PyQt5.QtWidgets import QCalendarWidget, QListWidget, QMessageBox, QPushButton, QHBoxLayout
@@ -1191,7 +1180,6 @@ class CalendarView(QWidget):
 
 class TimelineView(QWidget):
     def __init__(self, model=None):
-        print("TimelineView: __init__ called")
         super().__init__()
         self.model = model
         layout = QVBoxLayout()
@@ -1466,7 +1454,6 @@ class DatabaseView(QWidget):
     }
 
     def __init__(self, model, on_data_changed=None):
-        print("DatabaseView: __init__ called")
         super().__init__()
         self.model = model
         self.on_data_changed = on_data_changed
@@ -1722,7 +1709,6 @@ class DatabaseView(QWidget):
 
     def dropdown_changed(self, row, col, value):
         colname = ProjectDataModel.COLUMNS[col]
-        print(f"DEBUG: dropdown_changed row={row}, col={col}, value={value}")
         try:
             self.model.rows[row][colname] = value
             self.table.blockSignals(True)
@@ -1735,7 +1721,6 @@ class DatabaseView(QWidget):
     def date_changed(self, row, col, qdate):
         colname = ProjectDataModel.COLUMNS[col]
         min_blank = QDate(1753, 1, 1)
-        print(f"DEBUG: date_changed row={row}, col={col}, qdate={qdate}")
         try:
             if qdate == min_blank:
                 self.model.rows[row][colname] = ""
@@ -1764,18 +1749,15 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'database_view'):
             self.database_view.refresh_table()
     def display_view(self, index):
-        print(f"DEBUG: display_view called with index={index}")
         self.views.setCurrentIndex(index)
         if index == 0:
             self.project_tree_view.refresh()
         elif index == 1:
-            print("DEBUG: About to call render_gantt from display_view")
             self.gantt_chart_view.render_gantt(self.model)
         elif index == 4:
             self.database_view.refresh_table()
     def __init__(self, model):
         try:
-            print("MainWindow: __init__ called")
             super().__init__()
             self.setWindowTitle("Project Management App")
             self.resize(1200, 700)
@@ -1819,7 +1801,6 @@ class MainWindow(QMainWindow):
                 header_label.setText("[header.png not found]")
             header_layout.addWidget(header_label, alignment=Qt.AlignCenter)
             header_layout.addStretch(1)
-            print("DEBUG: Header layout created")
 
             # Sidebar for view selection (create and add to layout first)
             self.sidebar = QListWidget()
@@ -1830,19 +1811,13 @@ class MainWindow(QMainWindow):
                 "Project Timeline",
                 "Database"
             ])
-            print("DEBUG: Sidebar created and items added")
 
             # Stacked widget for views
             self.project_tree_view = ProjectTreeView(self.model, on_part_selected=self.on_tree_part_selected)
-            print("DEBUG: ProjectTreeView created")
             self.gantt_chart_view = GanttChartView()
-            print("DEBUG: GanttChartView created")
             self.calendar_view = CalendarView(self.model)
-            print("DEBUG: CalendarView created")
             self.timeline_view = TimelineView(self.model)
-            print("DEBUG: TimelineView created")
             self.database_view = DatabaseView(self.model, on_data_changed=self.on_data_changed)
-            print("DEBUG: DatabaseView created")
 
             self.views = QStackedWidget()
             self.views.addWidget(self.project_tree_view)
@@ -1850,7 +1825,6 @@ class MainWindow(QMainWindow):
             self.views.addWidget(self.calendar_view)
             self.views.addWidget(self.timeline_view)
             self.views.addWidget(self.database_view)
-            print("DEBUG: QStackedWidget created and all views added")
 
             # Layout
             main_layout = QVBoxLayout()
@@ -1859,7 +1833,6 @@ class MainWindow(QMainWindow):
             content_layout.addWidget(self.sidebar)
             content_layout.addWidget(self.views, 1)
             main_layout.addLayout(content_layout)
-            print("DEBUG: Main layout and content layout created")
 
             # Footer
             footer_label = QLabel("Copyright 2025 © LSI Graphics, LLC. All Rights Reserved.")
@@ -1870,17 +1843,14 @@ class MainWindow(QMainWindow):
             container = QWidget()
             container.setLayout(main_layout)
             self.setCentralWidget(container)
-            print("DEBUG: Central widget set")
 
             # Now that all views are constructed, connect sidebar signals and set current row
             self.sidebar.currentRowChanged.connect(self.display_view)
             self.sidebar.setCurrentRow(4)  # Start on Database view for editing
-            print("DEBUG: Sidebar signal connected and current row set")
             # If Gantt tab is selected at startup, render it
             if self.sidebar.currentRow() == 1:
                 if hasattr(self.gantt_chart_view, 'scene') and self.gantt_chart_view.scene is not None:
                     self.gantt_chart_view.render_gantt(self.model)
-            print("DEBUG: MainWindow __init__ complete")
         except Exception as e:
             import traceback
             print("EXCEPTION in MainWindow.__init__:", e)
@@ -1894,19 +1864,14 @@ class MainWindow(QMainWindow):
 # Application Entry Point (was missing; caused immediate exit)
 # ------------------------------------------------------------
 if __name__ == "__main__":
-    print("DEBUG: Entering __main__ startup block")
     try:
         import sys
         from PyQt5.QtWidgets import QApplication
         app = QApplication(sys.argv)
-        print("DEBUG: QApplication created")
         model = ProjectDataModel()
-        print(f"DEBUG: Model loaded with {len(model.rows)} rows")
         window = MainWindow(model)
         window.show()
-        print("DEBUG: MainWindow shown; starting event loop")
         exit_code = app.exec_()
-        print(f"DEBUG: QApplication exited with code {exit_code}")
         sys.exit(exit_code)
     except Exception as e:
         import traceback, sys
