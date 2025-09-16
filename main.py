@@ -87,7 +87,7 @@ class ImageCellWidget(QWidget):
 class ProjectDataModel:
     # NOTE: Append-only pattern; new progress-related columns added at end to avoid breaking older rows
     COLUMNS = [
-        "Project Part", "Parent", "Children", "Start Date", "Duration (days)", "Internal/External", "Dependencies", "Type", "Calculated End Date", "Resources", "Notes", "Responsible", "Images", "Pace Link",
+        "Project Part", "Parent", "Children", "Start Date", "Duration (days)", "Internal/External", "Dependencies", "Type", "Calculated End Date", "Resources", "Notes", "Responsible", "Images", "Pace Link", "Attachments",
         # Progress tracking fields
         "% Complete",            # Integer 0-100 (leaf editable, parents rolled up)
         "Status",                 # Planned | In Progress | Blocked | Done | Deferred
@@ -122,6 +122,8 @@ class ProjectDataModel:
                 # Decide type based on semantic
                 if col == "% Complete":
                     col_type = "INTEGER"
+                elif col == "Attachments":
+                    col_type = "TEXT"  # JSON list of relative paths
                 else:
                     col_type = "TEXT"
                 try:
@@ -181,6 +183,18 @@ class ProjectDataModel:
                     row_dict["% Complete"] = 0
                 if not row_dict.get("Status"):
                     row_dict["Status"] = "Planned"
+                # Normalize attachments field to JSON list string
+                import json as _json_att
+                att_val = row_dict.get("Attachments")
+                if att_val in (None, ""):
+                    row_dict["Attachments"] = "[]"
+                else:
+                    try:
+                        parsed = _json_att.loads(att_val)
+                        if not isinstance(parsed, list):
+                            row_dict["Attachments"] = _json_att.dumps([att_val])
+                    except Exception:
+                        row_dict["Attachments"] = _json_att.dumps([att_val])
                 print(f"Loaded from DB: {row_dict}")
                 self.rows.append(row_dict)
         self.update_calculated_end_dates()
@@ -1292,6 +1306,146 @@ class GanttChartView(QWidget):
                 self.preview_label = preview_label
                 self.gantt_view = gantt_view
                 self.setAcceptHoverEvents(True)
+                self.setFlag(QGraphicsItem.ItemIsSelectable, True)
+
+            # --- Attachment utilities ---
+            def _attachments_list(self):
+                import json
+                raw = self.row.get("Attachments") or "[]"
+                try:
+                    lst = json.loads(raw)
+                    if isinstance(lst, list):
+                        return [p for p in lst if isinstance(p, str)]
+                except Exception:
+                    pass
+                return []
+            def _save_attachments_list(self, lst):
+                import json
+                self.row["Attachments"] = json.dumps(lst)
+                # Persist via model if parent widget exposes save_model()
+                pw = self.preview_label.parentWidget()
+                if pw and hasattr(pw, 'model'):
+                    try:
+                        pw.model.save_to_db()
+                    except Exception as e:
+                        print(f"Attachment save failed: {e}")
+            def contextMenuEvent(self, event):
+                from PyQt5.QtWidgets import QMenu
+                menu = QMenu()
+                open_action = menu.addAction("Open Attachments…")
+                add_action = menu.addAction("Add Attachment…")
+                open_folder_action = menu.addAction("Open Attachments Folder")
+                chosen = menu.exec_(event.screenPos())
+                if chosen == open_action:
+                    self.show_attachments_dialog()
+                elif chosen == add_action:
+                    self.add_attachment_files()
+                elif chosen == open_folder_action:
+                    self.open_attachments_folder()
+            def add_attachment_files(self):
+                from PyQt5.QtWidgets import QFileDialog
+                import os, shutil
+                files, _ = QFileDialog.getOpenFileNames(None, "Select Attachment(s)")
+                if not files:
+                    return
+                import sys
+                if getattr(sys, 'frozen', False):
+                    base_dir = os.path.dirname(sys.executable)
+                else:
+                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                attach_dir = os.path.join(base_dir, 'attachments')
+                if not os.path.exists(attach_dir):
+                    os.makedirs(attach_dir)
+                current = self._attachments_list()
+                for f in files:
+                    name = os.path.basename(f)
+                    dest = os.path.join(attach_dir, name)
+                    root, ext = os.path.splitext(name)
+                    counter = 1
+                    while os.path.exists(dest):
+                        dest = os.path.join(attach_dir, f"{root}_{counter}{ext}")
+                        counter += 1
+                    try:
+                        shutil.copy2(f, dest)
+                        rel = os.path.relpath(dest, base_dir)
+                        current.append(rel)
+                    except Exception as e:
+                        print(f"Attachment copy failed: {e}")
+                self._save_attachments_list(current)
+            def open_attachments_folder(self):
+                import os, sys, subprocess
+                if getattr(sys, 'frozen', False):
+                    base_dir = os.path.dirname(sys.executable)
+                else:
+                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                attach_dir = os.path.join(base_dir, 'attachments')
+                if not os.path.exists(attach_dir):
+                    os.makedirs(attach_dir)
+                if sys.platform.startswith('win'):
+                    os.startfile(attach_dir)
+                elif sys.platform == 'darwin':
+                    subprocess.Popen(['open', attach_dir])
+                else:
+                    subprocess.Popen(['xdg-open', attach_dir])
+            def show_attachments_dialog(self):
+                from PyQt5.QtWidgets import QDialog, QVBoxLayout, QListWidget, QPushButton, QHBoxLayout, QLabel
+                import os, webbrowser
+                dlg = QDialog()
+                dlg.setWindowTitle(f"Attachments - {self.row.get('Project Part','')}")
+                vbox = QVBoxLayout(dlg)
+                info = QLabel("Double-click or Open to launch. Remove only deletes reference.")
+                vbox.addWidget(info)
+                lst = QListWidget(); vbox.addWidget(lst)
+                thumb = QLabel(); thumb.setFixedHeight(110); vbox.addWidget(thumb)
+                btn_row = QHBoxLayout()
+                add_btn = QPushButton("Add…"); rem_btn = QPushButton("Remove"); open_btn = QPushButton("Open")
+                btn_row.addWidget(add_btn); btn_row.addWidget(rem_btn); btn_row.addWidget(open_btn)
+                vbox.addLayout(btn_row)
+                for p in self._attachments_list():
+                    lst.addItem(p)
+                def refresh_thumb():
+                    from PyQt5.QtGui import QPixmap
+                    item = lst.currentItem()
+                    if not item:
+                        thumb.clear(); return
+                    rel = item.text()
+                    if getattr(sys, 'frozen', False):
+                        base_dir = os.path.dirname(sys.executable)
+                    else:
+                        base_dir = os.path.dirname(os.path.abspath(__file__))
+                    full = os.path.join(base_dir, rel)
+                    if os.path.exists(full) and os.path.splitext(full)[1].lower() in ('.png','.jpg','.jpeg','.bmp','.gif'):
+                        pm = QPixmap(full)
+                        if not pm.isNull():
+                            thumb.setPixmap(pm.scaledToHeight(100, Qt.SmoothTransformation)); return
+                    thumb.setText(os.path.basename(full))
+                def do_add():
+                    self.add_attachment_files(); lst.clear(); [lst.addItem(p) for p in self._attachments_list()]; refresh_thumb()
+                def do_remove():
+                    item = lst.currentItem();
+                    if not item: return
+                    rel = item.text()
+                    remain = [p for p in self._attachments_list() if p != rel]
+                    self._save_attachments_list(remain)
+                    lst.takeItem(lst.currentRow()); refresh_thumb()
+                def do_open():
+                    item = lst.currentItem();
+                    if not item: return
+                    rel = item.text()
+                    if getattr(sys, 'frozen', False):
+                        base_dir = os.path.dirname(sys.executable)
+                    else:
+                        base_dir = os.path.dirname(os.path.abspath(__file__))
+                    full = os.path.join(base_dir, rel)
+                    if os.path.exists(full):
+                        webbrowser.open(full)
+                lst.currentItemChanged.connect(lambda *_: refresh_thumb())
+                lst.itemDoubleClicked.connect(lambda *_: do_open())
+                add_btn.clicked.connect(do_add)
+                rem_btn.clicked.connect(do_remove)
+                open_btn.clicked.connect(do_open)
+                refresh_thumb()
+                dlg.exec_()
             def _set_preview(self):
                 img_path = self.row.get("Images", "")
                 if img_path and str(img_path).strip():
@@ -1338,6 +1492,22 @@ class GanttChartView(QWidget):
                 parent = self.row.get("Parent", "")
                 if parent:
                     self.gantt_view._highlight_connectors(parent, False)
+                # Fallback to first image attachment preview if no explicit image assigned
+                if not self.row.get("Images"):
+                    atts = self._attachments_list()
+                    if atts:
+                        import os
+                        from PyQt5.QtGui import QPixmap
+                        if getattr(sys, 'frozen', False):
+                            base_dir = os.path.dirname(sys.executable)
+                        else:
+                            base_dir = os.path.dirname(os.path.abspath(__file__))
+                        full = os.path.join(base_dir, atts[0])
+                        if os.path.exists(full):
+                            pm = QPixmap(full)
+                            if not pm.isNull():
+                                self.preview_label.setPixmap(pm.scaledToHeight(90, Qt.SmoothTransformation))
+                                self.preview_label.setText("")
 
         name_to_bar = {}
         self._name_to_rect = {}
