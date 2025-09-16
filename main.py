@@ -53,7 +53,11 @@ class ImageCellWidget(QWidget):
     def refresh(self):
         img_path = self.model.rows[self.row].get(self.model.COLUMNS[self.col], "")
         if img_path:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
+            import sys
+            if getattr(sys, 'frozen', False):
+                base_dir = os.path.dirname(sys.executable)
+            else:
+                base_dir = os.path.dirname(os.path.abspath(__file__))
             img_path_full = os.path.join(base_dir, img_path)
 
             pixmap = QPixmap(img_path_full)
@@ -595,308 +599,221 @@ class GanttChartView(QWidget):
         if hasattr(self, 'model') and self.model:
             self.render_gantt(self.model)
 
-
+    # Internal helper to highlight/unhighlight connector lines for a part
+    def _highlight_connectors(self, part_name, on):
+        if not hasattr(self, '_connector_lines_map'):
+            return
+        lines = self._connector_lines_map.get(part_name, [])
+        if not lines:
+            return
+        from PyQt5.QtGui import QPen, QColor
+        if on:
+            pen = QPen(QColor("#00BFFF"))
+            pen.setWidth(2)
+        else:
+            pen = QPen(QColor(180,180,180))
+            pen.setWidth(1)
+        for ln in lines:
+            try:
+                ln.setPen(pen)
+            except Exception:
+                pass
     def render_gantt(self, model):
         print("DEBUG: Entered render_gantt")
         self.model = model  # Store model for use in other methods
         self.scene.clear()
         self.preview_label.clear()
-        # Get all rows with valid start date and duration
-        print(f"DEBUG: model.rows = {model.rows}")
-        def topo_sort(rows):
-            name_to_row = {row.get("Project Part", ""): row for row in rows}
+        if not hasattr(model, 'rows'):
+            print("DEBUG: Model has no 'rows' attribute")
+            return
+        rows = model.rows
+
+        # ---------- Helpers ----------
+        def topo_sort(all_rows):
+            name_to_row = {r.get("Project Part", ""): r for r in all_rows}
             visited = set()
             result = []
-            def visit(row):
-                name = row.get("Project Part", "")
+            def visit(r):
+                name = r.get("Project Part", "")
                 if name in visited:
                     return
-                parent = row.get("Parent", "")
+                parent = r.get("Parent", "")
                 if parent and parent in name_to_row:
                     visit(name_to_row[parent])
                 visited.add(name)
-                result.append(row)
-            for row in rows:
-                visit(row)
+                result.append(r)
+            for r in all_rows:
+                visit(r)
             return result
-        def compute_parent_spans(rows):
-            import datetime
-            name_to_row = {row.get("Project Part", ""): row for row in rows}
+
+        def compute_parent_spans(all_rows):
+            import datetime as _dt
             children = {}
-            for row in rows:
-                parent = row.get("Parent", "")
-                if parent:
-                    children.setdefault(parent, []).append(row)
-        def update_span(row, visited=None):
-            if visited is None:
-                visited = set()
-            name = row.get("Project Part", "")
-            if name in visited:
-                print(f"ERROR: Cycle detected at {name}, breaking recursion.")
-                return None, None
-            visited.add(name)
-            if name not in children:
-                try:
-                    start_str = row.get("Start Date", "")
-                    duration_val = row.get("Duration (days)", 0)
-                    print(f"DEBUG: update_span leaf {name}, start_str={start_str}, duration_val={duration_val}")
-                    if not start_str or not duration_val:
-                        return None, None
-                    start = datetime.datetime.strptime(start_str, "%m-%d-%Y")
-                    duration = int(duration_val)
-                    end = start + datetime.timedelta(days=duration)
-                    return start, end
-                except Exception as e:
-                    print(f"ERROR in update_span leaf {name}: {e}")
+            for r in all_rows:
+                p = r.get("Parent", "")
+                if p:
+                    children.setdefault(p, []).append(r)
+            def update_span(r, visited=None):
+                if visited is None:
+                    visited = set()
+                name = r.get("Project Part", "")
+                if name in visited:
                     return None, None
-            else:
-                print(f"DEBUG: update_span parent {name}, children={[c.get('Project Part', '') for c in children[name]]}")
-                child_spans = [update_span(child, visited.copy()) for child in children[name]]
-                child_starts = [s for s, e in child_spans if s]
-                child_ends = [e for s, e in child_spans if e]
-                if child_starts and child_ends:
-                    min_start = min(child_starts)
-                    max_end = max(child_ends)
-                    row["_auto_start"] = min_start
-                    row["_auto_end"] = max_end
-                    # Update parent's Start Date and Calculated End Date fields
-                    row["Start Date"] = min_start.strftime("%m-%d-%Y")
-                    row["Calculated End Date"] = max_end.strftime("%m-%d-%Y")
-                    return min_start, max_end
+                visited.add(name)
+                if name not in children:
+                    try:
+                        s = _dt.datetime.strptime(r.get("Start Date", ""), "%m-%d-%Y")
+                        d = int(r.get("Duration (days)", 0))
+                        e = s + _dt.timedelta(days=d)
+                        return s, e
+                    except Exception:
+                        return None, None
+                child_spans = [update_span(c, visited.copy()) for c in children[name]]
+                starts = [s for s, e in child_spans if s]
+                ends = [e for s, e in child_spans if e]
+                if starts and ends:
+                    r["_auto_start"] = min(starts)
+                    r["_auto_end"] = max(ends)
+                    return r["_auto_start"], r["_auto_end"]
                 return None, None
-            for row in rows:
-                update_span(row)
-        # Include all rows that have either real or auto-calculated dates
-        rows = list(model.rows)  # Use all rows
+            for r in all_rows:
+                update_span(r)
+
         compute_parent_spans(rows)
         rows = topo_sort(rows)
-        print(f"DEBUG: rows for Gantt = {rows}")
         if not rows:
             print("DEBUG: No rows to render in Gantt chart.")
             return
-        # Parse dates and durations
+
+        # ---------- Build bar data ----------
         import datetime
-        from PyQt5.QtGui import QPixmap
         bar_height = 24
         bar_gap = 10
         min_date = None
         max_date = None
-        bars = []
-        name_to_bar = {}
-        bar_items = []
-        for i, row in enumerate(rows):
-            # Use auto-calculated span for parents if present
-            if "_auto_start" in row and "_auto_end" in row:
-                start = row["_auto_start"]
-                end = row["_auto_end"]
+        bars = []  # (name, start, duration, index, row_dict)
+        for idx, r in enumerate(rows):
+            if "_auto_start" in r and "_auto_end" in r:
+                start = r["_auto_start"]
+                end = r["_auto_end"]
                 duration = (end - start).days
             else:
                 try:
-                    start_str = row.get("Start Date", "")
-                    duration_val = row.get("Duration (days)", 0)
-                    if not start_str or not duration_val:
+                    start_str = r.get("Start Date", "")
+                    dur_val = r.get("Duration (days)", 0)
+                    if not start_str or not dur_val:
                         continue
                     start = datetime.datetime.strptime(start_str, "%m-%d-%Y")
-                    duration = int(duration_val)
+                    duration = int(dur_val)
                     end = start + datetime.timedelta(days=duration)
                 except Exception as e:
-                    print(f"DEBUG: Failed to parse row {row}: {e}")
+                    print(f"DEBUG: Failed to parse row {r}: {e}")
                     continue
-            if not start or not end:
+            if not start:
                 continue
             if min_date is None or start < min_date:
                 min_date = start
             if max_date is None or end > max_date:
                 max_date = end
-            bars.append((row["Project Part"], start, duration, i, row))
-            print(f"DEBUG: Added bar: {row['Project Part']}, start={start}, duration={duration}, end={end}")
+            bars.append((r.get("Project Part", ""), start, duration, idx, r))
+
         if not bars:
-            print("DEBUG: No bars to draw in Gantt chart.")
+            print("DEBUG: No valid bars after parsing.")
             return
 
-        # Set chart_min_date to the actual earliest start date (no cushion)
-        chart_min_date = min_date
-        # Draw bars and record their positions
+        chart_min_date = min_date  # earliest start
+
+        # ---------- Draw bars ----------
         from PyQt5.QtGui import QColor
+        from PyQt5.QtWidgets import QGraphicsRectItem, QGraphicsItem
         gantt_color = QColor("#FF8200")
-        from PyQt5.QtWidgets import QGraphicsRectItem
+
         class ClickableBar(QGraphicsRectItem):
-            def __init__(self, x, y, width, height, row, preview_label, *args, **kwargs):
-                super().__init__(x, y, width, height, *args, **kwargs)
-                self.row = row
+            def __init__(self, x, y, w, h, row_dict, preview_label, gantt_view):
+                super().__init__(x, y, w, h)
+                self.row = row_dict
                 self.preview_label = preview_label
+                self.gantt_view = gantt_view
                 self.setAcceptHoverEvents(True)
-            def mousePressEvent(self, event):
+            def _set_preview(self):
                 img_path = self.row.get("Images", "")
                 if img_path and str(img_path).strip():
-                    import os
+                    import os, sys
                     from PyQt5.QtGui import QPixmap
                     if not os.path.isabs(img_path):
-                        base_dir = os.path.dirname(os.path.abspath(__file__))
+                        if getattr(sys, 'frozen', False):
+                            base_dir = os.path.dirname(sys.executable)
+                        else:
+                            base_dir = os.path.dirname(os.path.abspath(__file__))
                         img_path_full = os.path.join(base_dir, img_path)
                     else:
                         img_path_full = img_path
-                    pixmap = QPixmap(img_path_full)
-                    if not pixmap.isNull():
-                        self.preview_label.setPixmap(pixmap.scaledToHeight(90, Qt.SmoothTransformation))
+                    pm = QPixmap(img_path_full)
+                    if not pm.isNull():
+                        self.preview_label.setPixmap(pm.scaledToHeight(90, Qt.SmoothTransformation))
                         self.preview_label.setText("")
-                    else:
-                        self.preview_label.setText("[Image not found]")
-                        self.preview_label.setPixmap(QPixmap())
-                else:
-                    self.preview_label.setText("")
-                # Show edit dialog for the clicked bar
+                        return
+                # Ensure QPixmap is imported when clearing
+                from PyQt5.QtGui import QPixmap
+                self.preview_label.setText("")
+                self.preview_label.setPixmap(QPixmap())
+            def mousePressEvent(self, event):
                 try:
+                    self._set_preview()
                     parent_widget = self.preview_label.parentWidget()
                     if parent_widget and hasattr(parent_widget, 'show_edit_dialog'):
                         parent_widget.show_edit_dialog(self.row)
                 except Exception as e:
                     print(f"ERROR in ClickableBar.mousePressEvent: {e}")
-                # Do not call super().mousePressEvent(event) after dialog, prevents RuntimeError
-
             def hoverEnterEvent(self, event):
-                img_path = self.row.get("Images", "")
-                if img_path and str(img_path).strip():
-                    import os
-                    from PyQt5.QtGui import QPixmap
-                    if not os.path.isabs(img_path):
-                        base_dir = os.path.dirname(os.path.abspath(__file__))
-                        img_path_full = os.path.join(base_dir, img_path)
-                    else:
-                        img_path_full = img_path
-                    pixmap = QPixmap(img_path_full)
-                    if not pixmap.isNull():
-                        self.preview_label.setPixmap(pixmap.scaledToHeight(90, Qt.SmoothTransformation))
-                        self.preview_label.setText("")
-                    else:
-                        self.preview_label.setText("[Image not found]")
-                        self.preview_label.setPixmap(QPixmap())
-                else:
-                    self.preview_label.setText("")
-
+                self._set_preview()
+                part = self.row.get("Project Part", "")
+                if part:
+                    self.gantt_view._highlight_connectors(part, True)
+                parent = self.row.get("Parent", "")
+                if parent:
+                    self.gantt_view._highlight_connectors(parent, True)
             def hoverLeaveEvent(self, event):
                 self.preview_label.clear()
+                part = self.row.get("Project Part", "")
+                if part:
+                    self.gantt_view._highlight_connectors(part, False)
+                parent = self.row.get("Parent", "")
+                if parent:
+                    self.gantt_view._highlight_connectors(parent, False)
 
-        # Place labels at a fixed position well to the left of the earliest bar (e.g., x=10)
-        from PyQt5.QtGui import QColor
+        name_to_bar = {}
+        bar_items = []
         label_x = 10
-        for name, start, duration, idx, row in bars:
-            x = (start - chart_min_date).days * 10 + 100  # 10px per day, offset for bars
-            y = idx * (bar_height + bar_gap) + 40
+        for name, start, duration, i, r in bars:
+            x = (start - chart_min_date).days * 10 + 100
+            y = i * (bar_height + bar_gap) + 40
             width = max(duration * 10, 10)
-            print(f"DEBUG: Drawing bar {name} at x={x}, y={y}, width={width}")
-            rect = ClickableBar(x, y, width, bar_height, row, self.preview_label)
+            rect = ClickableBar(x, y, width, bar_height, r, self.preview_label, self)
             rect.setBrush(gantt_color)
             self.scene.addItem(rect)
-            # Place label at fixed x=10, vertically centered on the bar
-            label = self.scene.addText(name)
-            label.setDefaultTextColor(QColor("white"))
-            label.setPos(label_x, y + (bar_height - label.boundingRect().height()) / 2)
+            text_item = self.scene.addText(name)
+            from PyQt5.QtGui import QColor as _QColor
+            text_item.setDefaultTextColor(_QColor("white"))
+            text_item.setPos(label_x, y + (bar_height - text_item.boundingRect().height())/2)
             name_to_bar[name] = (x, y, width, bar_height)
-            # Store bar rect and row for selection/edit events
-            bar_items.append((rect, row))
+            bar_items.append((rect, r))
 
-        # Draw parent-child connector lines (tree lines)
-        for name, start, duration, idx, row in bars:
-            parent_name = row.get("Parent", "")
-            if parent_name and parent_name in name_to_bar:
-                px, py, pwidth, pheight = name_to_bar[parent_name]
-                cx, cy, cwidth, cheight = name_to_bar[name]
-                parent_mid_x = px + pwidth // 2
-                child_mid_x = cx + cwidth // 2
-                parent_bottom = py + bar_height
-                child_top = cy
-                # Vertical line from parent to horizontal level
-                self.scene.addLine(parent_mid_x, parent_bottom, parent_mid_x, (parent_bottom + child_top) // 2)
-                # Horizontal line to child
-                self.scene.addLine(parent_mid_x, (parent_bottom + child_top) // 2, child_mid_x, (parent_bottom + child_top) // 2)
-                # Vertical line down to child
-                self.scene.addLine(child_mid_x, (parent_bottom + child_top) // 2, child_mid_x, child_top)
-
-            # Draw dependency arrows in #FF8200 orange
-            from PyQt5.QtCore import QPointF
-            dep_names = row.get("Dependencies", "")
-            if dep_names:
-                from PyQt5.QtGui import QPen, QPolygonF
-                dep_list = [d.strip() for d in dep_names.split(",") if d.strip()]
-                for dep in dep_list:
-                    if dep in name_to_bar:
-                        dx, dy, dwidth, dheight = name_to_bar[dep]
-                        # Arrow from end of dependency bar to start of this bar
-                        start_x = dx + dwidth
-                        start_y = dy + dheight // 2
-                        end_x = cx
-                        end_y = cy + cheight // 2
-                        # Check for dependency conflict: dependency end >= dependent start
-                        dep_row = None
-                        for bname, bstart, bduration, bidx, brow in bars:
-                            if bname == dep:
-                                dep_row = brow
-                                break
-                        dep_end = None
-                        if dep_row:
-                            try:
-                                dep_start_str = dep_row.get("Start Date", "")
-                                dep_duration_val = dep_row.get("Duration (days)", 0)
-                                if dep_start_str and dep_duration_val:
-                                    import datetime
-                                    dep_start = datetime.datetime.strptime(dep_start_str, "%m-%d-%Y")
-                                    dep_end = dep_start + datetime.timedelta(days=int(dep_duration_val))
-                            except Exception:
-                                dep_end = None
-                        # Get this bar's start
-                        this_start = None
-                        try:
-                            this_start_str = row.get("Start Date", "")
-                            if this_start_str:
-                                import datetime
-                                this_start = datetime.datetime.strptime(this_start_str, "%m-%d-%Y")
-                        except Exception:
-                            this_start = None
-                        # If dependency ends after or at this bar's start, it's a conflict
-                        if dep_end and this_start and dep_end >= this_start:
-                            pen = QPen(QColor("red"), 2)
-                            arrow_color = QColor("red")
-                        else:
-                            pen = QPen(QColor("#FF8200"), 2)
-                            arrow_color = QColor("#FF8200")
-                        self.scene.addLine(start_x, start_y, end_x, end_y, pen)
-                        # Draw arrowhead
-                        arrow_size = 8
-                        import math
-                        angle = math.atan2(end_y - start_y, end_x - start_x)
-                        arrow_p1 = end_x - arrow_size * math.cos(angle - math.pi / 6)
-                        arrow_p2 = end_y - arrow_size * math.sin(angle - math.pi / 6)
-                        arrow_p3 = end_x - arrow_size * math.cos(angle + math.pi / 6)
-                        arrow_p4 = end_y - arrow_size * math.sin(angle + math.pi / 6)
-                        arrow_head = QPolygonF([
-                            QPointF(end_x, end_y),
-                            QPointF(arrow_p1, arrow_p2),
-                            QPointF(arrow_p3, arrow_p4)
-                        ])
-                        self.scene.addPolygon(arrow_head, pen, arrow_color)
-            # Removed image indicator ellipse for image association
-
-        # Add mouse click events to bars
-        from PyQt5.QtWidgets import QGraphicsItem
+        # ---------- Selection handling ----------
         self._bar_rect_to_row = {}
-        for rect, row in bar_items:
+        for rect, r in bar_items:
             rect.setFlag(QGraphicsItem.ItemIsSelectable, True)
-            self._bar_rect_to_row[rect] = row
-
-        # Connect selection change to open edit dialog
+            self._bar_rect_to_row[rect] = r
         def on_selection_changed():
-            selected = [item for item in self.scene.selectedItems() if item in self._bar_rect_to_row]
+            selected = [it for it in self.scene.selectedItems() if it in self._bar_rect_to_row]
             if selected:
                 bar = selected[0]
-                # Check if the item is still valid and not deleted
                 try:
                     if bar.scene() is not None:
-                        row = self._bar_rect_to_row[bar]
-                        self.show_edit_dialog(row)
+                        r = self._bar_rect_to_row[bar]
+                        self.show_edit_dialog(r)
                         bar.setSelected(False)
                 except RuntimeError:
-                    # The item was deleted, ignore
                     pass
         try:
             self.scene.selectionChanged.disconnect()
@@ -904,171 +821,96 @@ class GanttChartView(QWidget):
             pass
         self.scene.selectionChanged.connect(on_selection_changed)
 
-        # Draw x-axis with date marks
+        # ---------- Axis ----------
         if min_date and max_date:
             axis_y = 30
             axis_x0 = 100
             axis_x1 = (max_date - chart_min_date).days * 10 + 100 + 40
             self.scene.addLine(axis_x0, axis_y, axis_x1, axis_y)
-            # Draw tick marks and date labels every 7 days
             tick_interval = 7
             total_days = (max_date - chart_min_date).days
+            import datetime as _dt2
             for d in range(0, total_days + 1, tick_interval):
                 tick_x = axis_x0 + d * 10
                 self.scene.addLine(tick_x, axis_y - 5, tick_x, axis_y + 5)
-                tick_date = chart_min_date + datetime.timedelta(days=d)
+                tick_date = chart_min_date + _dt2.timedelta(days=d)
                 tick_label = self.scene.addText(tick_date.strftime("%m-%d-%Y"))
-                tick_label.setDefaultTextColor(QColor("white"))
+                from PyQt5.QtGui import QColor as _QColor
+                tick_label.setDefaultTextColor(_QColor("white"))
                 tick_label.setPos(tick_x - 30, axis_y - 25)
 
-        # Draw dependency lines (red, thick, robust to whitespace/case)
-        from PyQt5.QtGui import QPen, QColor
-        dep_pen_red = QPen(QColor(220, 0, 0))
-        dep_pen_red.setWidth(3)
-        dep_pen_black = QPen(QColor(0, 0, 0))
-        dep_pen_black.setWidth(3)
-        import datetime
-        # Build a mapping from name to (start, end) dates
+        # ---------- Dependency arrows (simple) ----------
+        from PyQt5.QtGui import QPen, QColor as _QColor2
+        import datetime as _dt3
         name_to_dates = {}
-        for name, start, duration, idx, row in bars:
-            end = start + datetime.timedelta(days=duration)
+        for name, start, duration, i, r in bars:
+            end = start + _dt3.timedelta(days=duration)
             name_to_dates[name] = (start, end)
-        for name, start, duration, idx, row in bars:
-            deps = row.get("Dependencies", "")
-            def save():
-                import sys
-                import traceback
-                print("DEBUG: Entered save() in GanttChartView")
-                sys.stdout.flush()
-                try:
-                    for col in self.model.COLUMNS:
-                        widget = edits[col]
-                        print(f"DEBUG: Processing column {col} with widget {type(widget)}")
-                        sys.stdout.flush()
-                        if isinstance(widget, QLineEdit):
-                            row[col] = widget.text()
-                        elif isinstance(widget, QComboBox):
-                            row[col] = widget.currentText()
-                        elif isinstance(widget, QDateEdit):
-                            d = widget.date()
-                            min_blank = QDate(1753, 1, 1)
-                            print(f"DEBUG: QDateEdit value for {col}: {d.toString('MM-dd-yyyy')}, isValid={d.isValid()}, min_blank={d == min_blank}")
-                            sys.stdout.flush()
-                            if not d.isValid() or d == min_blank:
-                                row[col] = ""
-                            else:
-                                row[col] = d.toString("MM-dd-yyyy")
-                        elif isinstance(widget, QTextEdit):
-                            row[col] = widget.toPlainText()
-                    print("DEBUG: About to call self.model.save_to_db()")
-                    sys.stdout.flush()
-                    self.model.save_to_db()
-                    print("DEBUG: About to call self.render_gantt()")
-                    sys.stdout.flush()
-                    self.render_gantt(self.model)
-                    print("DEBUG: About to accept dialog")
-                    sys.stdout.flush()
-                    dialog.accept()
-                except Exception as e:
-                    print(f"ERROR in GanttChartView.save(): {e}")
-                    traceback.print_exc()
-                    sys.stdout.flush()
-                    QMessageBox.critical(dialog, "Save Error", f"An error occurred while saving: {e}")
-
-    # ClickableBar.mousePressEvent should be inside its class, not dedented here
-
-        # Removed stray indented block after exception handler
-        # Parse dates and durations
-        import datetime
-        bar_height = 24
-        bar_gap = 10
-        min_date = None
-        max_date = None
-        bars = []
-        name_to_bar = {}
-        for i, row in enumerate(rows):
-            try:
-                start = datetime.datetime.strptime(row["Start Date"], "%Y-%m-%d")
-                duration = int(row["Duration (days)"])
-                end = start + datetime.timedelta(days=duration)
-                if min_date is None or start < min_date:
-                    min_date = start
-                if max_date is None or end > max_date:
-                    max_date = end
-                bars.append((row["Project Part"], start, duration, i, row))
-            except Exception:
-                continue
-        if not bars:
-            return
-        # Draw bars and record their positions
-        from PyQt5.QtGui import QColor
-        gantt_color = QColor("#FF8200")
-        for name, start, duration, idx, row in bars:
-            x = (start - min_date).days * 10 + 100  # 10px per day, offset for labels
-            y = idx * (bar_height + bar_gap) + 40
-            width = max(duration * 10, 10)
-            rect = self.scene.addRect(x, y, width, bar_height)
-            rect.setBrush(gantt_color)
-            label = self.scene.addText(name)
-            label.setPos(10, y)
-            date_label = self.scene.addText(start.strftime("%Y-%m-%d"))
-            date_label.setPos(x, y + bar_height)
-            name_to_bar[name] = (x, y, width, bar_height)
-
-        # Draw x-axis with date marks
-        if min_date and max_date:
-            axis_y = 30
-            axis_x0 = 100
-            axis_x1 = (max_date - min_date).days * 10 + 100 + 40
-            self.scene.addLine(axis_x0, axis_y, axis_x1, axis_y)
-            # Draw tick marks and date labels every 7 days
-            tick_interval = 7
-            total_days = (max_date - min_date).days
-            for d in range(0, total_days + 1, tick_interval):
-                tick_x = axis_x0 + d * 10
-                self.scene.addLine(tick_x, axis_y - 5, tick_x, axis_y + 5)
-                tick_date = min_date + datetime.timedelta(days=d)
-                tick_label = self.scene.addText(tick_date.strftime("%Y-%m-%d"))
-                tick_label.setPos(tick_x - 30, axis_y - 25)
-
-        # Draw dependency lines (red, thick, robust to whitespace/case)
-        from PyQt5.QtGui import QPen, QColor
-        dep_pen_red = QPen(QColor(220, 0, 0))
-        dep_pen_red.setWidth(3)
-        dep_pen_black = QPen(QColor(0, 0, 0))
-        dep_pen_black.setWidth(3)
-        import datetime
-        # Build a mapping from name to (start, end) dates
-        name_to_dates = {}
-        for name, start, duration, idx, row in bars:
-            end = start + datetime.timedelta(days=duration)
-            name_to_dates[name] = (start, end)
-        for name, start, duration, idx, row in bars:
-            deps = row.get("Dependencies", "")
+        for name, start, duration, i, r in bars:
+            deps = r.get("Dependencies", "")
             if not deps:
                 continue
-            for dep_name in [d.strip() for d in deps.split(",") if d.strip()]:
-                # Case-insensitive match
-                dep_key = next((k for k in name_to_bar if k.strip().lower() == dep_name.lower()), None)
-                this_key = next((k for k in name_to_bar if k.strip().lower() == name.lower()), None)
-                if dep_key and this_key:
-                    dep_x, dep_y, dep_width, dep_height = name_to_bar[dep_key]
-                    this_x, this_y, _, _ = name_to_bar[this_key]
-                    # Determine arrow color
-                    dep_end = name_to_dates.get(dep_key, (None, None))[1]
-                    this_start = name_to_dates.get(this_key, (None, None))[0]
-                    if dep_end and this_start and this_start > dep_end:
-                        pen = dep_pen_black
-                    else:
-                        pen = dep_pen_red
-                    # Draw a line from end of dependency bar to start of this bar
-                    self.scene.addLine(dep_x + dep_width, dep_y + bar_height // 2, this_x, this_y + bar_height // 2, pen)
-                    # Draw a small arrowhead
-                    arrow_size = 8
-                    arrow_x = this_x
-                    arrow_y = this_y + bar_height // 2
-                    self.scene.addLine(arrow_x, arrow_y, arrow_x - arrow_size, arrow_y - arrow_size, pen)
-                    self.scene.addLine(arrow_x, arrow_y, arrow_x - arrow_size, arrow_y + arrow_size, pen)
+            dep_list = [d.strip() for d in deps.split(',') if d.strip()]
+            for dep_name in dep_list:
+                if dep_name not in name_to_bar:
+                    continue
+                dep_x, dep_y, dep_w, dep_h = name_to_bar[dep_name]
+                this_x, this_y, this_w, this_h = name_to_bar.get(name, (None, None, None, None))
+                if this_x is None:
+                    continue
+                dep_end = name_to_dates.get(dep_name, (None, None))[1]
+                this_start = name_to_dates.get(name, (None, None))[0]
+                if dep_end and this_start and dep_end >= this_start:
+                    pen = QPen(_QColor2("red"), 2)
+                else:
+                    pen = QPen(_QColor2("#FF8200"), 2)
+                start_x = dep_x + dep_w
+                start_y = dep_y + dep_h/2
+                end_x = this_x
+                end_y = this_y + this_h/2
+                self.scene.addLine(start_x, start_y, end_x, end_y, pen)
+
+        # ---------- Parent-child connectors (hierarchical fan-out) ----------
+        from PyQt5.QtGui import QPen as _QPen, QColor as _QColor3
+        base_connector_pen = _QPen(_QColor3(180,180,180))
+        base_connector_pen.setWidth(1)
+        # Map parent -> list of child part names that have bars
+        parent_children = {}
+        for name, start, duration, i, r in bars:
+            parent_name = r.get("Parent", "") or ""
+            if parent_name and parent_name in name_to_bar and name in name_to_bar:
+                parent_children.setdefault(parent_name, []).append(name)
+        # Prepare mapping for highlighting
+        self._connector_lines_map = {}
+        def _register(part, line_item):
+            self._connector_lines_map.setdefault(part, []).append(line_item)
+        for parent, children in parent_children.items():
+            if not children:
+                continue
+            px, py, pw, ph = name_to_bar[parent]
+            parent_mid_x = px + pw/2
+            parent_bottom_y = py + ph
+            # Collect child vertical positions
+            child_positions = []  # (child_name, child_mid_x, child_top_y)
+            for child in children:
+                cx, cy, cw, ch = name_to_bar[child]
+                child_positions.append((child, cx + cw/2, cy))
+            # Sort by y for consistent trunk
+            child_positions.sort(key=lambda t: t[2])
+            trunk_top = parent_bottom_y
+            trunk_bottom = child_positions[-1][2]
+            trunk_line = self.scene.addLine(parent_mid_x, trunk_top, parent_mid_x, trunk_bottom, base_connector_pen)
+            _register(parent, trunk_line)
+            for child, cmx, cty in child_positions:
+                # Horizontal from trunk to child center
+                h_line = self.scene.addLine(min(parent_mid_x, cmx), cty, max(parent_mid_x, cmx), cty, base_connector_pen)
+                v_line = self.scene.addLine(cmx, cty, cmx, cty, base_connector_pen)  # degenerate (placeholder for uniform handling)
+                _register(parent, h_line)
+                _register(child, h_line)
+                _register(child, v_line)
+                _register(parent, v_line)
+
+        # ---------- Scene rect ----------
         self.view.setSceneRect(0, 0, 800, max(300, len(bars)*(bar_height+bar_gap)+60))
 
 class CalendarView(QWidget):
@@ -1350,7 +1192,7 @@ class TimelineView(QWidget):
                     except Exception:
                         return None, None
                 else:
-                    child_spans = [update_span(child, visited.copy()) for child in children[name]]
+                    child_spans = [update_span(child, visited.copy()) for child in children[row.get("Project Part")]]
                     child_starts = [s for s, e in child_spans if s]
                     child_ends = [e for s, e in child_spans if e]
                     if child_starts and child_ends:
@@ -1525,11 +1367,35 @@ class DatabaseView(QWidget):
         export_btn = QPushButton("Export Database")
         export_btn.clicked.connect(self.export_database)
         btn_layout.addWidget(export_btn)
+        import_btn = QPushButton("Import Data")
+        import_btn.clicked.connect(self.import_data)
+        btn_layout.addWidget(import_btn)
         layout.addLayout(btn_layout)
 
         self.setLayout(layout)
         self.refresh_table()
         self.table.cellChanged.connect(self.cell_edited)
+
+    def import_data(self):
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        import csv
+        path, _ = QFileDialog.getOpenFileName(self, "Import Data", "", "CSV Files (*.csv)")
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                imported_rows = []
+                for row in reader:
+                    imported_row = {col: row.get(col, "") for col in ProjectDataModel.COLUMNS}
+                    imported_rows.append(imported_row)
+            # Replace current data with imported data
+            self.model.rows = imported_rows
+            self.model.save_to_db()
+            self.refresh_table()
+            QMessageBox.information(self, "Import Successful", f"Imported {len(imported_rows)} rows from {path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Import Failed", f"Error importing data: {e}")
     def export_database(self):
         from PyQt5.QtWidgets import QFileDialog, QMessageBox
         import csv
@@ -1855,7 +1721,11 @@ class MainWindow(QMainWindow):
             header_layout = QHBoxLayout()
             header_layout.addStretch(1)
             header_label = QLabel()
-            header_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "header.png")
+            import sys
+            if getattr(sys, 'frozen', False):
+                header_path = os.path.join(os.path.dirname(sys.executable), "header.png")
+            else:
+                header_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "header.png")
             if os.path.exists(header_path):
                 header_pixmap = QPixmap(header_path)
                 # Double the previous height: 64 -> 128
