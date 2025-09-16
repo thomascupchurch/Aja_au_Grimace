@@ -636,6 +636,70 @@ class ZoomableGraphicsView(QGraphicsView):
 
 
 class GanttChartView(QWidget):
+    # --- Filtering Support (extensible for future filter panel) ---
+    def _init_filters(self):
+        # Stored criteria; None / empty means no filtering
+        self._filter_statuses = None          # set of status strings
+        self._filter_internal_external = None # set like {"Internal","External"}
+        self._filter_responsible_substr = None # lowercase substring
+
+    def set_filters(self, statuses=None, internal_external=None, responsible_substr=None):
+        """Update filter criteria and refresh the Gantt chart.
+        Parameters are optional; pass None to leave unchanged, pass empty iterable/string to clear.
+        """
+        if statuses is not None:
+            self._filter_statuses = set(s.strip() for s in statuses if s.strip()) if statuses else None
+        if internal_external is not None:
+            self._filter_internal_external = set(s.strip() for s in internal_external if s.strip()) if internal_external else None
+        if responsible_substr is not None:
+            rs = responsible_substr.strip()
+            self._filter_responsible_substr = rs.lower() if rs else None
+        if hasattr(self, 'model') and self.model:
+            self.render_gantt(self.model)
+
+    def _passes_filters(self, row):
+        try:
+            if self._filter_statuses and (row.get("Status") or "").strip() not in self._filter_statuses:
+                return False
+            if self._filter_internal_external and (row.get("Internal/External") or "").strip() not in self._filter_internal_external:
+                return False
+            if self._filter_responsible_substr:
+                resp = (row.get("Responsible") or "").lower()
+                if self._filter_responsible_substr not in resp:
+                    return False
+            return True
+        except Exception:
+            return True
+
+    # --- Public helper to highlight & scroll to a bar by name (used by search/jump) ---
+    def highlight_bar(self, part_name):
+        if not part_name:
+            return
+        # Clear previous bar highlight pen styling
+        try:
+            for item in getattr(self, '_name_to_rect', {}).values():
+                if item and hasattr(item, 'setPen'):
+                    from PyQt5.QtGui import QPen
+                    item.setPen(item.data(99) or QPen(item.pen()))
+        except Exception:
+            pass
+        rect_item = getattr(self, '_name_to_rect', {}).get(part_name)
+        if rect_item:
+            from PyQt5.QtGui import QPen, QColor
+            # Store original pen once
+            if rect_item.data(99) is None:
+                rect_item.setData(99, rect_item.pen())
+            pen = QPen(QColor('#00BFFF'))
+            pen.setWidth(3)
+            rect_item.setPen(pen)
+            # Center the view on the rectangle
+            if hasattr(self, 'view') and self.view:
+                center_pt = rect_item.sceneBoundingRect().center()
+                self.view.centerOn(center_pt)
+            # Also use existing connector/label highlight logic
+            self._highlight_connectors(part_name, True)
+        else:
+            print(f"highlight_bar: No bar found for '{part_name}' (may be filtered out)")
    
     def show_edit_dialog(self, row):
         dialog = QDialog(self)
@@ -854,70 +918,64 @@ class GanttChartView(QWidget):
                     item.setDefaultTextColor(QColor("black"))
 
     def export_gantt_chart(self):
-        # Open file dialog for PNG
-        path, _ = QFileDialog.getSaveFileName(self, "Export Gantt Chart", "gantt_chart.png", "PNG Files (*.png)")
+        self._export_scene_with_header(self.scene, title="Gantt Chart")
+
+    def _export_scene_with_header(self, scene, title="Export"):
+        from PyQt5.QtGui import QPainter
+        # Ask for target format (PNG or PDF)
+        path, _ = QFileDialog.getSaveFileName(self, f"Export {title}", f"{title.lower().replace(' ', '_')}.png", "PNG Files (*.png);;PDF Files (*.pdf)")
         if not path:
             return
-        # Render scene to QPixmap
-        rect = self.scene.sceneRect().toRect()
-        if rect.width() == 0 or rect.height() == 0:
-            print("Gantt chart scene is empty, nothing to export.")
+        rect = scene.sceneRect().toRect()
+        if rect.isEmpty():
+            print("Scene is empty; nothing to export.")
             return
-        gantt_pixmap = QPixmap(rect.size())
-        gantt_pixmap.fill()
-        from PyQt5.QtGui import QPainter
-        painter = QPainter(gantt_pixmap)
-        self.scene.render(painter)
-        # Legend (feature 5)
-        if getattr(self, 'include_legend', False):
-            try:
-                from PyQt5.QtGui import QPen, QColor
-                legend_entries = [
-                    (QColor("#FF8200"), "Task / Span"),
-                    (QColor("#DAA520"), "Critical Path"),
-                    (QColor("#FF8200"), "Dependency (On Time)"),
-                    (QColor("red"), "Dependency Conflict"),
-                    (QColor(180,180,180), "Hierarchy Connector"),
-                    (QColor("#00BFFF"), "Hover Highlight"),
-                    (QColor("#FF8200"), "% Complete Fill"),
-                    (QColor("#DAA520"), "Critical Path Fill"),
-                    (QColor("#FFA500"), "At Risk Outline"),
-                    (QColor("red"), "Overdue Outline")
-                ]
-                lx, ly, lh = 10, 10, 18
-                for i, (color, label) in enumerate(legend_entries):
-                    y = ly + i * lh
-                    pen = QPen(color)
-                    pen.setWidth(3 if 'Hover' in label else 2)
-                    painter.setPen(pen)
-                    painter.drawLine(lx, y+7, lx+34, y+7)
-                    painter.drawText(lx+42, y+12, label)
-            except Exception as e:
-                print(f"WARNING: Legend drawing failed: {e}")
-        painter.end()
-
-        # Load header image (adjust path as needed)
+        is_pdf = path.lower().endswith('.pdf')
         header_path = os.path.join(os.path.dirname(__file__), "header.png")
-        if not os.path.exists(header_path):
-            print(f"Header image not found at {header_path}, exporting without header.")
-            combined_pixmap = gantt_pixmap
-        else:
-            header_pixmap = QPixmap(header_path)
-            # Create a new pixmap tall enough for header + gantt
-            combined_width = max(header_pixmap.width(), gantt_pixmap.width())
-            combined_height = header_pixmap.height() + gantt_pixmap.height()
-            combined_pixmap = QPixmap(combined_width, combined_height)
-            combined_pixmap.fill()
-            painter = QPainter(combined_pixmap)
-            # Center header at top
+        header_pixmap = QPixmap(header_path) if os.path.exists(header_path) else None
+        if is_pdf:
+            # Use QPrinter for PDF
+            from PyQt5.QtPrintSupport import QPrinter
+            printer = QPrinter(QPrinter.HighResolution)
+            printer.setOutputFileName(path)
+            printer.setOutputFormat(QPrinter.PdfFormat)
+            # Landscape orientation assumed
+            painter = QPainter(printer)
+            y_offset = 0
+            if header_pixmap:
+                header_w = printer.pageRect().width()
+                scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
+                painter.drawPixmap( (header_w - scaled_header.width())//2 , 0, scaled_header)
+                y_offset = scaled_header.height() + 10
+            painter.translate(0, y_offset)
+            scale_x = printer.pageRect().width() / rect.width()
+            scale_y = (printer.pageRect().height() - y_offset) / rect.height()
+            scale = min(scale_x, scale_y)
+            painter.scale(scale, scale)
+            scene.render(painter)
+            painter.end()
+            print(f"Exported PDF -> {path}")
+            return
+        # Raster export (PNG)
+        content_pixmap = QPixmap(rect.size())
+        content_pixmap.fill()
+        painter = QPainter(content_pixmap)
+        scene.render(painter)
+        painter.end()
+        if header_pixmap:
+            combined_width = max(header_pixmap.width(), content_pixmap.width())
+            combined_height = header_pixmap.height() + content_pixmap.height()
+            combined = QPixmap(combined_width, combined_height)
+            combined.fill()
+            painter = QPainter(combined)
             header_x = (combined_width - header_pixmap.width()) // 2
             painter.drawPixmap(header_x, 0, header_pixmap)
-            # Draw gantt below header, left-aligned
-            painter.drawPixmap(0, header_pixmap.height(), gantt_pixmap)
+            painter.drawPixmap(0, header_pixmap.height(), content_pixmap)
             painter.end()
-
-        combined_pixmap.save(path, "PNG")
-        print(f"Gantt chart exported to {path}")
+            combined.save(path, 'PNG')
+        else:
+            content_pixmap.save(path, 'PNG')
+        print(f"Exported PNG -> {path}")
     def __init__(self):
         print("GanttChartView: __init__ called")
         super().__init__()
@@ -927,6 +985,9 @@ class GanttChartView(QWidget):
         self.scene = QGraphicsScene()
         self.view.setScene(self.scene)
         layout.addWidget(self.view)
+
+        # Initialize filtering state
+        self._init_filters()
 
         # Image preview area
         self.preview_label = QLabel()
@@ -982,32 +1043,80 @@ class GanttChartView(QWidget):
         if hasattr(self, 'model') and self.model:
             self.render_gantt(self.model)
 
-    # Internal helper to highlight/unhighlight connector lines for a part
+    # Unified connector + label highlighting
+    # Restores original dynamic connector line highlighting AND integrates label font/background highlight.
     def _highlight_connectors(self, part_name, on):
-        if not hasattr(self, '_connector_lines_map'):
-            return
-        lines = self._connector_lines_map.get(part_name, [])
-        if not lines:
-            return
-        from PyQt5.QtGui import QPen, QColor
-        if on:
-            pen = QPen(QColor("#00BFFF"))
-            pen.setWidth(2)
-        else:
-            pen = QPen(QColor(180,180,180))
-            pen.setWidth(1)
-        for ln in lines:
-            try:
-                ln.setPen(pen)
-            except Exception:
-                pass
+        from PyQt5.QtGui import QPen, QColor, QFont, QBrush
+        # 1. Connector lines
+        if hasattr(self, '_connector_lines_map'):
+            lines = self._connector_lines_map.get(part_name, [])
+            if lines:
+                if on:
+                    pen = QPen(QColor("#00BFFF"))  # bright cyan accent
+                    pen.setWidth(2)
+                else:
+                    pen = QPen(QColor(180,180,180))  # neutral base
+                    pen.setWidth(1)
+                for ln in lines:
+                    try:
+                        ln.setPen(pen)
+                    except Exception:
+                        pass
+        # 2. Label font + background (preserve persistent dark bg when turning off)
+        if hasattr(self, '_name_to_text_item'):
+            ti = self._name_to_text_item.get(part_name)
+            if ti:
+                orig_font = ti.data(1)
+                bg = ti.data(3)
+                if on:
+                    # Bold font
+                    if isinstance(orig_font, QFont):
+                        bold_font = QFont(orig_font)
+                        bold_font.setBold(True)
+                        ti.setFont(bold_font)
+                    # Orange glow overlay background (mix with existing)
+                    if bg:
+                        bg.setBrush(QBrush(QColor(255,130,0,90)))
+                else:
+                    # Restore original font
+                    if isinstance(orig_font, QFont):
+                        ti.setFont(orig_font)
+                    if bg:
+                        # Revert to standard semi-transparent dark backdrop for readability
+                        bg.setBrush(QBrush(QColor(0,0,0,160)))
     def render_gantt(self, model):
         self.model = model  # Store model for use in other methods
         self.scene.clear()
         self.preview_label.clear()
         if not hasattr(model, 'rows'):
             return
-        rows = model.rows
+        # Apply filters while keeping parents if any child passes (basic approach)
+        raw_rows = model.rows
+        # First pass: determine which rows individually match
+        matched = []
+        name_to_row = {}
+        for r in raw_rows:
+            name_to_row[r.get("Project Part", "")] = r
+            if self._passes_filters(r):
+                matched.append(r)
+        if any([self._filter_statuses, self._filter_internal_external, self._filter_responsible_substr]):
+            # Include ancestors of matched tasks for context
+            names_included = set(r.get("Project Part", "") for r in matched)
+            parent_names_needed = set()
+            for r in matched:
+                parent_name = r.get("Parent") or ""
+                while parent_name:
+                    if parent_name in parent_names_needed:
+                        break
+                    parent_names_needed.add(parent_name)
+                    parent_row = next((x for x in raw_rows if x.get("Project Part") == parent_name), None)
+                    if parent_row:
+                        parent_name = parent_row.get("Parent") or ""
+                    else:
+                        break
+            rows = [r for r in raw_rows if r in matched or r.get("Project Part") in parent_names_needed]
+        else:
+            rows = raw_rows
 
         # ---------- Helpers ----------
         def topo_sort(all_rows):
@@ -1231,41 +1340,27 @@ class GanttChartView(QWidget):
                     self.gantt_view._highlight_connectors(parent, False)
 
         name_to_bar = {}
+        self._name_to_rect = {}
         bar_items = []
-        # Determine left label area width to prevent overlap with bars.
-        # First, create temporary text items to measure widths.
-        temp_items = []
+        # (Reverted) Previously labels were placed in a dedicated left column and bars were offset.
+        # We now restore inline style with external labels to the right of bars.
         from PyQt5.QtGui import QFontMetrics, QFont
         font = self.font() if hasattr(self, 'font') else None
         fm = QFontMetrics(font) if font else None
-        max_label_width = 0
-        for name, start, duration, i, r in bars:
-            if fm:
-                w = fm.width(name)
-            else:
-                # Fallback approximate width: 7px * chars
-                w = len(name) * 7
-            if w > max_label_width:
-                max_label_width = w
-        label_padding = 20
-        label_x = 10
-        bar_offset_x = label_x + max_label_width + label_padding
-        # Store mapping of name->text item for hover highlighting
+        max_chars_fixed = 32  # keep truncation behavior
+        left_margin = 60
+        bar_offset_x = left_margin
         self._name_to_text_item = {}
         for name, start, duration, i, r in bars:
             x = (start - chart_min_date).days * 10 + bar_offset_x
             y = i * (bar_height + bar_gap) + 40
             width = max(duration * 10, 10)
             rect = ClickableBar(x, y, width, bar_height, r, self.preview_label, self)
-            # Base background always dark; progress drawn as overlay portion
             rect.setBrush(QColor("#333333"))
-            # Overdue / At-Risk outline logic
             from PyQt5.QtGui import QPen as _QPen4
             import datetime as _dt_ov
-            overdue = False
-            at_risk = False
+            overdue = False; at_risk = False
             try:
-                # Determine scheduled end (use Calculated End Date if present else start+duration)
                 if "_auto_end" in r:
                     scheduled_end = r["_auto_end"]
                 else:
@@ -1290,7 +1385,7 @@ class GanttChartView(QWidget):
                 outline_pen = _QPen4(QColor("#FFA500")); outline_pen.setWidth(2)
             rect.setPen(outline_pen)
             self.scene.addItem(rect)
-            # Progress overlay (percentage complete)
+            self._name_to_rect[name] = rect
             try:
                 pc = int(r.get("% Complete") or 0)
             except Exception:
@@ -1300,13 +1395,34 @@ class GanttChartView(QWidget):
                 prog_color = QColor("#DAA520") if name in critical_set else gantt_color
                 from PyQt5.QtGui import QPen as _QPen3
                 prog_rect = self.scene.addRect(x, y, prog_w, bar_height, _QPen3(Qt.NoPen), prog_color)
-                # Do not intercept clicks; underlying ClickableBar handles interaction
                 prog_rect.setAcceptedMouseButtons(Qt.NoButton)
                 prog_rect.setZValue(rect.zValue() + 1)
-            text_item = self.scene.addText(name)
-            from PyQt5.QtGui import QColor as _QColor
+            full_name = name
+            display_name = full_name
+            if len(display_name) > max_chars_fixed:
+                display_name = display_name[:max_chars_fixed-1] + "…"
+            text_item = self.scene.addText(display_name)
+            from PyQt5.QtGui import QColor as _QColor, QFont, QBrush, QPen
             text_item.setDefaultTextColor(_QColor("#FF8200"))
-            text_item.setPos(label_x, y + (bar_height - text_item.boundingRect().height())/2)
+            orig_font = text_item.font()
+            text_item.setData(1, orig_font)
+            text_item.setData(2, full_name)  # store full for tooltip
+            text_item.setToolTip(full_name)
+            ty = y + (bar_height - text_item.boundingRect().height())/2
+            # Place label just to the right of the bar with small gap
+            gap = 6
+            text_item.setPos(x + width + gap, ty)
+            # Always-visible subtle contrasting background for readability
+            br = text_item.boundingRect().translated(text_item.pos())
+            from PyQt5.QtGui import QPen as _LblPen, QBrush as _LblBrush, QColor as _LblColor, QPainterPath as _LblPath
+            bg_color = _LblColor(0,0,0,160)  # semi-transparent dark
+            padded = br.adjusted(-3,-1,3,1)
+            path = _LblPath()
+            radius = 6
+            path.addRoundedRect(padded, radius, radius)
+            bg_rect = self.scene.addPath(path, _LblPen(Qt.NoPen), _LblBrush(bg_color))
+            bg_rect.setZValue(text_item.zValue()-1)
+            text_item.setData(3, bg_rect)  # store bg rect
             self._name_to_text_item[name] = text_item
             name_to_bar[name] = (x, y, width, bar_height)
             bar_items.append((rect, r))
@@ -1388,50 +1504,100 @@ class GanttChartView(QWidget):
                 # L-shaped routing (feature 6)
                 self.scene.addLine(start_x, start_y, end_x, start_y, pen)
                 self.scene.addLine(end_x, start_y, end_x, end_y, pen)
-        # ---------- Parent-child connectors (hierarchical fan-out) ----------
+        # ---------- Parent-child connectors (hierarchical fan-out, animated) ----------
         from PyQt5.QtGui import QPen as _QPen, QColor as _QColor3
+        from PyQt5.QtWidgets import QGraphicsLineItem
+        from PyQt5.QtCore import QPropertyAnimation, pyqtProperty
         draw_hierarchy = True
         if hasattr(self, 'hierarchy_checkbox'):
             try:
                 draw_hierarchy = self.hierarchy_checkbox.isChecked()
             except Exception:
                 draw_hierarchy = True
+        class _AnimatedConnector(QGraphicsLineItem):
+            def __init__(self, x1, y1, x2, y2, base_pen, highlight_pen, style):
+                super().__init__(x1, y1, x2, y2)
+                self._base_pen = _QPen(base_pen)
+                self._highlight_pen = _QPen(highlight_pen)
+                if style == 'trunk':
+                    self._base_pen.setStyle(Qt.DashLine)
+                    self._base_pen.setWidth(2)
+                    self._highlight_pen.setWidth(3)
+                else:
+                    self._base_pen.setWidth(1)
+                    self._highlight_pen.setWidth(2)
+                self.setPen(self._base_pen)
+                self._opacity = 0.55
+                self._anim = None
+                self._apply_opacity()
+            def _apply_opacity(self):
+                p = self.pen()
+                c = p.color()
+                c.setAlphaF(self._opacity)
+                p.setColor(c)
+                self.setPen(p)
+            def getOpacity(self):
+                return self._opacity
+            def setOpacity(self, val):
+                self._opacity = val
+                self._apply_opacity()
+            opacity = pyqtProperty(float, fget=getOpacity, fset=setOpacity)
+            def fade(self, target, duration):
+                if self._anim:
+                    self._anim.stop()
+                self._anim = QPropertyAnimation(self, b"opacity")
+                self._anim.setDuration(duration)
+                self._anim.setStartValue(self._opacity)
+                self._anim.setEndValue(target)
+                self._anim.start()
+            def set_highlight(self, on):
+                if on:
+                    self.setPen(self._highlight_pen)
+                    self.fade(1.0, 180)
+                else:
+                    self.setPen(self._base_pen)
+                    self.fade(0.55, 260)
         self._connector_lines_map = {}
         if draw_hierarchy:
-            base_connector_pen = _QPen(_QColor3(180,180,180))
-            base_connector_pen.setWidth(1)
+            base_color = _QColor3(180,180,180)
+            trunk_color = _QColor3(160,160,160)
+            highlight_color = _QColor3('#00BFFF')
             parent_children = {}
             for name, start, duration, i, r in bars:
                 parent_name = r.get("Parent", "") or ""
                 if parent_name and parent_name in name_to_bar and name in name_to_bar:
                     parent_children.setdefault(parent_name, []).append(name)
-            def _register(part, line_item):
-                self._connector_lines_map.setdefault(part, []).append(line_item)
+            def _register(part, item):
+                self._connector_lines_map.setdefault(part, []).append(item)
             for parent, children in parent_children.items():
                 if not children:
                     continue
                 px, py, pw, ph = name_to_bar[parent]
                 parent_mid_x = px + pw/2
                 parent_bottom_y = py + ph
-                # Collect child vertical positions
-                child_positions = []  # (child_name, child_mid_x, child_top_y)
+                child_positions = []
                 for child in children:
                     cx, cy, cw, ch = name_to_bar[child]
                     child_positions.append((child, cx + cw/2, cy))
-                # Sort by y for consistent trunk
                 child_positions.sort(key=lambda t: t[2])
                 trunk_top = parent_bottom_y
                 trunk_bottom = child_positions[-1][2]
-                trunk_line = self.scene.addLine(parent_mid_x, trunk_top, parent_mid_x, trunk_bottom, base_connector_pen)
-                _register(parent, trunk_line)
+                trunk = _AnimatedConnector(parent_mid_x, trunk_top, parent_mid_x, trunk_bottom,
+                                            base_pen=_QPen(trunk_color), highlight_pen=_QPen(highlight_color), style='trunk')
+                trunk.setZValue(-1)
+                self.scene.addItem(trunk)
+                _register(parent, trunk)
                 for child, cmx, cty in child_positions:
-                    # Horizontal from trunk to child center
-                    h_line = self.scene.addLine(min(parent_mid_x, cmx), cty, max(parent_mid_x, cmx), cty, base_connector_pen)
-                    v_line = self.scene.addLine(cmx, cty, cmx, cty, base_connector_pen)  # degenerate (placeholder for uniform handling)
-                    _register(parent, h_line)
-                    _register(child, h_line)
-                    _register(child, v_line)
-                    _register(parent, v_line)
+                    h_line = _AnimatedConnector(min(parent_mid_x, cmx), cty, max(parent_mid_x, cmx), cty,
+                                                base_pen=_QPen(base_color), highlight_pen=_QPen(highlight_color), style='child')
+                    h_line.setZValue(-1)
+                    self.scene.addItem(h_line)
+                    v_line = _AnimatedConnector(cmx, cty, cmx, cty,
+                                                base_pen=_QPen(base_color), highlight_pen=_QPen(highlight_color), style='child')
+                    v_line.setZValue(-1)
+                    self.scene.addItem(v_line)
+                    _register(parent, h_line); _register(child, h_line)
+                    _register(child, v_line); _register(parent, v_line)
 
         # ---------- Scene rect ----------
         self.view.setSceneRect(0, 0, 800, max(300, len(bars)*(bar_height+bar_gap)+60))
@@ -1440,20 +1606,26 @@ class GanttChartView(QWidget):
         if current_rect.width() < axis_x1 + 100:
             self.view.setSceneRect(0, 0, axis_x1 + 100, current_rect.height())
 
-    # Extend highlighting of connectors to also highlight label text
-    def _highlight_connectors(self, part_name, on):
-        super_method = getattr(super(), '_highlight_connectors', None)
-        if super_method:
-            try:
-                super_method(part_name, on)
-            except Exception:
-                pass
-        # Highlight label text item if exists
-        if hasattr(self, '_name_to_text_item'):
-            ti = self._name_to_text_item.get(part_name)
-            if ti:
-                from PyQt5.QtGui import QColor
-                ti.setDefaultTextColor(QColor("#00BFFF") if on else QColor("#FF8200"))
+    # Click-to-lock highlight support
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        # Determine if a bar was clicked -> lock its label highlight until another click
+        pos = event.pos()
+        if hasattr(self, 'view'):
+            scene_pos = self.view.mapToScene(pos)
+            items = self.scene.items(scene_pos)
+            target_name = None
+            for it in items:
+                if hasattr(it, 'row') and isinstance(it.row, dict):
+                    target_name = it.row.get("Project Part", "")
+                    break
+            if target_name:
+                # Clear previous lock
+                if hasattr(self, '_locked_label') and self._locked_label and self._locked_label != target_name:
+                    self._highlight_connectors(self._locked_label, False)
+                self._locked_label = target_name
+                self._highlight_connectors(target_name, True)
+        event.accept()
 
 class CalendarView(QWidget):
     def __init__(self, model=None):
@@ -1617,6 +1789,24 @@ class TimelineView(QWidget):
         self.scene = QGraphicsScene()
         self.view = QGraphicsView(self.scene)
         layout.addWidget(self.view)
+        # Export buttons
+        from PyQt5.QtWidgets import QHBoxLayout, QPushButton
+        export_row = QHBoxLayout()
+        export_png_btn = QPushButton("Export Timeline (PNG/PDF)")
+        def _do_export():
+            # Reuse GanttChartView helper through lightweight wrapper
+            try:
+                # Local import to avoid circular issues
+                helper = getattr(self, '_export_helper', None)
+                if helper is None:
+                    helper = GanttChartView()  # temporary helper just for exporter
+                    self._export_helper = helper
+                helper._export_scene_with_header(self.scene, title="Timeline")
+            except Exception as e:
+                print(f"Timeline export failed: {e}")
+        export_png_btn.clicked.connect(_do_export)
+        export_row.addWidget(export_png_btn)
+        layout.addLayout(export_row)
         self.preview_label = QLabel()
         self.preview_label.setFixedHeight(200)
         self.preview_label.setAlignment(Qt.AlignCenter)
@@ -1776,21 +1966,13 @@ class TimelineView(QWidget):
         # Draw bars and record their positions for connectors
         bar_height = 24
         bar_gap = 12
-        # Measure label widths to offset bars and avoid overlap
+        # (Reverted) Remove left-column label layout; use a fixed bar offset and put labels on bars.
         from PyQt5.QtGui import QFontMetrics
         font = self.font() if hasattr(self, 'font') else None
         fm = QFontMetrics(font) if font else None
-        max_label_width = 0
-        for name, start, duration, row, idx in bars:
-            if fm:
-                w = fm.width(name)
-            else:
-                w = len(name) * 7
-            if w > max_label_width:
-                max_label_width = w
-        label_padding = 20
-        label_x = 10
-        bar_offset_x = label_x + max_label_width + label_padding
+        max_chars_fixed_tl = 32
+        left_margin = 60
+        bar_offset_x = left_margin
         y = 40
         bar_positions = {}  # idx -> (x, y, width)
         self._timeline_name_to_text = {}
@@ -1848,9 +2030,33 @@ class TimelineView(QWidget):
             bar_item = HoverableTimelineBar(x, y, width, bar_height, row, self)
             bar_item.setBrush(QBrush(color))
             self.scene.addItem(bar_item)
-            text_item = self.scene.addText(name)
+            full_name = name
+            display_name = full_name
+            if len(display_name) > max_chars_fixed_tl:
+                display_name = display_name[:max_chars_fixed_tl-1] + "…"
+            text_item = self.scene.addText(display_name)
+            from PyQt5.QtGui import QFont, QPen, QBrush
             text_item.setDefaultTextColor(QColor("white"))
-            text_item.setPos(label_x, y)
+            orig_font = text_item.font()
+            text_item.setData(1, orig_font)
+            text_item.setData(2, full_name)
+            text_item.setToolTip(full_name)
+            # Center vertically and place label to the right of the bar
+            ty = y + (bar_height - text_item.boundingRect().height())/2
+            gap = 6
+            text_item.setPos(x + width + gap, ty)
+            # Always-visible subtle contrasting background
+            from PyQt5.QtGui import QPen as _LblPen2, QBrush as _LblBrush2, QColor as _LblColor2
+            br = text_item.boundingRect().translated(text_item.pos())
+            bg_color = _LblColor2(0,0,0,160)
+            padded = br.adjusted(-3,-1,3,1)
+            from PyQt5.QtGui import QPainterPath as _LblPath2
+            path = _LblPath2()
+            radius = 6
+            path.addRoundedRect(padded, radius, radius)
+            bg_rect = self.scene.addPath(path, _LblPen2(Qt.NoPen), _LblBrush2(bg_color))
+            bg_rect.setZValue(text_item.zValue()-1)
+            text_item.setData(3, bg_rect)
             self._timeline_name_to_text[name] = text_item
             bar_positions[idx] = (x, y, width)
             y += bar_height + bar_gap
@@ -1899,24 +2105,69 @@ class TimelineView(QWidget):
                             name = bar_item.row.get("Project Part", "")
                             ti = self._timeline_name_to_text.get(name)
                             if ti:
-                                ti.setDefaultTextColor(QColor("#00BFFF"))
+                                f = QFont(ti.font())
+                                f.setBold(True)
+                                ti.setFont(f)
+                                bg = ti.data(3)
+                                if bg:
+                                    from PyQt5.QtGui import QColor as _QColorTL, QBrush as _QBrushTL
+                                    bg.setBrush(_QBrushTL(_QColorTL(255,255,255,50)))
                         except Exception:
                             pass
                         return orig(ev)
                     return _enter
-                def make_leave(orig, bar_item=item):
+                def make_leave(orig_leave, bar_item=item):
                     def _leave(ev):
                         try:
                             name = bar_item.row.get("Project Part", "")
                             ti = self._timeline_name_to_text.get(name)
                             if ti:
-                                ti.setDefaultTextColor(QColor("white"))
+                                base_font = ti.data(1)
+                                if isinstance(base_font, QFont):
+                                    ti.setFont(base_font)
+                                bg = ti.data(3)
+                                if bg:
+                                    from PyQt5.QtGui import QBrush as _QBrushTL2
+                                    bg.setBrush(_QBrushTL2(Qt.transparent))
                         except Exception:
                             pass
-                        return orig(ev)
+                        return orig_leave(ev)
                     return _leave
                 item.hoverEnterEvent = make_enter(original_enter)
                 item.hoverLeaveEvent = make_leave(original_leave)
+        # Click-to-lock for timeline (reusing view mouse events)
+        def lock_click_event(event):
+            if event.button() == Qt.LeftButton:
+                scene_pos = self.view.mapToScene(event.pos())
+                for it in self.scene.items(scene_pos):
+                    if hasattr(it, 'row'):
+                        name = it.row.get("Project Part", "")
+                        # Clear existing lock
+                        if hasattr(self, '_timeline_locked') and self._timeline_locked and self._timeline_locked != name:
+                            # Reset previous locked label
+                            prev_ti = self._timeline_name_to_text.get(self._timeline_locked)
+                            if prev_ti:
+                                orig = prev_ti.data(1)
+                                if isinstance(orig, QFont):
+                                    prev_ti.setFont(orig)
+                                bg = prev_ti.data(3)
+                                if bg:
+                                    from PyQt5.QtGui import QBrush
+                                    bg.setBrush(QBrush(Qt.transparent))
+                        self._timeline_locked = name
+                        ti = self._timeline_name_to_text.get(name)
+                        if ti:
+                            f = QFont(ti.font()); f.setBold(True); ti.setFont(f)
+                            bg = ti.data(3)
+                            if bg:
+                                from PyQt5.QtGui import QColor, QBrush
+                                bg.setBrush(QBrush(QColor(255,255,255,70)))
+                        break
+            return original_mouse_press(event)
+        if not hasattr(self.view, '_lock_click_installed'):
+            original_mouse_press = self.view.mousePressEvent
+            self.view.mousePressEvent = lock_click_event
+            self.view._lock_click_installed = True
 
 
 # New DatabaseView class
@@ -2371,6 +2622,34 @@ class MainWindow(QMainWindow):
                 header_label.setText("[header.png not found]")
             header_layout.addWidget(header_label, alignment=Qt.AlignCenter)
             header_layout.addStretch(1)
+
+            # Search / Jump field (affects Gantt view)
+            from PyQt5.QtWidgets import QLineEdit, QPushButton
+            self.search_input = QLineEdit()
+            self.search_input.setPlaceholderText("Jump to part (substring)...")
+            self.search_input.setFixedWidth(260)
+            jump_btn = QPushButton("Jump")
+            def do_jump():
+                text = self.search_input.text().strip()
+                if not text:
+                    return
+                # Find first matching part name (case-insensitive)
+                lower = text.lower()
+                match_name = None
+                for r in self.model.rows:
+                    name = r.get("Project Part", "")
+                    if lower in name.lower():
+                        match_name = name
+                        break
+                if match_name and hasattr(self.gantt_chart_view, 'highlight_bar'):
+                    # Ensure Gantt view visible
+                    if self.sidebar.currentRow() != 1:
+                        self.sidebar.setCurrentRow(1)
+                    self.gantt_chart_view.highlight_bar(match_name)
+            jump_btn.clicked.connect(do_jump)
+            self.search_input.returnPressed.connect(do_jump)
+            header_layout.addWidget(self.search_input)
+            header_layout.addWidget(jump_btn)
 
             # Sidebar for view selection (create and add to layout first)
             self.sidebar = QListWidget()
