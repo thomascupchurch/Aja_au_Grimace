@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+        shell: bash
+
+      - name: Install project requirements (if present)
+        if: ${{ hashFiles('requirements.txt') != '' }}
+        run: pip install -r requirements.txt
+        shell: bash
+
+      - name: Install build deps (PyInstaller, PyQt5)
+        run: pip install pyinstaller PyQt5
+        shell: bash
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Build onedir archive
+        shell: pwsh
+        run: .\build_release.ps1 -Version ${{ steps.version.outputs.version }} -IncludeCLI -IncludeManifest
+
+      - name: Build one-file archive
+        shell: pwsh
+        run: .\build_release.ps1 -Version ${{ steps.version.outputs.version }} -IncludeCLI -IncludeManifest -OneFile
+
+      - name: Upload artifacts (workflow)
+        uses: actions/upload-artifact@v4
+        with:
+          name: releases-${{ github.ref_name }}
+          path: |
+            release_*.zip
+            release_*.zip.sha256
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release_*.zip
+            release_*.zip.sha256
+          fail_on_unmatched_files: true

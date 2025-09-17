@@ -2873,7 +2873,18 @@ class MainWindow(QMainWindow):
     def __init__(self, model):
         try:
             super().__init__()
-            self.setWindowTitle("Project Management App")
+            # Title with optional VERSION suffix
+            version_suffix = ""
+            try:
+                ver_path = resolve_resource_path("VERSION")
+                if ver_path and os.path.exists(ver_path):
+                    with open(ver_path, 'r', encoding='utf-8') as vf:
+                        _ver = vf.read().strip()
+                        if _ver:
+                            version_suffix = f" v{_ver}"
+            except Exception:
+                pass
+            self.setWindowTitle(f"Project Management App{version_suffix}")
             self.resize(1200, 700)
             # Set global stylesheet for background and foreground colors
             self.setStyleSheet("""
@@ -2943,6 +2954,25 @@ class MainWindow(QMainWindow):
             self.search_input.returnPressed.connect(do_jump)
             header_layout.addWidget(self.search_input)
             header_layout.addWidget(jump_btn)
+
+            # Reload after sync button
+            reload_btn = QPushButton("Reload")
+            def do_reload():
+                try:
+                    # Re-load from disk to pick up synced changes
+                    self.model.load_from_db()
+                    self.on_data_changed()
+                    if self.statusBar():
+                        self.statusBar().showMessage("Reloaded from disk", 3000)
+                except Exception as e:
+                    print(f"Reload failed: {e}")
+                finally:
+                    try:
+                        self._update_db_status()
+                    except Exception:
+                        pass
+            reload_btn.clicked.connect(do_reload)
+            header_layout.addWidget(reload_btn)
 
             # --- Filter Panel Dock (collapsible) ---
             from PyQt5.QtWidgets import QDockWidget, QWidget as _QW, QVBoxLayout as _QVBox, QLabel as _QL, QCheckBox, QGroupBox, QHBoxLayout as _QHBox, QLineEdit as _QLE, QPushButton as _QPB
