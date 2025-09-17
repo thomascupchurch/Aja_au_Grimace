@@ -33,6 +33,15 @@ A desktop project planning & visualization tool built with PyQt5 + QGraphicsScen
 - Inline editing dialogs for items via Project Tree
 - SQLite persistence with immediate save on change
 - PyInstaller build support (spec file present)
+- Attachment linking per task with paperclip indicator & thumbnail preview fallback
+- Export Gantt or Timeline to PNG / PDF (scene render)
+- Search / jump-to-task field centers & highlights first matching bar
+- Filter panel (status, internal/external, responsible substring, critical-only, risk-only) with ancestor auto-include
+- Persistent filter settings across sessions (QSettings)
+- Critical/risk filters (derived set & overdue/at-risk detection)
+- Optional code signing + UPX-compressed distribution
+- Conditional data bundling (attachments folder only if present)
+- Accessible hover contrast (orange background preserved)
 
 ## Data Model (Selected Fields)
 
@@ -83,6 +92,39 @@ python -m PyInstaller main.spec
 
 If images do not appear in the packaged build, confirm they are collected—adjust the spec's datas list accordingly.
 
+## Import / Export CLI
+
+A standalone utility `cli.py` provides JSON / CSV export & import for `project_data.db`.
+
+### Export
+
+```powershell
+python cli.py export --out data.json
+python cli.py export --format csv --out parts.csv
+```
+
+### Import
+
+Modes:
+- merge (default): upsert by Project Part (updates existing, inserts new)
+- append: insert all rows (duplicates possible)
+- replace: delete existing logical rows then insert all
+
+```powershell
+python cli.py import --in data.json          # merge inferred JSON
+python cli.py import --in parts.csv --mode replace --format csv
+python cli.py import --in data.json --mode append --no-backup
+```
+
+Automatic backup: For merge/replace a timestamped `project_data.db.bak_YYYYmmdd_HHMMSS` is created unless `--no-backup`.
+
+Arguments:
+- `--database path/to/other.db` to operate on a different database file.
+- `--format` may be omitted on import if the file extension is `.json` or `.csv`.
+
+Exit codes: 0 success; 2 arg error; 3 IO/validation; 4 unexpected.
+
+
 ## Usage Notes
 
 - Only modify data in the Project Tree. Re-open Gantt / Timeline to refresh visuals after edits.
@@ -93,15 +135,19 @@ If images do not appear in the packaged build, confirm they are collected—adju
 - Baselines: captured the first time a start/duration pair is valid; subsequent edits do not back-change the baseline.
 
 ## Roadmap / Potential Enhancements
+Remaining / Future ideas (completed items removed or relocated above):
 
 - Earned Value Metrics (PV, EV, SV, SPI, CPI) derived from baseline + progress
-- Toggle visibility for: dependencies, hierarchy connectors, risk outlines, critical path
-- Export views (PNG / PDF) directly from UI
-- Filter panel (by status, responsibility, internal/external)
-- Search / jump-to-task field
+- Enhanced visibility toggles UI consolidation (single legend-driven menu)
 - Undo/redo stack for edits
 - Multi-select bulk status updates
-- Weekend-aware (working day) progress projection heat map
+- Working-day progress projection heat map / forecast burn-down
+- Gray-out (instead of hide) non-matching filter mode
+- Timeline view filtering parity & shared filter bus
+- Persist dock layout & window geometry
+- Modularization (split monolith into packages)
+- Automated test harness for critical path & roll-up correctness
+- Optional JSON import/export (portable data set)
 
 ## Troubleshooting
 

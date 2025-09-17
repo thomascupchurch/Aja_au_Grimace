@@ -2926,6 +2926,7 @@ class MainWindow(QMainWindow):
 
             # --- Filter Panel Dock (collapsible) ---
             from PyQt5.QtWidgets import QDockWidget, QWidget as _QW, QVBoxLayout as _QVBox, QLabel as _QL, QCheckBox, QGroupBox, QHBoxLayout as _QHBox, QLineEdit as _QLE, QPushButton as _QPB
+            from PyQt5.QtCore import QSettings
             self.filter_dock = QDockWidget("Filters", self)
             self.filter_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
             filt_container = _QW()
@@ -3018,6 +3019,13 @@ class MainWindow(QMainWindow):
                 if crit: parts.append("Critical")
                 if risk: parts.append("Risk")
                 self.filter_summary.setText(" | ".join(parts) if parts else "No filters active")
+                # Persist after each apply for immediate save
+                try:
+                    self.save_filter_settings()
+                except Exception:
+                    pass
+            # expose for external calls
+            self._apply_filters = apply_filters
             def timer_apply():
                 apply_filters()
             self._resp_timer.timeout.connect(timer_apply)
@@ -3034,6 +3042,11 @@ class MainWindow(QMainWindow):
             # Initialize filter storage in gantt view if available
             if hasattr(self, 'gantt_chart_view') and hasattr(self.gantt_chart_view, '_init_filters'):
                 self.gantt_chart_view._init_filters()
+            # Load persisted filter settings
+            try:
+                self.load_filter_settings()
+            except Exception:
+                pass
 
             # Sidebar for view selection (create and add to layout first)
             self.sidebar = QListWidget()
@@ -3095,6 +3108,36 @@ class MainWindow(QMainWindow):
         # No automatic view switching. Optionally, highlight in Gantt if already there.
         if self.sidebar.currentRow() == 1 and hasattr(self.gantt_chart_view, 'highlight_bar'):
             self.gantt_chart_view.highlight_bar(part_name)
+    # ---------------- Filter Settings Persistence ----------------
+    def load_filter_settings(self):
+        from PyQt5.QtCore import QSettings, QTimer
+        s = QSettings("LSI", "ProjectPlanner")
+        # Status
+        for st, cb in self.chk_status.items():
+            cb.setChecked(s.value(f"filters/status/{st}", False, type=bool))
+        self.chk_internal.setChecked(s.value("filters/internal", False, type=bool))
+        self.chk_external.setChecked(s.value("filters/external", False, type=bool))
+        self.resp_input.setText(s.value("filters/responsible_substr", "", type=str))
+        self.chk_critical_only.setChecked(s.value("filters/critical_only", False, type=bool))
+        self.chk_risk_only.setChecked(s.value("filters/risk_only", False, type=bool))
+        # Apply after UI settles
+        QTimer.singleShot(100, lambda: getattr(self, '_apply_filters', lambda: None)())
+    def save_filter_settings(self):
+        from PyQt5.QtCore import QSettings
+        s = QSettings("LSI", "ProjectPlanner")
+        for st, cb in self.chk_status.items():
+            s.setValue(f"filters/status/{st}", cb.isChecked())
+        s.setValue("filters/internal", self.chk_internal.isChecked())
+        s.setValue("filters/external", self.chk_external.isChecked())
+        s.setValue("filters/responsible_substr", self.resp_input.text())
+        s.setValue("filters/critical_only", self.chk_critical_only.isChecked())
+        s.setValue("filters/risk_only", self.chk_risk_only.isChecked())
+    def closeEvent(self, event):
+        try:
+            self.save_filter_settings()
+        except Exception:
+            pass
+        super().closeEvent(event)
 
 # ------------------------------------------------------------
 # Application Entry Point (was missing; caused immediate exit)
