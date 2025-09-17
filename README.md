@@ -77,17 +77,25 @@ Use the built-in task:
 
 ## Building a Frozen Executable (Windows)
 
-PyInstaller spec file `main.spec` is included. Two options:
+PyInstaller spec files are provided for two build modes:
 
-### 1. One-file build via task
+| Mode | Output | Pros | Cons | When to Use |
+|------|--------|------|------|-------------|
+| One-dir (default `main.spec`) | `dist/main/` folder with `main.exe`, DLLs, resources | DB & images visible/editable in-place; faster incremental launches | Larger footprint; multiple files to distribute | Shared/synced data (OneDrive), easier debugging |
+| One-file (`main_onefile.spec`) | Single `dist/main.exe` (unpacks to temp at runtime) | Single portable file | Internal DB/resources unpacked to temp (changes not in exe); slower first launch | Quick ad‑hoc distribution where persistence lives elsewhere |
+
+Current default is one-dir for better transparency and to allow `project_data.db` to be stored alongside the executable for syncing.
+
+### Manual one-file build (standalone example)
 ```powershell
 python -m PyInstaller --noconfirm --noconsole --onefile --name ProjectManager main.py
 ```
 Output binary: `dist/ProjectManager.exe`
 
-### 2. Using existing spec
+### Using provided specs
 ```powershell
-python -m PyInstaller main.spec
+python -m PyInstaller main.spec          # one-dir (recommended for shared DB)
+python -m PyInstaller main_onefile.spec  # one-file
 ```
 
 If images do not appear in the packaged build, confirm they are collected—adjust the spec's datas list accordingly.
@@ -123,6 +131,92 @@ Arguments:
 - `--format` may be omitted on import if the file extension is `.json` or `.csv`.
 
 Exit codes: 0 success; 2 arg error; 3 IO/validation; 4 unexpected.
+
+## Release Archives (build_release.ps1)
+
+Use the PowerShell helper script `build_release.ps1` to produce a timestamped zip archive containing a staged copy of the PyInstaller build output. Archive naming pattern (new):
+
+```
+release_YYYYMMDD_HHMMSS[_vSemVer][_channel][_gitHash].zip
+```
+
+Segments:
+- `YYYYMMDD_HHMMSS` – build timestamp
+- `_vSemVer` – optional when `-Version` is supplied (e.g. `_v0.2.0`)
+- `_channel` – optional channel tag (e.g. `_dev`, `_beta`, `_stable`)
+- `_gitHash` – short commit hash when git available
+
+Example invocations:
+```powershell
+./build_release.ps1                                         # basic onedir build + zip
+./build_release.ps1 -IncludeCLI -Channel dev                # include cli.py; dev channel
+./build_release.ps1 -IncludeManifest -Version 0.2.0         # versioned manifest build
+./build_release.ps1 -IncludeDBTemplate -Channel stable -Keep 5
+./build_release.ps1 -OneFile -Version 0.2.0 -IncludeCLI     # one-file exe packaged
+./build_release.ps1 -ForceKill -SkipClean                   # faster incremental rebuild
+```
+
+Supported parameters / switches:
+- `-IncludeCLI`          – Copy `cli.py` into the staged folder.
+- `-IncludeDBTemplate`   – Copy current `project_data.db` (only do this if it contains seed data you are OK distributing).
+- `-IncludeManifest`     – Generate `manifest.json` enumerating every file (path, bytes, sha256).
+- `-Channel <tag>`       – Append channel tag to archive name (`dev`, `beta`, `stable`, etc.).
+- `-Python <path>`       – Override Python interpreter (auto-resolves sensible defaults otherwise).
+- `-OneFile`             – Use `main_onefile.spec` (single exe) instead of default `main.spec` onedir build.
+- `-ForceKill`           – Attempt to terminate any running previously built `main.exe` that may lock the file (prevents WinError 5).
+- `-SkipClean`           – Skip deleting `build/` and `dist/` for a faster iterative build (useful during rapid iteration).
+- `-Version <semver>`    – Embed a `VERSION` file in the archive/staging and insert `_v<semver>` into the archive filename.
+- `-Keep <N>`            – After creating the new archive, prune older `release_*.zip` (and matching `.sha256`) keeping only the newest N.
+
+Always produced (no flag needed):
+- `<archive>.sha256` – One-line SHA256 checksum file (format: `<hash> *<archiveName>`)
+
+Manifest format (array of objects):
+```json
+[
+   { "path": "main.exe", "bytes": 123456, "sha256": "..." },
+   { "path": "README.md", "bytes": 2048, "sha256": "..." }
+]
+```
+
+### Verifying Integrity
+
+Check the archive hash matches the `.sha256` file:
+```powershell
+Get-FileHash .\release_20250917_142530_v0.2.0.zip -Algorithm SHA256
+Get-Content  .\release_20250917_142530_v0.2.0.zip.sha256
+```
+Or strict compare:
+```powershell
+$calc = (Get-FileHash .\release_20250917_142530_v0.2.0.zip -Algorithm SHA256).Hash.ToLower()
+$expect = (Get-Content .\release_20250917_142530_v0.2.0.zip.sha256).Split(' ')[0]
+if ($calc -ne $expect) { Write-Error 'Checksum mismatch!' } else { 'OK' }
+```
+
+### Pruning Older Releases
+`-Keep 3` keeps the three newest `release_*.zip` archives and removes older ones plus their `.sha256` companion files.
+
+### Typical Workflow
+1. Commit changes (optional, to embed fresh git hash)
+2. `./build_release.ps1 -Version 0.2.0 -IncludeManifest -Channel beta -Keep 5`
+3. Distribute the resulting zip + `.sha256`
+4. Recipient verifies hash, extracts, runs `main.exe`
+
+### One-file Mode Persistence Note
+When using the one-file build, PyInstaller unpacks the executable to a temporary folder each run. This project adds a first-run safeguard: if `project_data.db` is NOT present next to the launched `main.exe`, the bundled template DB is copied out, ensuring subsequent edits persist in the external working directory. (Location = the current working directory from which the user launches the exe.) If you distribute with `-IncludeDBTemplate`, that file becomes the initial seed.
+
+### What the Script Does Internally
+1. (Optional) Cleans previous build output unless `-SkipClean` is specified.
+2. Runs PyInstaller with selected spec (`main.spec` or `main_onefile.spec`). Retries without `--clean` if first attempt fails.
+3. Detects layout (onedir vs one-file) and copies artifacts into an ephemeral staging folder.
+4. Writes `VERSION` if `-Version` supplied.
+5. Copies optional extras (CLI, DB template, README) and generates `manifest.json` if requested.
+6. Zips staging contents → `release_...zip`.
+7. Computes SHA256 and writes `<archive>.sha256`.
+8. Prunes older archives if `-Keep` specified.
+9. Prints a summary of top-level staged contents.
+
+Future enhancements (optional): code signing integration (`signtool`), CI workflow (GitHub Actions) building both modes automatically.
 
 
 ## Usage Notes

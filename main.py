@@ -100,6 +100,19 @@ class ProjectDataModel:
 
     def __init__(self):
         self.rows = []  # Each row is a dict with keys as COLUMNS
+        # If running in a PyInstaller one-file bundle, the bundled DB is read-only inside the temp extraction dir.
+        # We want user edits to persist next to the executable (current working directory) if no DB exists yet.
+        try:
+            import sys, os, shutil
+            if not os.path.exists(self.DB_FILE):
+                # Detect PyInstaller one-file _MEIPASS path (only present in one-file mode)
+                bundle_dir = getattr(sys, '_MEIPASS', None)
+                if bundle_dir:
+                    candidate = os.path.join(bundle_dir, 'project_data.db')
+                    if os.path.exists(candidate):
+                        shutil.copy2(candidate, self.DB_FILE)
+        except Exception:
+            pass
         self.ensure_schema()
         self.load_from_db()
 

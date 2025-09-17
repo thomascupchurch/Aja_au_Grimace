@@ -24,6 +24,7 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+# Onedir build: produce a folder (dist/main/) instead of single exe.
 exe = EXE(
     pyz,
     a.scripts,
@@ -34,7 +35,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,  # Enable UPX compression (ensure UPX is installed & on PATH)
+    upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
@@ -43,4 +44,15 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='main'
 )
