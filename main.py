@@ -499,7 +499,23 @@ class ProjectTreeView(QWidget):
         self.model = model
         self.on_part_selected = on_part_selected
         layout = QVBoxLayout()
-        layout.addWidget(QLabel("Project Tree (Drag-and-Drop Enabled)"))
+        header_row = QHBoxLayout()
+        header_row.addWidget(QLabel("Project Tree (Drag-and-Drop Enabled)"))
+        from PyQt5.QtWidgets import QPushButton
+        expand_btn = QPushButton("Expand All")
+        collapse_btn = QPushButton("Collapse All")
+        expand_btn.setToolTip("Expand all nodes")
+        collapse_btn.setToolTip("Collapse all nodes")
+        def do_expand():
+            self.tree.expandAll()
+        def do_collapse():
+            self.tree.collapseAll()
+        expand_btn.clicked.connect(do_expand)
+        collapse_btn.clicked.connect(do_collapse)
+        header_row.addStretch(1)
+        header_row.addWidget(expand_btn)
+        header_row.addWidget(collapse_btn)
+        layout.addLayout(header_row)
         self.tree = QTreeWidget()
         self.display_columns = ["Project Part", "Type"]
         self.tree.setHeaderLabels(self.display_columns)
