@@ -134,28 +134,42 @@ Exit codes: 0 success; 2 arg error; 3 IO/validation; 4 unexpected.
 
 ## Release Archives (build_release.ps1)
 
-Use the PowerShell helper script `build_release.ps1` to produce a timestamped zip archive containing the PyInstaller build output (everything under `dist/main/`). The archive name pattern:
+Use the PowerShell helper script `build_release.ps1` to produce a timestamped zip archive containing a staged copy of the PyInstaller build output. Archive naming pattern (new):
 
 ```
-release_YYYYMMDD_HHMMSS[_channel][_gitHash].zip
+release_YYYYMMDD_HHMMSS[_vSemVer][_channel][_gitHash].zip
 ```
 
-Examples:
+Segments:
+- `YYYYMMDD_HHMMSS` – build timestamp
+- `_vSemVer` – optional when `-Version` is supplied (e.g. `_v0.2.0`)
+- `_channel` – optional channel tag (e.g. `_dev`, `_beta`, `_stable`)
+- `_gitHash` – short commit hash when git available
 
+Example invocations:
 ```powershell
-./build_release.ps1                          # basic build + zip
-./build_release.ps1 -IncludeCLI -Channel dev # include cli.py and tag as dev
-./build_release.ps1 -IncludeManifest         # add manifest.json with SHA256 hashes
-./build_release.ps1 -IncludeDBTemplate -Channel stable
+./build_release.ps1                                         # basic onedir build + zip
+./build_release.ps1 -IncludeCLI -Channel dev                # include cli.py; dev channel
+./build_release.ps1 -IncludeManifest -Version 0.2.0         # versioned manifest build
+./build_release.ps1 -IncludeDBTemplate -Channel stable -Keep 5
+./build_release.ps1 -OneFile -Version 0.2.0 -IncludeCLI     # one-file exe packaged
+./build_release.ps1 -ForceKill -SkipClean                   # faster incremental rebuild
 ```
 
-Parameters:
-- `-IncludeCLI`        – Copies `cli.py` into `dist/main/` before zipping.
-- `-IncludeDBTemplate` – Copies the current `project_data.db` (ensure it contains only seed/template data if distributing).
-- `-IncludeManifest`   – Generates `manifest.json` listing every file with size + SHA256 for integrity verification.
-- `-Channel <tag>`     – Adds an environment/channel tag (e.g. dev, beta, stable) to the archive filename.
-- `-Python <path>`     – Override Python interpreter (defaults to `.venv/ Scripts/python.exe`).
-- `-OneFile`           – Use `main_onefile.spec` to create a single executable instead of the default one-dir build.
+Supported parameters / switches:
+- `-IncludeCLI`          – Copy `cli.py` into the staged folder.
+- `-IncludeDBTemplate`   – Copy current `project_data.db` (only do this if it contains seed data you are OK distributing).
+- `-IncludeManifest`     – Generate `manifest.json` enumerating every file (path, bytes, sha256).
+- `-Channel <tag>`       – Append channel tag to archive name (`dev`, `beta`, `stable`, etc.).
+- `-Python <path>`       – Override Python interpreter (auto-resolves sensible defaults otherwise).
+- `-OneFile`             – Use `main_onefile.spec` (single exe) instead of default `main.spec` onedir build.
+- `-ForceKill`           – Attempt to terminate any running previously built `main.exe` that may lock the file (prevents WinError 5).
+- `-SkipClean`           – Skip deleting `build/` and `dist/` for a faster iterative build (useful during rapid iteration).
+- `-Version <semver>`    – Embed a `VERSION` file in the archive/staging and insert `_v<semver>` into the archive filename.
+- `-Keep <N>`            – After creating the new archive, prune older `release_*.zip` (and matching `.sha256`) keeping only the newest N.
+
+Always produced (no flag needed):
+- `<archive>.sha256` – One-line SHA256 checksum file (format: `<hash> *<archiveName>`)
 
 Manifest format (array of objects):
 ```json
@@ -165,25 +179,44 @@ Manifest format (array of objects):
 ]
 ```
 
-Integrity check example after distribution:
+### Verifying Integrity
+
+Check the archive hash matches the `.sha256` file:
 ```powershell
-Get-FileHash .\release_20250917_142530.zip -Algorithm SHA256
+Get-FileHash .\release_20250917_142530_v0.2.0.zip -Algorithm SHA256
+Get-Content  .\release_20250917_142530_v0.2.0.zip.sha256
+```
+Or strict compare:
+```powershell
+$calc = (Get-FileHash .\release_20250917_142530_v0.2.0.zip -Algorithm SHA256).Hash.ToLower()
+$expect = (Get-Content .\release_20250917_142530_v0.2.0.zip.sha256).Split(' ')[0]
+if ($calc -ne $expect) { Write-Error 'Checksum mismatch!' } else { 'OK' }
 ```
 
-To inspect contents without extraction:
-```powershell
-Expand-Archive .\release_20250917_142530.zip -DestinationPath .\_unpacked
-```
+### Pruning Older Releases
+`-Keep 3` keeps the three newest `release_*.zip` archives and removes older ones plus their `.sha256` companion files.
 
-The script performs:
-1. Clean old `build/` & `dist/` (ignores errors if absent)
-2. Run `PyInstaller` using `main.spec` (or `main_onefile.spec` when `-OneFile` is passed)
-3. Optionally copy extras (CLI, DB template, README)
-4. Optionally generate `manifest.json`
-5. Zip the build output (staged copy of `dist/main/` or single exe) into the timestamped archive
-6. Print a summary (top-level contents & archive size)
+### Typical Workflow
+1. Commit changes (optional, to embed fresh git hash)
+2. `./build_release.ps1 -Version 0.2.0 -IncludeManifest -Channel beta -Keep 5`
+3. Distribute the resulting zip + `.sha256`
+4. Recipient verifies hash, extracts, runs `main.exe`
 
-Future enhancements (optional): version stamping, auto-prune old archives, code signing integration.
+### One-file Mode Persistence Note
+When using the one-file build, PyInstaller unpacks the executable to a temporary folder each run. This project adds a first-run safeguard: if `project_data.db` is NOT present next to the launched `main.exe`, the bundled template DB is copied out, ensuring subsequent edits persist in the external working directory. (Location = the current working directory from which the user launches the exe.) If you distribute with `-IncludeDBTemplate`, that file becomes the initial seed.
+
+### What the Script Does Internally
+1. (Optional) Cleans previous build output unless `-SkipClean` is specified.
+2. Runs PyInstaller with selected spec (`main.spec` or `main_onefile.spec`). Retries without `--clean` if first attempt fails.
+3. Detects layout (onedir vs one-file) and copies artifacts into an ephemeral staging folder.
+4. Writes `VERSION` if `-Version` supplied.
+5. Copies optional extras (CLI, DB template, README) and generates `manifest.json` if requested.
+6. Zips staging contents → `release_...zip`.
+7. Computes SHA256 and writes `<archive>.sha256`.
+8. Prunes older archives if `-Keep` specified.
+9. Prints a summary of top-level staged contents.
+
+Future enhancements (optional): code signing integration (`signtool`), CI workflow (GitHub Actions) building both modes automatically.
 
 
 ## Usage Notes

@@ -10,6 +10,30 @@ import os
 from PyQt5.QtGui import QPixmap
 import shutil
 
+# --- Resource path resolution helper ---
+def resolve_resource_path(path: str) -> str:
+    """Return an absolute path to a resource that may live next to the script,
+    next to the frozen executable, or inside PyInstaller's _MEIPASS (one-file temp dir).
+    Checks in this order: absolute -> _MEIPASS -> exe dir -> source dir.
+    Returns the first existing candidate, otherwise the first candidate for best effort.
+    """
+    import os, sys
+    if not path:
+        return path
+    if os.path.isabs(path):
+        return path
+    candidates = []
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        candidates.append(os.path.join(meipass, path))
+    if getattr(sys, 'frozen', False):
+        candidates.append(os.path.join(os.path.dirname(sys.executable), path))
+    candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), path))
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return candidates[0] if candidates else path
+
 class ImageCellWidget(QWidget):
     def __init__(self, parent, row, col, model, on_data_changed=None):
         super().__init__(parent)
@@ -30,7 +54,9 @@ class ImageCellWidget(QWidget):
     def upload_image(self):
         fname, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Image Files (*.png *.jpg *.jpeg *.bmp *.gif)")
         if fname:
-            images_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
+            # Store images next to the executable/script so packaged app can load them
+            base_dir = os.path.dirname(resolve_resource_path("."))
+            images_dir = os.path.join(base_dir, "images")
             if not os.path.exists(images_dir):
                 os.makedirs(images_dir)
             base = os.path.basename(fname)
@@ -41,7 +67,7 @@ class ImageCellWidget(QWidget):
                 dest = os.path.join(images_dir, f"{orig_base}_{count}{ext}")
                 count += 1
             shutil.copy2(fname, dest)
-            rel_path = os.path.relpath(dest, os.path.dirname(os.path.abspath(__file__)))
+            rel_path = os.path.relpath(dest, base_dir)
             self.model.rows[self.row][self.model.COLUMNS[self.col]] = rel_path
             self.model.save_to_db()
             self.refresh()
@@ -49,12 +75,7 @@ class ImageCellWidget(QWidget):
     def refresh(self):
         img_path = self.model.rows[self.row].get(self.model.COLUMNS[self.col], "")
         if img_path:
-            import sys
-            if getattr(sys, 'frozen', False):
-                base_dir = os.path.dirname(sys.executable)
-            else:
-                base_dir = os.path.dirname(os.path.abspath(__file__))
-            img_path_full = os.path.join(base_dir, img_path)
+            img_path_full = resolve_resource_path(img_path)
 
             pixmap = QPixmap(img_path_full)
             if not pixmap.isNull():
@@ -566,13 +587,8 @@ class ProjectTreeView(QWidget):
                     if row:
                         img_path = row.get("Images", "")
                         if img_path and str(img_path).strip():
-                            import os
                             from PyQt5.QtGui import QPixmap
-                            if not os.path.isabs(img_path):
-                                base_dir = os.path.dirname(os.path.abspath(__file__))
-                                img_path_full = os.path.join(base_dir, img_path)
-                            else:
-                                img_path_full = img_path
+                            img_path_full = resolve_resource_path(img_path)
                             pixmap = QPixmap(img_path_full)
                             if not pixmap.isNull():
                                 self.preview_label.setPixmap(pixmap.scaledToHeight(180, Qt.SmoothTransformation))
@@ -1470,10 +1486,7 @@ class GanttChartView(QWidget):
                 if not files:
                     return
                 import sys
-                if getattr(sys, 'frozen', False):
-                    base_dir = os.path.dirname(sys.executable)
-                else:
-                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                base_dir = os.path.dirname(resolve_resource_path("."))
                 attach_dir = os.path.join(base_dir, 'attachments')
                 if not os.path.exists(attach_dir):
                     os.makedirs(attach_dir)
@@ -1495,10 +1508,7 @@ class GanttChartView(QWidget):
                 self._save_attachments_list(current)
             def open_attachments_folder(self):
                 import os, sys, subprocess
-                if getattr(sys, 'frozen', False):
-                    base_dir = os.path.dirname(sys.executable)
-                else:
-                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                base_dir = os.path.dirname(resolve_resource_path("."))
                 attach_dir = os.path.join(base_dir, 'attachments')
                 if not os.path.exists(attach_dir):
                     os.makedirs(attach_dir)
@@ -1530,10 +1540,7 @@ class GanttChartView(QWidget):
                     if not item:
                         thumb.clear(); return
                     rel = item.text()
-                    if getattr(sys, 'frozen', False):
-                        base_dir = os.path.dirname(sys.executable)
-                    else:
-                        base_dir = os.path.dirname(os.path.abspath(__file__))
+                    base_dir = os.path.dirname(resolve_resource_path("."))
                     full = os.path.join(base_dir, rel)
                     if os.path.exists(full) and os.path.splitext(full)[1].lower() in ('.png','.jpg','.jpeg','.bmp','.gif'):
                         pm = QPixmap(full)
@@ -1553,10 +1560,7 @@ class GanttChartView(QWidget):
                     item = lst.currentItem();
                     if not item: return
                     rel = item.text()
-                    if getattr(sys, 'frozen', False):
-                        base_dir = os.path.dirname(sys.executable)
-                    else:
-                        base_dir = os.path.dirname(os.path.abspath(__file__))
+                    base_dir = os.path.dirname(resolve_resource_path("."))
                     full = os.path.join(base_dir, rel)
                     if os.path.exists(full):
                         webbrowser.open(full)
@@ -1570,16 +1574,8 @@ class GanttChartView(QWidget):
             def _set_preview(self):
                 img_path = self.row.get("Images", "")
                 if img_path and str(img_path).strip():
-                    import os, sys
                     from PyQt5.QtGui import QPixmap
-                    if not os.path.isabs(img_path):
-                        if getattr(sys, 'frozen', False):
-                            base_dir = os.path.dirname(sys.executable)
-                        else:
-                            base_dir = os.path.dirname(os.path.abspath(__file__))
-                        img_path_full = os.path.join(base_dir, img_path)
-                    else:
-                        img_path_full = img_path
+                    img_path_full = resolve_resource_path(img_path)
                     pm = QPixmap(img_path_full)
                     if not pm.isNull():
                         self.preview_label.setPixmap(pm.scaledToHeight(90, Qt.SmoothTransformation))
@@ -1617,13 +1613,8 @@ class GanttChartView(QWidget):
                 if not self.row.get("Images"):
                     atts = self._attachments_list()
                     if atts:
-                        import os
                         from PyQt5.QtGui import QPixmap
-                        if getattr(sys, 'frozen', False):
-                            base_dir = os.path.dirname(sys.executable)
-                        else:
-                            base_dir = os.path.dirname(os.path.abspath(__file__))
-                        full = os.path.join(base_dir, atts[0])
+                        full = resolve_resource_path(atts[0])
                         if os.path.exists(full):
                             pm = QPixmap(full)
                             if not pm.isNull():
@@ -2307,13 +2298,8 @@ class TimelineView(QWidget):
                         return
                     img_path = self.row.get("Images", "")
                     if img_path and str(img_path).strip():
-                        import os
                         from PyQt5.QtGui import QPixmap
-                        if not os.path.isabs(img_path):
-                            base_dir = os.path.dirname(os.path.abspath(__file__))
-                            img_path_full = os.path.join(base_dir, img_path)
-                        else:
-                            img_path_full = img_path
+                        img_path_full = resolve_resource_path(img_path)
                         pixmap = QPixmap(img_path_full)
                         if not pixmap.isNull():
                             preview_label.setPixmap(pixmap.scaledToHeight(180, Qt.SmoothTransformation))
@@ -2869,6 +2855,11 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'progress_dashboard'):
             # Refresh metrics summary
             self.progress_dashboard.refresh()
+        # Update DB status banner
+        try:
+            self._update_db_status()
+        except Exception:
+            pass
     def display_view(self, index):
         self.views.setCurrentIndex(index)
         if index == 0:
@@ -3122,6 +3113,27 @@ class MainWindow(QMainWindow):
             container.setLayout(main_layout)
             self.setCentralWidget(container)
 
+            # Status bar with DB info + quick action
+            from PyQt5.QtWidgets import QStatusBar, QPushButton as _QBtn
+            sb = QStatusBar()
+            self.setStatusBar(sb)
+            self.db_status_label = QLabel()
+            self.db_status_label.setStyleSheet("color:#ccc; font-size:11px")
+            self.db_warning_label = QLabel()
+            self.db_warning_label.setStyleSheet("color:#FFD166; font-size:11px")
+            self.open_folder_btn = _QBtn("Open Data Folder")
+            self.open_folder_btn.setStyleSheet("font-size:11px")
+            self.open_folder_btn.clicked.connect(self.open_data_folder)
+            sb.addPermanentWidget(self.db_status_label, 1)
+            sb.addPermanentWidget(self.db_warning_label, 0)
+            sb.addPermanentWidget(self.open_folder_btn, 0)
+            self._update_db_status()
+
+            # Basic Tools menu
+            mb = self.menuBar(); tools_menu = mb.addMenu("Tools")
+            act = tools_menu.addAction("Open Data Folder")
+            act.triggered.connect(self.open_data_folder)
+
             # Now that all views are constructed, connect sidebar signals and set current row
             self.sidebar.currentRowChanged.connect(self.display_view)
             self.sidebar.setCurrentRow(4)  # Start on Database view for editing (Dashboard is index 5)
@@ -3133,6 +3145,49 @@ class MainWindow(QMainWindow):
             import traceback
             print("EXCEPTION in MainWindow.__init__:", e)
             traceback.print_exc()
+    def open_data_folder(self):
+        import os, sys, subprocess
+        base_dir = os.path.dirname(os.path.abspath(self.model.DB_FILE))
+        try:
+            if sys.platform.startswith('win'):
+                os.startfile(base_dir)
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', base_dir])
+            else:
+                subprocess.Popen(['xdg-open', base_dir])
+        except Exception as e:
+            print(f"Failed to open data folder: {e}")
+    def _update_db_status(self):
+        import os, time
+        try:
+            db_path = os.path.abspath(self.model.DB_FILE)
+        except Exception:
+            db_path = self.model.DB_FILE
+        exists = os.path.exists(db_path)
+        if exists:
+            ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(db_path)))
+            text = f"DB: {db_path}  |  Last Modified: {ts}"
+            # Staleness warning if older than 24h and basic conflict hint
+            try:
+                age_sec = time.time() - os.path.getmtime(db_path)
+                warn = []
+                if age_sec > 24*3600:
+                    warn.append("DB older than 24h (check sync)")
+                base_dir = os.path.dirname(db_path)
+                conf = [n for n in os.listdir(base_dir) if n.lower().endswith('.db') and n.startswith('project_data') and n != 'project_data.db']
+                if conf:
+                    warn.append(f"conflict copies: {len(conf)}")
+                self.db_warning_label.setText(" | ".join(warn))
+            except Exception:
+                pass
+        else:
+            text = f"DB: {db_path} (missing)"
+            try:
+                self.db_warning_label.setText("DB missing")
+            except Exception:
+                pass
+        if hasattr(self, 'db_status_label') and self.db_status_label is not None:
+            self.db_status_label.setText(text)
     def on_tree_part_selected(self, part_name):
         # No automatic view switching. Optionally, highlight in Gantt if already there.
         if self.sidebar.currentRow() == 1 and hasattr(self.gantt_chart_view, 'highlight_bar'):
