@@ -95,6 +95,135 @@
   </script>
   <script>
     let gantt;
+    let cachedTasks = null; // cache parsed Date objects for re-render without refetching
+
+    // Compute overall date range of tasks
+    function computeRange(tasks) {
+      let min = null, max = null;
+      for (const t of tasks || []) {
+        if (!(t.start instanceof Date) || !(t.end instanceof Date)) continue;
+        if (!min || t.start < min) min = t.start;
+        if (!max || t.end > max) max = t.end;
+      }
+      return { min, max };
+    }
+
+    // Count columns for a given view between [start, end] inclusive
+    function countColumns(view, start, end) {
+      if (!start || !end) return 1;
+      const msPerDay = 24*60*60*1000;
+      const days = Math.max(1, Math.ceil((end - start) / msPerDay) + 1);
+      switch(view) {
+        case 'Day':
+          return days + 2; // padding
+        case 'Week':
+          return Math.ceil(days / 7) + 1;
+        case 'Month': {
+          // Count month ticks inclusive
+          let c = 1;
+          let d = new Date(start.getFullYear(), start.getMonth()+1, 1);
+          while (d <= end) { c++; d = new Date(d.getFullYear(), d.getMonth()+1, 1); }
+          return c;
+        }
+        case 'Year':
+          return end.getFullYear() - start.getFullYear() + 1;
+        default:
+          return days + 2;
+      }
+    }
+
+    // Choose view mode and column_width that approximately fits container width
+    function chooseFitSettings(containerWidth, tasks, preferredView) {
+      const { min, max } = computeRange(tasks);
+      const views = preferredView ? [preferredView] : ['Day','Week','Month','Year'];
+      const bounds = { min: 12, max: 80 };
+      for (const v of views) {
+        const cols = Math.max(1, countColumns(v, min, max));
+        const ideal = Math.floor(containerWidth / cols);
+        if (ideal >= bounds.min && ideal <= bounds.max) {
+          return { view: v, column_width: ideal };
+        }
+      }
+      // Fallback: pick the last tried view and clamp
+      const last = views[views.length - 1];
+      const cols = Math.max(1, countColumns(last, min, max));
+      return { view: last, column_width: Math.max(bounds.min, Math.min(bounds.max, Math.floor(containerWidth / cols))) };
+    }
+
+    function renderGantt(parsed, opts={}) {
+      const el = document.querySelector('#gantt');
+      el.innerHTML = '';
+      const container = document.createElement('div');
+      el.appendChild(container);
+
+      const toolbarView = document.querySelector('#view-mode').value;
+      const cw = chooseFitSettings(container.clientWidth || el.clientWidth || 1024, parsed, opts.view || toolbarView);
+      // keep the select in sync with chosen view
+      document.querySelector('#view-mode').value = cw.view;
+
+      // Helper to (re)apply progress colors and add label backgrounds
+      const enhanceBars = () => {
+        if (!gantt) return;
+        gantt.$svg.querySelectorAll('.bar-label-bg').forEach(n => n.remove());
+        for (const t of parsed) {
+          const group = gantt.$svg.querySelector(`.bar-wrapper[data-id="${t.id}"]`);
+          if (!group) continue;
+          const prog = group.querySelector('.bar-progress');
+          if (prog && t.color_progress) {
+            try { prog.style.fill = t.color_progress; } catch {}
+          }
+          const label = group.querySelector('.bar-label');
+          if (label) {
+            try {
+              const bbox = label.getBBox();
+              const padX = 6, padY = 3, rx = 4;
+              const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+              rect.setAttribute('x', String(bbox.x - padX));
+              rect.setAttribute('y', String(bbox.y - padY));
+              rect.setAttribute('width', String(bbox.width + padX * 2));
+              rect.setAttribute('height', String(bbox.height + padY * 2));
+              rect.setAttribute('rx', String(rx));
+              rect.setAttribute('ry', String(rx));
+              rect.setAttribute('class', 'bar-label-bg');
+              rect.setAttribute('fill', '#FF8200');
+              rect.setAttribute('pointer-events', 'none');
+              const ie = (t.internal_external || '').toLowerCase();
+              const stroke = ie === 'internal' ? '#ffffff' : (ie === 'external' ? '#000000' : 'none');
+              const strokeWidth = stroke === 'none' ? '0' : '1.25';
+              rect.setAttribute('stroke', stroke);
+              rect.setAttribute('stroke-width', strokeWidth);
+              label.parentNode.insertBefore(rect, label);
+            } catch {}
+          }
+        }
+      };
+
+      gantt = new Gantt(container, parsed, {
+        view_mode: cw.view,
+        column_width: cw.column_width,
+        date_format: 'YYYY-MM-DD',
+        language: 'en',
+        lines: 'vertical',
+        today_button: true,
+        ignore: 'weekend',
+        holidays: { 'var(--g-weekend-highlight-color)': 'weekend' },
+        view_mode_select: true,
+        on_view_change: () => { requestAnimationFrame(enhanceBars); },
+        custom_popup_html: task => {
+          const fields = [
+            ['Name', task.name],
+            ['Start', t(task.start)],
+            ['End', t(task.end)],
+            ['Progress', `${task.progress}%`],
+            ['Type', task.type],
+            ['Dependencies', task.dependencies]
+          ];
+          function t(d) { try { return d?.toISOString?.().slice(0,10) || d; } catch { return d; } }
+          return `<div class="details-container">${fields.map(([k,v]) => `<div><strong>${k}:</strong> ${v||''}</div>`).join('')}</div>`;
+        }
+      });
+      requestAnimationFrame(enhanceBars);
+    }
 
     async function loadTasks() {
       // Show DB path and row count to help diagnose empty data
@@ -118,86 +247,15 @@
         el.appendChild(empty);
         return;
       }
-
-  const container = document.createElement('div');
-      el.appendChild(container);
       // Convert to Date objects to avoid client-side parsing quirks
       const parsed = tasks.map(t => ({
         ...t,
         start: new Date(t.start),
         end: new Date(t.end)
       }));
+      cachedTasks = parsed;
       try {
-        // Helper to (re)apply progress colors and add label backgrounds
-        const enhanceBars = () => {
-          if (!gantt) return;
-          // Apply per-task progress color and insert label backgrounds
-          // Remove existing label backgrounds to avoid duplicates
-          gantt.$svg.querySelectorAll('.bar-label-bg').forEach(n => n.remove());
-          for (const t of parsed) {
-            const group = gantt.$svg.querySelector(`.bar-wrapper[data-id="${t.id}"]`);
-            if (!group) continue;
-            const prog = group.querySelector('.bar-progress');
-            if (prog && t.color_progress) {
-              try { prog.style.fill = t.color_progress; } catch {}
-            }
-            // Label background behind text
-            const label = group.querySelector('.bar-label');
-            if (label) {
-              try {
-                const bbox = label.getBBox();
-                const padX = 6, padY = 3, rx = 4;
-                const svg = gantt.$svg;
-                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-                rect.setAttribute('x', String(bbox.x - padX));
-                rect.setAttribute('y', String(bbox.y - padY));
-                rect.setAttribute('width', String(bbox.width + padX * 2));
-                rect.setAttribute('height', String(bbox.height + padY * 2));
-                rect.setAttribute('rx', String(rx));
-                rect.setAttribute('ry', String(rx));
-                rect.setAttribute('class', 'bar-label-bg');
-                rect.setAttribute('fill', '#FF8200');
-                rect.setAttribute('pointer-events', 'none');
-                const ie = (t.internal_external || '').toLowerCase();
-                const stroke = ie === 'internal' ? '#ffffff' : (ie === 'external' ? '#000000' : 'none');
-                const strokeWidth = stroke === 'none' ? '0' : '1.25';
-                rect.setAttribute('stroke', stroke);
-                rect.setAttribute('stroke-width', strokeWidth);
-                // Insert just before the label so it sits behind it inside the same group
-                label.parentNode.insertBefore(rect, label);
-              } catch {}
-            }
-          }
-        };
-
-        gantt = new Gantt(container, parsed, {
-          view_mode: document.querySelector('#view-mode').value,
-          date_format: 'YYYY-MM-DD',
-          language: 'en',
-          lines: 'vertical',
-          today_button: true,
-          ignore: 'weekend',
-          holidays: { 'var(--g-weekend-highlight-color)': 'weekend' },
-          view_mode_select: true,
-          on_view_change: () => {
-            // Re-apply after DOM updates for new view
-            requestAnimationFrame(enhanceBars);
-          },
-          custom_popup_html: task => {
-            const fields = [
-              ['Name', task.name],
-              ['Start', t(task.start)],
-              ['End', t(task.end)],
-              ['Progress', `${task.progress}%`],
-              ['Type', task.type],
-              ['Dependencies', task.dependencies]
-            ];
-            function t(d) { try { return d?.toISOString?.().slice(0,10) || d; } catch { return d; } }
-            return `<div class="details-container">${fields.map(([k,v]) => `<div><strong>${k}:</strong> ${v||''}</div>`).join('')}</div>`;
-          }
-        });
-        // Apply enhancements after initial render
-        requestAnimationFrame(enhanceBars);
+        renderGantt(parsed);
       } catch (e) {
         console.error('Gantt render error', e);
         const err = document.createElement('div');
@@ -212,11 +270,20 @@
     }
 
     document.querySelector('#view-mode').addEventListener('change', () => {
-      if (gantt) gantt.change_view_mode(document.querySelector('#view-mode').value);
+      // Re-render with the chosen view, still fitting the width
+      if (cachedTasks) renderGantt(cachedTasks, { view: document.querySelector('#view-mode').value });
     });
     document.querySelector('#refresh').addEventListener('click', loadTasks);
 
     loadTasks();
+
+    // Fit on resize
+    let resizeTimer = null;
+    window.addEventListener('resize', () => {
+      if (!cachedTasks) return;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => renderGantt(cachedTasks), 100);
+    });
   </script>
 </body>
 </html>
