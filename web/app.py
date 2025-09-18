@@ -1,5 +1,7 @@
 import os
 import json
+import re
+import base64
 import sqlite3
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, render_template, send_from_directory, Response
@@ -65,10 +67,69 @@ def fetch_tasks():
         cur.execute("SELECT {} FROM project_parts".format(
             ", ".join([f'"{c}"' for c in cols])
         ))
-        for row in cur.fetchall():
-            rec = {k: v for k, v in zip(cols, row)}
-            # Normalize fields
+        rows = [ {k: v for k, v in zip(cols, row)} for row in cur.fetchall() ]
+
+        # Helper: slugify names to ID-safe strings usable in CSS selectors
+        def slugify(text: str) -> str:
+            if text is None:
+                text = ""
+            # Normalize whitespace
+            text = str(text).strip()
+            # Replace any non-alphanumeric with underscore
+            s = re.sub(r"[^A-Za-z0-9_-]+", "_", text)
+            # Collapse multiple underscores and trim
+            s = re.sub(r"_+", "_", s).strip("_")
+            return s or "task"
+
+        # Build unique id map for names to ensure no collisions after slugify
+        name_to_id = {}
+        used = set()
+        # Heuristic color mapping using status, % complete, and schedule
+        def choose_colors(status: str, progress: int, start_dt, end_dt):
+            s = (status or "").strip().lower()
+            today = datetime.today().date()
+            # Normalize common synonyms
+            is_done = any(k in s for k in ("done", "complete", "completed", "finished")) or progress >= 100
+            is_on_hold = any(k in s for k in ("on hold", "hold", "paused", "defer", "deferred"))
+            is_blocked = any(k in s for k in ("blocked", "at risk", "risk", "overdue"))
+            is_active_status = any(k in s for k in (
+                "in progress", "in-progress", "inprogress", "active", "working", "ongoing", "started", "start"
+            ))
+
+            # Date-based signals
+            has_started = bool(start_dt and start_dt <= today)
+            in_window = bool(start_dt and end_dt and start_dt <= today <= end_dt)
+            overdue = bool(end_dt and end_dt < today and progress < 100)
+            has_progress = 0 < progress < 100
+
+            # Priority order
+            # Keep bar backgrounds mostly neutral (white/gray) and use color on progress only.
+            if is_done:
+                return {"color": "#ffffff", "color_progress": "#10b981"}  # green progress
+            if overdue or is_blocked:
+                return {"color": "#ffffff", "color_progress": "#ef4444"}  # red progress
+            if is_on_hold:
+                return {"color": "#ffffff", "color_progress": "#94a3b8"}  # slate progress
+            # Active if explicit status OR progress in (0,100) OR currently within window
+            if is_active_status or has_progress or in_window or (has_started and progress < 100 and not end_dt):
+                return {"color": "#ffffff", "color_progress": "#FF8200"}  # UT orange progress
+            # Planned / not started yet
+            return {"color": "#e5e7eb", "color_progress": "#9ca3af"}  # gray bar, light progress
+
+        for rec in rows:
             name = (rec.get("Project Part") or "").strip()
+            base = slugify(name)
+            candidate = base
+            i = 2
+            while candidate in used:
+                candidate = f"{base}_{i}"
+                i += 1
+            name_to_id[name] = candidate
+            used.add(candidate)
+
+        for rec in rows:
+            name = (rec.get("Project Part") or "").strip()
+            # Normalize fields
             # Start date fallback order: Start Date -> Actual Start Date -> Baseline Start Date
             start_dt = _parse_date(rec.get("Start Date") or "") or \
                        _parse_date(rec.get("Actual Start Date") or "") or \
@@ -100,17 +161,26 @@ def fetch_tasks():
                 progress = int(rec.get("% Complete") or 0)
             except Exception:
                 progress = 0
+            # Dependencies -> map original names to our sanitized IDs
+            deps_raw = (rec.get("Dependencies") or "").strip()
+            deps_list = [d.strip() for d in deps_raw.split(",") if d.strip()]
+            deps_ids = [name_to_id.get(d, slugify(d)) for d in deps_list]
+            # Build task record with safe id
+            colors = choose_colors(rec.get("Status"), progress, start_dt, end_dt)
 
             tasks.append({
-                "id": name,  # simple id; could be improved to a stable unique key
+                "id": name_to_id.get(name, slugify(name)),
                 "name": name,
                 "start": _to_iso(start_dt),  # YYYY-MM-DD
                 "end": _to_iso(end_dt),      # YYYY-MM-DD
                 "progress": progress,
-                "dependencies": (rec.get("Dependencies") or "").strip(),
+                "dependencies": ",".join(deps_ids),
                 "type": (rec.get("Type") or "").strip(),
                 "status": (rec.get("Status") or "").strip(),
+                "internal_external": (rec.get("Internal/External") or "").strip(),
                 "duration": duration,
+                "color": colors["color"],
+                "color_progress": colors["color_progress"],
             })
     finally:
         con.close()
@@ -133,15 +203,50 @@ def static_header_png():
     parent_dir = os.path.dirname(app.root_path)
     return send_from_directory(parent_dir, "header.png")
 
+# Serve a favicon to avoid 404s; prefer header.png, else tiny transparent PNG
+@app.route('/favicon.ico')
+def favicon():
+    parent_dir = os.path.dirname(app.root_path)
+    header_path = os.path.join(parent_dir, 'header.png')
+    if os.path.exists(header_path):
+        return send_from_directory(parent_dir, 'header.png', mimetype='image/png')
+    # 1x1 transparent PNG
+    tiny_png_b64 = (
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQAB'
+        'JzQnWQAAAABJRU5ErkJggg=='
+    )
+    data = base64.b64decode(tiny_png_b64)
+    return Response(data, mimetype='image/png')
+
 # Serve local copies of frappe-gantt assets to avoid CDN issues in embedded browsers
 @app.route("/static/frappe-gantt.css")
 def static_frappe_gantt_css():
-    # Ship a minimal CSS if CDN not available (fallback)
+    # Ship a compact but complete-enough CSS so the chart looks reasonable without the full vendored CSS
     content = (
-        ".gantt .bar { fill: #7db3ff; }\n"
-        ".gantt .bar-progress { fill: #4a90e2; }\n"
-        ".gantt .grid .row { stroke: #eee; }\n"
-        ".gantt .today-highlight { fill: #f8faff; }\n"
+        ":root{--g-arrow-color:#1f2937;--g-bar-color:#fff;--g-bar-border:#fff;--g-tick-color-thick:#ededed;--g-tick-color:#f3f3f3;--g-actions-background:#f3f3f3;--g-border-color:#ebeff2;--g-text-muted:#7c7c7c;--g-text-light:#fff;--g-text-dark:#171717;--g-progress-color:#dbdbdb;--g-handle-color:#37352f;--g-weekend-label-color:#dcdce4;--g-expected-progress:#c4c4e9;--g-header-background:#fff;--g-row-color:#fdfdfd;--g-row-border-color:#c7c7c7;--g-today-highlight:#37352f;--g-popup-actions:#ebeff2;--g-weekend-highlight-color:#f7f7f7;}\n"
+        ".gantt-container{position:relative;overflow:auto;font-size:12px;line-height:14.5px;height:var(--gv-grid-height);width:100%;border-radius:8px;}\n"
+        ".gantt-container .grid-header{height:calc(var(--gv-lower-header-height) + var(--gv-upper-header-height) + 10px);background:var(--g-header-background);position:sticky;top:0;left:0;border-bottom:1px solid var(--g-row-border-color);z-index:1000;}\n"
+        ".gantt-container .upper-header{height:var(--gv-upper-header-height);}\n"
+        ".gantt-container .lower-header{height:var(--gv-lower-header-height);}\n"
+        ".gantt-container .lower-text,.gantt-container .upper-text{text-anchor:middle;}\n"
+        ".gantt-container .lower-text{font-size:12px;position:absolute;width:calc(var(--gv-column-width)*.8);height:calc(var(--gv-lower-header-height)*.8);margin:0 calc(var(--gv-column-width)*.1);align-content:center;text-align:center;color:var(--g-text-muted);}\n"
+        ".gantt-container .upper-text{position:absolute;width:fit-content;font-weight:500;font-size:14px;color:var(--g-text-dark);height:calc(var(--gv-lower-header-height)*.66);}\n"
+        ".gantt-container .current-highlight{position:absolute;background:var(--g-today-highlight);width:1px;z-index:999;}\n"
+        ".gantt{user-select:none;-webkit-user-select:none;position:absolute;}\n"
+        ".gantt .grid-background{fill:none;}\n"
+        ".gantt .grid-row{fill:var(--g-row-color);}\n"
+        ".gantt .row-line{stroke:var(--g-border-color);}\n"
+        ".gantt .tick{stroke:var(--g-tick-color);stroke-width:.4;}\n"
+        ".gantt .tick.thick{stroke:var(--g-tick-color-thick);stroke-width:.7;}\n"
+        ".gantt .arrow{fill:none;stroke:var(--g-arrow-color);stroke-width:1.5;}\n"
+        ".gantt .bar-wrapper .bar{fill:var(--g-bar-color);stroke:var(--g-bar-border);stroke-width:0;outline:1px solid var(--g-row-border-color);border-radius:3px;}\n"
+        ".gantt .bar-progress{fill:var(--g-progress-color);border-radius:4px;}\n"
+        ".gantt .bar-expected-progress{fill:var(--g-expected-progress);}\n"
+        ".gantt .bar-label{fill:var(--g-text-dark);dominant-baseline:central;font-family:Helvetica,Arial,sans-serif;font-size:13px;font-weight:400;}\n"
+        ".gantt .bar-label.big{fill:var(--g-text-dark);text-anchor:start;}\n"
+        ".gantt .handle{fill:var(--g-handle-color);opacity:0;transition:opacity .3s ease;}\n"
+        ".gantt .handle.active,.gantt .handle.visible{cursor:ew-resize;opacity:1;}\n"
+        ".gantt .bar-invalid{fill:transparent;stroke:var(--g-bar-border);stroke-width:1;stroke-dasharray:5;}\n"
     )
     return app.response_class(content_type="text/css", response=content)
 
@@ -151,7 +256,7 @@ def static_vendor_frappe_gantt_css():
     filename = "frappe-gantt.css"
     path = os.path.join(vendor_dir, filename)
     try:
-        if os.path.exists(path) and os.path.getsize(path) >= 10 * 1024:
+        if os.path.exists(path) and os.path.getsize(path) >= 1 * 1024:
             return send_from_directory(vendor_dir, filename)
     except Exception:
         pass

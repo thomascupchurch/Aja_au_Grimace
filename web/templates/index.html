@@ -4,22 +4,47 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Project Gantt (Read-only)</title>
+  <link rel="icon" href="/favicon.ico">
   <!-- Fallback minimal CSS -->
   <link rel="stylesheet" href="/static/frappe-gantt.css">
   <!-- Optional vendored full CSS (overrides) -->
   <link rel="stylesheet" href="/static/vendor/frappe-gantt.css" onerror="this.remove()">
+  <!-- Dark theme overrides to match desktop app (#4B4B4B) -->
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; }
-    header { padding: 12px 16px; background: #222; color: #fff; display:flex; align-items:center; gap:12px; }
+    :root {
+      /* Gantt CSS variable overrides for dark background */
+      --g-header-background: #4B4B4B;
+      --g-row-color: #585858;
+      --g-row-border-color: #6a6a6a;
+      --g-text-dark: #f3f4f6;           /* near-white for labels */
+      --g-text-muted: #d1d5db;          /* light gray */
+      --g-tick-color: #6b7280;          /* slate-ish */
+      --g-tick-color-thick: #81858f;
+      --g-arrow-color: #d1d5db;
+      --g-progress-color: #9ca3af;      /* progress fill on dark */
+      --g-expected-progress: #a7a7d6;
+      --g-today-highlight: #ffffff66;   /* subtle, semi-transparent */
+      --g-actions-background: #4B4B4B;
+      --g-popup-actions: #5b5b5b;
+      --g-weekend-highlight-color: #4B4B4B; /* blend with background to reduce noise */
+      --g-bar-border: transparent;
+    }
+  </style>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; background:#4B4B4B; color:#f5f5f5; }
+    header { padding: 12px 16px; background: #4B4B4B; color: #fff; display:flex; align-items:center; gap:12px; border-bottom:1px solid #6a6a6a; }
     header img { height: 28px; }
-    main { padding: 12px; }
-    #gantt { overflow-x: auto; border-top: 1px solid #eee; }
+    main { padding: 12px; background:#4B4B4B; }
+    #gantt { overflow-x: auto; border-top: 1px solid #6a6a6a; }
     .toolbar { display:flex; gap:8px; align-items:center; padding:8px 0; }
-    .toolbar select, .toolbar button { padding:6px 10px; }
-    .info { margin: 8px 0; color:#444; font-size: 12px; }
-    .empty { padding: 24px; color:#777; text-align:center; }
-    .error { padding: 12px; color: #a00; background:#fee; border:1px solid #fbb; margin:8px 0; }
+    .toolbar select, .toolbar button { padding:6px 10px; background:#fff; color:#222; border:1px solid #cfcfcf; border-radius:6px; }
+    .toolbar label { color:#e5e7eb; }
+    .info { margin: 8px 0; color:#e5e7eb; font-size: 12px; }
+    .empty { padding: 24px; color:#e5e7eb; text-align:center; }
+    .error { padding: 12px; color: #fee; background:#7f1d1d; border:1px solid #fca5a5; margin:8px 0; border-radius:6px; }
     #gantt > div { min-height: 320px; }
+    /* Reduce busyness: hide diagonal hatch for ignored dates */
+    .gantt .ignored-bar { display: none; }
   </style>
 </head>
 <body>
@@ -94,7 +119,7 @@
         return;
       }
 
-      const container = document.createElement('div');
+  const container = document.createElement('div');
       el.appendChild(container);
       // Convert to Date objects to avoid client-side parsing quirks
       const parsed = tasks.map(t => ({
@@ -103,9 +128,61 @@
         end: new Date(t.end)
       }));
       try {
+        // Helper to (re)apply progress colors and add label backgrounds
+        const enhanceBars = () => {
+          if (!gantt) return;
+          // Apply per-task progress color and insert label backgrounds
+          // Remove existing label backgrounds to avoid duplicates
+          gantt.$svg.querySelectorAll('.bar-label-bg').forEach(n => n.remove());
+          for (const t of parsed) {
+            const group = gantt.$svg.querySelector(`.bar-wrapper[data-id="${t.id}"]`);
+            if (!group) continue;
+            const prog = group.querySelector('.bar-progress');
+            if (prog && t.color_progress) {
+              try { prog.style.fill = t.color_progress; } catch {}
+            }
+            // Label background behind text
+            const label = group.querySelector('.bar-label');
+            if (label) {
+              try {
+                const bbox = label.getBBox();
+                const padX = 6, padY = 3, rx = 4;
+                const svg = gantt.$svg;
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', String(bbox.x - padX));
+                rect.setAttribute('y', String(bbox.y - padY));
+                rect.setAttribute('width', String(bbox.width + padX * 2));
+                rect.setAttribute('height', String(bbox.height + padY * 2));
+                rect.setAttribute('rx', String(rx));
+                rect.setAttribute('ry', String(rx));
+                rect.setAttribute('class', 'bar-label-bg');
+                rect.setAttribute('fill', '#FF8200');
+                rect.setAttribute('pointer-events', 'none');
+                const ie = (t.internal_external || '').toLowerCase();
+                const stroke = ie === 'internal' ? '#ffffff' : (ie === 'external' ? '#000000' : 'none');
+                const strokeWidth = stroke === 'none' ? '0' : '1.25';
+                rect.setAttribute('stroke', stroke);
+                rect.setAttribute('stroke-width', strokeWidth);
+                // Insert just before the label so it sits behind it inside the same group
+                label.parentNode.insertBefore(rect, label);
+              } catch {}
+            }
+          }
+        };
+
         gantt = new Gantt(container, parsed, {
           view_mode: document.querySelector('#view-mode').value,
           date_format: 'YYYY-MM-DD',
+          language: 'en',
+          lines: 'vertical',
+          today_button: true,
+          ignore: 'weekend',
+          holidays: { 'var(--g-weekend-highlight-color)': 'weekend' },
+          view_mode_select: true,
+          on_view_change: () => {
+            // Re-apply after DOM updates for new view
+            requestAnimationFrame(enhanceBars);
+          },
           custom_popup_html: task => {
             const fields = [
               ['Name', task.name],
@@ -119,6 +196,8 @@
             return `<div class="details-container">${fields.map(([k,v]) => `<div><strong>${k}:</strong> ${v||''}</div>`).join('')}</div>`;
           }
         });
+        // Apply enhancements after initial render
+        requestAnimationFrame(enhanceBars);
       } catch (e) {
         console.error('Gantt render error', e);
         const err = document.createElement('div');
