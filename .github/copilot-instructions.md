@@ -2,10 +2,10 @@
 - [x] Scaffold the Project
 - [x] Customize the Project
 - [x] Install Required Extensions (none needed)
-- [ ] Compile the Project
-- [ ] Create and Run Task
-- [ ] Launch the Project
-- [ ] Ensure Documentation is Complete
+ - [x] Compile the Project
+ - [x] Create and Run Task
+ - [x] Launch the Project
+ - [x] Ensure Documentation is Complete
 
 ## Progress Summary
 - Project requirements clarified: PyQt5 app with editable Project Tree and read-only Gantt, Calendar, Timeline views.
@@ -13,4 +13,4 @@
 - README.md created with instructions.
 - No VS Code extensions required for this project.
 
-Next steps: Compile (run) the project to verify setup, then update documentation as needed.
+Next steps: Optional – add export settings dialog (paper size/orientation/margins) and extend tests/documentation accordingly.

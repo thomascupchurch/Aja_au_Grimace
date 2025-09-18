@@ -155,6 +155,26 @@ class ProjectDataModel:
 
     def __init__(self):
         self.rows = []  # Each row is a dict with keys as COLUMNS
+        # Resolve DB path with simple override mechanisms suitable for a shared network DB scenario.
+        # Precedence:
+        #  1) Environment variable PROJECT_DB_PATH (UNC or local)
+        #  2) db_path.txt file in the working directory containing a path
+        #  3) Default: project_data.db next to the executable/working dir
+        try:
+            import os
+            env_path = os.environ.get("PROJECT_DB_PATH")
+            if env_path and env_path.strip():
+                self.DB_FILE = env_path.strip()
+            else:
+                cfg_file = os.path.join(os.getcwd(), "db_path.txt")
+                if os.path.exists(cfg_file):
+                    with open(cfg_file, "r", encoding="utf-8") as f:
+                        cfg_path = f.read().strip()
+                        if cfg_path:
+                            self.DB_FILE = cfg_path
+        except Exception:
+            pass
+
         # If running in a PyInstaller one-file bundle, the bundled DB is read-only inside the temp extraction dir.
         # We want user edits to persist next to the executable (current working directory) if no DB exists yet.
         try:
@@ -171,13 +191,26 @@ class ProjectDataModel:
         self.ensure_schema()
         self.load_from_db()
 
+    def _connect(self):
+        """Return an sqlite3 connection with WAL and busy timeout configured."""
+        import sqlite3
+        conn = sqlite3.connect(self.DB_FILE)
+        try:
+            cur = conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=5000")  # 5s
+            conn.commit()
+        except Exception:
+            pass
+        return conn
+
     # --- Schema migration to add progress columns if missing ---
     def ensure_schema(self):
         import sqlite3, os
         if not os.path.exists(self.DB_FILE):
             # Table will be created later in create_table()
             return
-        with sqlite3.connect(self.DB_FILE) as conn:
+        with self._connect() as conn:
             c = conn.cursor()
             # Inspect existing columns
             try:
@@ -256,7 +289,7 @@ class ProjectDataModel:
         if not os.path.exists(self.DB_FILE):
             self.create_table()
             return
-        with sqlite3.connect(self.DB_FILE) as conn:
+        with self._connect() as conn:
             c = conn.cursor()
             c.execute(f"SELECT {', '.join([f'\"{col}\"' for col in self.COLUMNS])} FROM project_parts")
             for row in c.fetchall():
@@ -307,7 +340,7 @@ class ProjectDataModel:
         # Roll-ups before save to persist auto-calculated parent progress
         self.rollup_progress()
         self.create_table()
-        with sqlite3.connect(self.DB_FILE) as conn:
+        with self._connect() as conn:
             c = conn.cursor()
             c.execute("DELETE FROM project_parts")
             for row in self.rows:
@@ -318,7 +351,7 @@ class ProjectDataModel:
 
     def create_table(self):
         import sqlite3
-        with sqlite3.connect(self.DB_FILE) as conn:
+        with self._connect() as conn:
             c = conn.cursor()
             fields = ", ".join([f'"{col}" TEXT' for col in self.COLUMNS])
             c.execute(f"""
@@ -345,7 +378,7 @@ class ProjectDataModel:
         import sqlite3, os
         if not os.path.exists(self.DB_FILE):
             return []
-        with sqlite3.connect(self.DB_FILE) as conn:
+        with self._connect() as conn:
             c = conn.cursor()
             try:
                 c.execute("SELECT DISTINCT baseline_name FROM baselines ORDER BY baseline_name")
@@ -357,7 +390,7 @@ class ProjectDataModel:
         import sqlite3, datetime
         if not name:
             return
-        with sqlite3.connect(self.DB_FILE) as conn:
+        with self._connect() as conn:
             c = conn.cursor()
             for r in self.rows:
                 part = r.get("Project Part", "")
@@ -390,7 +423,7 @@ class ProjectDataModel:
             return {}
         if not os.path.exists(self.DB_FILE):
             return {}
-        with sqlite3.connect(self.DB_FILE) as conn:
+        with self._connect() as conn:
             c = conn.cursor()
             try:
                 c.execute("SELECT part_name, start_date, end_date FROM baselines WHERE baseline_name=?", (name,))
@@ -3217,6 +3250,72 @@ class DatabaseView(QWidget):
 
 
 class MainWindow(QMainWindow):
+    def _open_holidays_manager(self):
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QLineEdit, QMessageBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Manage Holidays")
+        v = QVBoxLayout(dlg)
+        lst = QListWidget()
+        # Load existing holidays
+        dates = []
+        try:
+            for d in sorted(load_holiday_dates()):
+                dates.append(d.strftime("%m-%d-%Y"))
+        except Exception:
+            pass
+        for ds in dates:
+            lst.addItem(ds)
+        # Input row
+        row = QHBoxLayout()
+        inp = QLineEdit(); inp.setPlaceholderText("MM-dd-YYYY")
+        add_btn = QPushButton("Add")
+        rem_btn = QPushButton("Remove Selected")
+        def add_date():
+            val = inp.text().strip()
+            if not val:
+                return
+            import datetime as _dt
+            try:
+                _dt.datetime.strptime(val, "%m-%d-%Y")
+            except Exception:
+                QMessageBox.warning(dlg, "Invalid date", "Use format MM-dd-YYYY")
+                return
+            # Avoid duplicates
+            for i in range(lst.count()):
+                if lst.item(i).text() == val:
+                    return
+            lst.addItem(val)
+            inp.clear()
+        def remove_sel():
+            for it in lst.selectedItems():
+                row = lst.row(it)
+                lst.takeItem(row)
+        add_btn.clicked.connect(add_date)
+        rem_btn.clicked.connect(remove_sel)
+        row.addWidget(inp); row.addWidget(add_btn); row.addWidget(rem_btn)
+        v.addWidget(lst)
+        v.addLayout(row)
+        # Save/Close
+        btns = QHBoxLayout(); ok = QPushButton("Save"); cancel = QPushButton("Close")
+        def do_save():
+            vals = [lst.item(i).text() for i in range(lst.count())]
+            save_holiday_dates(vals)
+            # Refresh views to apply shading
+            try:
+                if hasattr(self, 'gantt_chart_view'):
+                    self.gantt_chart_view.render_gantt(self.model)
+                if hasattr(self, 'timeline_view'):
+                    self.timeline_view.render_timeline()
+                if self.statusBar():
+                    self.statusBar().showMessage("Holidays saved", 2500)
+            except Exception:
+                pass
+        ok.clicked.connect(do_save)
+        cancel.clicked.connect(dlg.close)
+        btns.addWidget(ok); btns.addWidget(cancel)
+        v.addLayout(btns)
+        dlg.setLayout(v)
+        dlg.exec_()
     def on_data_changed(self):
         # Refresh all views when data changes
         if hasattr(self, 'project_tree_view'):
@@ -3538,6 +3637,8 @@ class MainWindow(QMainWindow):
             mb = self.menuBar(); tools_menu = mb.addMenu("Tools")
             act = tools_menu.addAction("Open Data Folder")
             act.triggered.connect(self.open_data_folder)
+            act2 = tools_menu.addAction("Manage Holidays…")
+            act2.triggered.connect(self._open_holidays_manager)
 
             # Now that all views are constructed, connect sidebar signals and set current row
             self.sidebar.currentRowChanged.connect(self.display_view)

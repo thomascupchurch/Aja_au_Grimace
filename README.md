@@ -7,7 +7,7 @@ A desktop project planning & visualization tool built with PyQt5 + QGraphicsScen
 | View | Purpose | Editable | Notes |
 |------|---------|----------|-------|
 | Project Tree | Create / edit / delete project parts and their attributes | YES | Persists immediately to SQLite |
-| Gantt Chart | Time‑scaled bar chart with dependencies, hierarchy connectors, critical path, and progress overlays | NO | Hover & click interactivity |
+| Gantt Chart | Time‑scaled bar chart with dependencies, hierarchy connectors, critical path, and progress overlays | NO | Hover/click, zoom/pan, fit‑to‑view, baselines overlay |
 | Calendar | Month-style placement of items | NO | Read-only snapshot |
 | Project Timeline | Linear condensed horizontal timeline | NO | White text theme |
 | Progress Dashboard | Aggregated metrics (% complete, risk counts, etc.) | NO | Auto-derived rollups |
@@ -17,8 +17,9 @@ A desktop project planning & visualization tool built with PyQt5 + QGraphicsScen
 - Hierarchical project parts (Phase / Feature / Item) with parent roll‑up of: % Complete, Status
 - Weighted progress aggregation (duration-weighted averaging)
 - Automatic schema migration (new columns appended without data loss)
-- Baseline capture (first valid start/duration snapshot)
+- Baseline snapshots (save named snapshots; select one to overlay on the Gantt)
 - Working-day end date calculation (skips weekends)
+- Weekend and holiday shading (holidays loaded from `holidays.json`)
 - Critical path detection & gold highlighting of bars and connectors
 - Dependency rendering with L‑shaped routed connectors
 - Parent → child fan‑out connectors with animated fade & highlight emphasis
@@ -34,7 +35,7 @@ A desktop project planning & visualization tool built with PyQt5 + QGraphicsScen
 - SQLite persistence with immediate save on change
 - PyInstaller build support (spec file present)
 - Attachment linking per task with paperclip indicator & thumbnail preview fallback
-- Export Gantt or Timeline to PNG / PDF (scene render)
+- Export Gantt or Timeline to PNG / PDF (scene render) with automatic horizontal PDF pagination and page header image
 - Search / jump-to-task field centers & highlights first matching bar
 - Filter panel (status, internal/external, responsible substring, critical-only, risk-only) with ancestor auto-include
 - Persistent filter settings across sessions (QSettings)
@@ -69,7 +70,7 @@ pip install -r requirements.txt
 
 Use the built-in task:
 
-1. Press Ctrl+Shift+P → Run Task → "Run Project Management App"  (or Terminal → Run Task...)
+1. Press Ctrl+Shift+P → Run Task → "Run App (PyQt5)"  (or Terminal → Run Task...)
 2. Or manually:
    ```powershell
    .venv\Scripts\python.exe main.py
@@ -99,6 +100,21 @@ python -m PyInstaller main_onefile.spec  # one-file
 ```
 
 If images do not appear in the packaged build, confirm they are collected—adjust the spec's datas list accordingly.
+
+## Shortcuts & Navigation
+
+- Zoom: Ctrl + Mouse Wheel, or keyboard +/‑ (Zoom In/Out)
+- Reset Zoom: Ctrl+0
+- Fit to View: button in Gantt and Timeline toolbars
+- Fit Selection (Gantt): fits selected bar(s), or the locked/highlighted bar if none selected
+- Pan: click‑and‑drag (hand tool)
+
+Zoom level persists per view across sessions.
+
+## Baselines & Business Calendar
+
+- Baselines: Use the Baseline dropdown in the Gantt to select a snapshot to overlay. Click "Save Baseline…" to capture the current schedule as a named snapshot stored in SQLite.
+- Holidays: Add date strings (MM‑dd‑YYYY) to `holidays.json` in the app folder to shade non‑working days in the Gantt and Timeline. Weekends are shaded automatically.
 
 ## Import / Export CLI
 
