@@ -34,6 +34,40 @@ def resolve_resource_path(path: str) -> str:
             return c
     return candidates[0] if candidates else path
 
+# --- Holidays helper (business calendar) ---
+HOLIDAYS_FILE = "holidays.json"
+def _holidays_path():
+    import os
+    base_dir = os.path.dirname(resolve_resource_path("."))
+    return os.path.join(base_dir, HOLIDAYS_FILE)
+
+def load_holiday_dates():
+    """Return a set of datetime.date objects for holidays stored in holidays.json (MM-dd-YYYY)."""
+    import json, os, datetime
+    p = _holidays_path()
+    out = set()
+    try:
+        if os.path.exists(p):
+            data = json.load(open(p, "r", encoding="utf-8"))
+            for s in data if isinstance(data, list) else []:
+                try:
+                    dt = datetime.datetime.strptime(s, "%m-%d-%Y").date()
+                    out.add(dt)
+                except Exception:
+                    pass
+    except Exception:
+        return set()
+    return out
+
+def save_holiday_dates(dates):
+    """Persist a set/iterable of date strings formatted MM-dd-YYYY to holidays.json."""
+    import json
+    p = _holidays_path()
+    try:
+        json.dump(sorted(list(dates)), open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 class ImageCellWidget(QWidget):
     def __init__(self, parent, row, col, model, on_data_changed=None):
         super().__init__(parent)
@@ -164,6 +198,21 @@ class ProjectDataModel:
                     c.execute(f'ALTER TABLE project_parts ADD COLUMN "{col}" {col_type}')
                 except Exception:
                     pass
+            # Baselines table for named snapshots
+            try:
+                c.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS baselines (
+                        baseline_name TEXT NOT NULL,
+                        part_name TEXT NOT NULL,
+                        start_date TEXT,
+                        end_date TEXT,
+                        PRIMARY KEY (baseline_name, part_name)
+                    )
+                    """
+                )
+            except Exception:
+                pass
             conn.commit()
 
     def add_row(self, data, parent=None):
@@ -278,7 +327,79 @@ class ProjectDataModel:
                     {fields}
                 )
             """)
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS baselines (
+                    baseline_name TEXT NOT NULL,
+                    part_name TEXT NOT NULL,
+                    start_date TEXT,
+                    end_date TEXT,
+                    PRIMARY KEY (baseline_name, part_name)
+                )
+                """
+            )
             conn.commit()
+
+    # --- Baseline snapshots API ---
+    def list_baselines(self):
+        import sqlite3, os
+        if not os.path.exists(self.DB_FILE):
+            return []
+        with sqlite3.connect(self.DB_FILE) as conn:
+            c = conn.cursor()
+            try:
+                c.execute("SELECT DISTINCT baseline_name FROM baselines ORDER BY baseline_name")
+                return [r[0] for r in c.fetchall()]
+            except Exception:
+                return []
+
+    def save_baseline(self, name: str):
+        import sqlite3, datetime
+        if not name:
+            return
+        with sqlite3.connect(self.DB_FILE) as conn:
+            c = conn.cursor()
+            for r in self.rows:
+                part = r.get("Project Part", "")
+                s = r.get("Start Date", "")
+                e = r.get("Calculated End Date", "")
+                if not e and s and r.get("Duration (days)"):
+                    try:
+                        sd = datetime.datetime.strptime(s, "%m-%d-%Y")
+                        d = int(r.get("Duration (days)") or 0)
+                        e = (sd + datetime.timedelta(days=d)).strftime("%m-%d-%Y")
+                    except Exception:
+                        e = ""
+                try:
+                    c.execute(
+                        """
+                        INSERT INTO baselines (baseline_name, part_name, start_date, end_date)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(baseline_name, part_name)
+                        DO UPDATE SET start_date=excluded.start_date, end_date=excluded.end_date
+                        """,
+                        (name, part, s, e)
+                    )
+                except Exception:
+                    pass
+            conn.commit()
+
+    def load_baseline_map(self, name: str):
+        import sqlite3, os
+        if not name:
+            return {}
+        if not os.path.exists(self.DB_FILE):
+            return {}
+        with sqlite3.connect(self.DB_FILE) as conn:
+            c = conn.cursor()
+            try:
+                c.execute("SELECT part_name, start_date, end_date FROM baselines WHERE baseline_name=?", (name,))
+                out = {}
+                for part, s, e in c.fetchall():
+                    out[part] = (s or "", e or "")
+                return out
+            except Exception:
+                return {}
 
     def update_calculated_end_dates(self):
         import datetime
@@ -667,6 +788,7 @@ class ZoomableGraphicsView(QGraphicsView):
         super().__init__(*args, **kwargs)
         self._zoom = 0
         self.setDragMode(QGraphicsView.ScrollHandDrag)
+        self._settings_key = None  # e.g., 'GanttZoom' or 'TimelineZoom'
 
     def wheelEvent(self, event):
         if event.modifiers() & Qt.ControlModifier:
@@ -688,10 +810,50 @@ class ZoomableGraphicsView(QGraphicsView):
     def zoomIn(self):
         self._zoom += 1
         self.scale(1.2, 1.2)
+        self._persist_zoom()
 
     def zoomOut(self):
         self._zoom -= 1
         self.scale(1/1.2, 1/1.2)
+        self._persist_zoom()
+
+    def resetZoom(self):
+        self.resetTransform()
+        self._zoom = 0
+        self._persist_zoom()
+
+    def setSettingsKey(self, key: str):
+        self._settings_key = key
+        self._restore_zoom()
+
+    def _persist_zoom(self):
+        if not self._settings_key:
+            return
+        try:
+            from PyQt5.QtCore import QSettings
+            s = QSettings("LSI", "ProjectPlanner")
+            # store current scale factor from transform
+            s.setValue(self._settings_key, float(self.transform().m11()))
+        except Exception:
+            pass
+
+    def _restore_zoom(self):
+        if not self._settings_key:
+            return
+        try:
+            from PyQt5.QtCore import QSettings
+            s = QSettings("LSI", "ProjectPlanner")
+            val = s.value(self._settings_key, None)
+            if val is not None:
+                try:
+                    scale_factor = float(val)
+                    self.resetTransform()
+                    # apply uniform scale on both axes
+                    self.scale(scale_factor, scale_factor)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
 
 class GanttChartView(QWidget):
@@ -1037,23 +1199,37 @@ class GanttChartView(QWidget):
         if is_pdf:
             # Use QPrinter for PDF
             from PyQt5.QtPrintSupport import QPrinter
+            from PyQt5.QtCore import QRectF
+            from math import ceil
             printer = QPrinter(QPrinter.HighResolution)
             printer.setOutputFileName(path)
             printer.setOutputFormat(QPrinter.PdfFormat)
-            # Landscape orientation assumed
             painter = QPainter(printer)
+            page_rect = printer.pageRect()
             y_offset = 0
             if header_pixmap:
-                header_w = printer.pageRect().width()
+                header_w = page_rect.width()
                 scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
-                painter.drawPixmap( (header_w - scaled_header.width())//2 , 0, scaled_header)
+                painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
                 y_offset = scaled_header.height() + 10
-            painter.translate(0, y_offset)
-            scale_x = printer.pageRect().width() / rect.width()
-            scale_y = (printer.pageRect().height() - y_offset) / rect.height()
-            scale = min(scale_x, scale_y)
-            painter.scale(scale, scale)
-            scene.render(painter)
+            avail_h = max(1, page_rect.height() - y_offset)
+            scale = avail_h / rect.height()
+            scaled_total_w = max(1.0, rect.width() * scale)
+            cols = max(1, int(ceil(scaled_total_w / page_rect.width())))
+            for col in range(cols):
+                if col > 0:
+                    printer.newPage()
+                    if header_pixmap:
+                        header_w = page_rect.width()
+                        scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
+                        painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
+                painter.save()
+                painter.translate(0, y_offset)
+                painter.scale(scale, scale)
+                source_x = (col * page_rect.width()) / scale
+                source = QRectF(source_x, 0, page_rect.width() / scale, rect.height())
+                scene.render(painter, target=QRectF(0, 0, page_rect.width(), rect.height() * scale), source=source)
+                painter.restore()
             painter.end()
             print(f"Exported PDF -> {path}")
             return
@@ -1085,6 +1261,7 @@ class GanttChartView(QWidget):
         self.view = ZoomableGraphicsView()
         self.scene = QGraphicsScene()
         self.view.setScene(self.scene)
+        self.view.setSettingsKey("GanttZoom")
         layout.addWidget(self.view)
 
         # Initialize filtering state
@@ -1122,26 +1299,120 @@ class GanttChartView(QWidget):
         self.critical_path_checkbox.stateChanged.connect(lambda _s: self.refresh_gantt())
         layout.addWidget(self.critical_path_checkbox)
 
+        # Baseline controls
+        baseline_row = QHBoxLayout()
+        from PyQt5.QtWidgets import QComboBox
+        self.baseline_combo = QComboBox()
+        self.baseline_combo.addItem("None")
+        self.baseline_combo.setToolTip("Overlay a saved baseline snapshot")
+        def _on_baseline_change(txt):
+            self._selected_baseline_name = txt if txt and txt != "None" else None
+            self.refresh_gantt()
+        self.baseline_combo.currentTextChanged.connect(_on_baseline_change)
+        def _save_baseline():
+            from PyQt5.QtWidgets import QInputDialog
+            name, ok = QInputDialog.getText(self, "Save Baseline", "Baseline name:")
+            if ok and name:
+                try:
+                    if hasattr(self, 'model') and self.model:
+                        self.model.save_baseline(name)
+                        self._populate_baselines()
+                        # auto-select the newly saved baseline for overlay
+                        idx = self.baseline_combo.findText(name)
+                        if idx >= 0:
+                            self.baseline_combo.setCurrentIndex(idx)
+                except Exception as e:
+                    print(f"Save baseline failed: {e}")
+        save_baseline_btn = QPushButton("Save Baseline…")
+        save_baseline_btn.clicked.connect(_save_baseline)
+        baseline_row.addWidget(QLabel("Baseline:"))
+        baseline_row.addWidget(self.baseline_combo)
+        baseline_row.addWidget(save_baseline_btn)
+        layout.addLayout(baseline_row)
+
         # Zoom controls
         zoom_layout = QHBoxLayout()
         zoom_in_btn = QPushButton("Zoom In")
         zoom_out_btn = QPushButton("Zoom Out")
         zoom_reset_btn = QPushButton("Reset Zoom")
-        zoom_in_btn.clicked.connect(lambda: self.view.scale(1.2, 1.2))
-        zoom_out_btn.clicked.connect(lambda: self.view.scale(1/1.2, 1/1.2))
+        zoom_in_btn.clicked.connect(self.view.zoomIn)
+        zoom_out_btn.clicked.connect(self.view.zoomOut)
         zoom_reset_btn.clicked.connect(self.reset_zoom)
+        fit_all_btn = QPushButton("Fit to View")
+        fit_sel_btn = QPushButton("Fit Selection")
+        def _fit_all():
+            r = self.scene.itemsBoundingRect()
+            if not r.isNull():
+                self.view.fitInView(r, Qt.KeepAspectRatio)
+        fit_all_btn.clicked.connect(_fit_all)
+        def _fit_sel():
+            items = [it for it in self.scene.selectedItems()]
+            from PyQt5.QtCore import QRectF
+            if items:
+                rect = QRectF()
+                for it in items:
+                    rect = rect.united(it.sceneBoundingRect())
+                if not rect.isNull():
+                    self.view.fitInView(rect, Qt.KeepAspectRatio)
+                    return
+            # fallback to locked/highlighted bar
+            name = getattr(self, '_locked_label', None)
+            if name and name in getattr(self, '_name_to_rect', {}):
+                rect = self._name_to_rect[name].sceneBoundingRect()
+                self.view.fitInView(rect.adjusted(-40, -20, 40, 20), Qt.KeepAspectRatio)
+            else:
+                _fit_all()
+        fit_sel_btn.clicked.connect(_fit_sel)
         zoom_layout.addWidget(zoom_in_btn)
         zoom_layout.addWidget(zoom_out_btn)
         zoom_layout.addWidget(zoom_reset_btn)
+        zoom_layout.addWidget(fit_all_btn)
+        zoom_layout.addWidget(fit_sel_btn)
         layout.addLayout(zoom_layout)
 
         self.setLayout(layout)
+        # Keyboard shortcuts
+        try:
+            from PyQt5.QtWidgets import QShortcut
+            from PyQt5.QtGui import QKeySequence
+            QShortcut(QKeySequence.ZoomIn, self.view, activated=self.view.zoomIn)
+            QShortcut(QKeySequence.ZoomOut, self.view, activated=self.view.zoomOut)
+            QShortcut(QKeySequence("Ctrl+0"), self.view, activated=self.reset_zoom)
+        except Exception:
+            pass
+
+    def _populate_baselines(self):
+        try:
+            if not hasattr(self, 'model') or not self.model:
+                return
+            current = self.baseline_combo.currentText() if hasattr(self, 'baseline_combo') else "None"
+            self.baseline_combo.blockSignals(True)
+            self.baseline_combo.clear()
+            self.baseline_combo.addItem("None")
+            for b in self.model.list_baselines():
+                self.baseline_combo.addItem(b)
+            # restore selection
+            idx = self.baseline_combo.findText(current)
+            if idx >= 0:
+                self.baseline_combo.setCurrentIndex(idx)
+            self.baseline_combo.blockSignals(False)
+        except Exception as e:
+            print(f"Populate baselines failed: {e}")
 
     def reset_zoom(self):
-        self.view.resetTransform()
+        # Reset zoom via the view helper (also persists state)
+        if hasattr(self, 'view') and self.view:
+            try:
+                self.view.resetZoom()
+            except Exception:
+                # Fallback for older code paths
+                self.view.resetTransform()
 
     def refresh_gantt(self):
         if hasattr(self, 'model') and self.model:
+            # keep baseline list up to date
+            if hasattr(self, '_populate_baselines'):
+                self._populate_baselines()
             self.render_gantt(self.model)
 
     # Unified connector + label highlighting
@@ -1361,7 +1632,7 @@ class GanttChartView(QWidget):
 
         chart_min_date = min_date  # earliest start
 
-        # ---------- Draw bars ----------
+    # ---------- Draw bars ----------
         from PyQt5.QtGui import QColor
         from PyQt5.QtWidgets import QGraphicsRectItem, QGraphicsItem
         gantt_color = QColor("#FF8200")
@@ -1633,6 +1904,33 @@ class GanttChartView(QWidget):
         left_margin = 60
         bar_offset_x = left_margin
         self._name_to_text_item = {}
+        # Weekend/holiday background shading for full chart span
+        try:
+            from PyQt5.QtGui import QBrush
+            from datetime import timedelta
+            shade_wknd = QBrush(QColor(220,220,220,120))
+            holidays = load_holiday_dates()
+            shade_hol = QBrush(QColor(255,215,0,60))
+            cur = chart_min_date
+            while cur <= max_date:
+                # weekend
+                if cur.weekday() >= 5:
+                    run_start = cur
+                    while cur <= max_date and cur.weekday() >= 5:
+                        cur += timedelta(days=1)
+                    run_end = cur
+                    x0 = (run_start - chart_min_date).days * 10 + bar_offset_x
+                    x1 = (run_end - chart_min_date).days * 10 + bar_offset_x
+                    self.scene.addRect(x0, 0, max(1, x1-x0), len(bars)*(bar_height+bar_gap)+80, pen=Qt.NoPen, brush=shade_wknd)
+                else:
+                    # holidays (single days)
+                    if cur.date() in holidays:
+                        x0 = (cur - chart_min_date).days * 10 + bar_offset_x
+                        self.scene.addRect(x0, 0, 10, len(bars)*(bar_height+bar_gap)+80, pen=Qt.NoPen, brush=shade_hol)
+                    cur += timedelta(days=1)
+        except Exception:
+            pass
+
         for name, start, duration, i, r in bars:
             x = (start - chart_min_date).days * 10 + bar_offset_x
             y = i * (bar_height + bar_gap) + 40
@@ -1719,6 +2017,36 @@ class GanttChartView(QWidget):
             self._name_to_text_item[name] = text_item
             name_to_bar[name] = (x, y, width, bar_height)
             bar_items.append((rect, r))
+
+        # Baseline overlay (thin background lines)
+        try:
+            baseline_name = getattr(self, '_selected_baseline_name', None)
+            if baseline_name:
+                bmap = self.model.load_baseline_map(baseline_name)
+                from PyQt5.QtGui import QPen
+                pen = QPen(QColor(150,150,150))
+                pen.setStyle(Qt.DashLine); pen.setWidth(1)
+                for name, pos in name_to_bar.items():
+                    if name in bmap:
+                        bs, be = bmap[name]
+                        import datetime as _dtb
+                        try:
+                            if bs:
+                                s = _dtb.datetime.strptime(bs, "%m-%d-%Y")
+                            else:
+                                continue
+                            if be:
+                                e = _dtb.datetime.strptime(be, "%m-%d-%Y")
+                            else:
+                                continue
+                            x0 = (s - chart_min_date).days * 10 + bar_offset_x
+                            x1 = (e - chart_min_date).days * 10 + bar_offset_x
+                            y = pos[1] + pos[3]//2
+                            self.scene.addLine(x0, y, x1, y, pen)
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"Baseline overlay failed: {e}")
 
         # ---------- Selection handling ----------
         self._bar_rect_to_row = {}
@@ -2078,9 +2406,11 @@ class TimelineView(QWidget):
         self.model = model
         layout = QVBoxLayout()
         layout.addWidget(QLabel("Project Timeline (Read-Only)"))
-        from PyQt5.QtWidgets import QGraphicsView, QGraphicsScene
+        from PyQt5.QtWidgets import QGraphicsScene
         self.scene = QGraphicsScene()
-        self.view = QGraphicsView(self.scene)
+        self.view = ZoomableGraphicsView()
+        self.view.setScene(self.scene)
+        self.view.setSettingsKey("TimelineZoom")
         layout.addWidget(self.view)
         # Export buttons
         from PyQt5.QtWidgets import QHBoxLayout, QPushButton
@@ -2099,12 +2429,38 @@ class TimelineView(QWidget):
                 print(f"Timeline export failed: {e}")
         export_png_btn.clicked.connect(_do_export)
         export_row.addWidget(export_png_btn)
+        # Zoom / Fit controls
+        zoom_in_btn = QPushButton("Zoom In")
+        zoom_out_btn = QPushButton("Zoom Out")
+        zoom_reset_btn = QPushButton("Reset Zoom")
+        fit_all_btn = QPushButton("Fit to View")
+        zoom_in_btn.clicked.connect(self.view.zoomIn)
+        zoom_out_btn.clicked.connect(self.view.zoomOut)
+        zoom_reset_btn.clicked.connect(self.view.resetZoom)
+        def _fit_all_tl():
+            r = self.scene.itemsBoundingRect()
+            if not r.isNull():
+                self.view.fitInView(r, Qt.KeepAspectRatio)
+        fit_all_btn.clicked.connect(_fit_all_tl)
+        export_row.addWidget(zoom_in_btn)
+        export_row.addWidget(zoom_out_btn)
+        export_row.addWidget(zoom_reset_btn)
+        export_row.addWidget(fit_all_btn)
         layout.addLayout(export_row)
         self.preview_label = QLabel()
         self.preview_label.setFixedHeight(200)
         self.preview_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.preview_label)
         self.setLayout(layout)
+        # Keyboard shortcuts for zoom
+        try:
+            from PyQt5.QtWidgets import QShortcut
+            from PyQt5.QtGui import QKeySequence
+            QShortcut(QKeySequence.ZoomIn, self.view, activated=self.view.zoomIn)
+            QShortcut(QKeySequence.ZoomOut, self.view, activated=self.view.zoomOut)
+            QShortcut(QKeySequence("Ctrl+0"), self.view, activated=self.view.resetZoom)
+        except Exception:
+            pass
         self.render_timeline()
 
     def render_timeline(self):
@@ -2369,6 +2725,25 @@ class TimelineView(QWidget):
                     self.scene.addLine(parent_mid_x, (parent_bottom + child_top) // 2, child_mid_x, (parent_bottom + child_top) // 2, pen)
                     # Vertical line down to child
                     self.scene.addLine(child_mid_x, (parent_bottom + child_top) // 2, child_mid_x, child_top, pen)
+        # Weekend shading (Sat/Sun) for readability
+        try:
+            from PyQt5.QtGui import QBrush, QColor
+            from datetime import timedelta
+            shade = QBrush(QColor(220, 220, 220, 120))
+            cur = min_date
+            while cur <= max_date:
+                if cur.weekday() >= 5:
+                    run_start = cur
+                    while cur <= max_date and cur.weekday() >= 5:
+                        cur += timedelta(days=1)
+                    run_end = cur
+                    x0 = bar_offset_x + (run_start - min_date).days * 8
+                    x1 = bar_offset_x + (run_end - min_date).days * 8
+                    self.scene.addRect(x0, 0, max(1, x1 - x0), y + 30, pen=Qt.NoPen, brush=shade)
+                else:
+                    cur += timedelta(days=1)
+        except Exception:
+            pass
         # Draw x-axis with date marks every 7 days
         axis_y = 20
         axis_x0 = bar_offset_x
