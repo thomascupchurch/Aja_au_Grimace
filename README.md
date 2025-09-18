@@ -76,6 +76,40 @@ Use the built-in task:
    .venv\Scripts\python.exe main.py
    ```
 
+## Read-only Web Viewer (Flask)
+
+For quick sharing in a browser, a minimal web viewer is included (read-only Gantt):
+
+- Requirements: `Flask` (already listed in `requirements.txt`).
+- Uses the same database as the desktop app. It honors `PROJECT_DB_PATH` or a `db_path.txt` file for the SQLite path; otherwise defaults to `project_data.db` in the workspace.
+
+Run locally (VS Code Task):
+
+1. Ctrl+Shift+P → Run Task → "Run Web Viewer (Flask)"
+2. Open http://127.0.0.1:5000 in your browser.
+
+Manual run:
+
+```powershell
+.venv\Scripts\python.exe .\web\app.py
+```
+
+PythonAnywhere (notes):
+- Create a new Flask app; point WSGI to `web/app.py` and set the working directory to the project folder.
+- Ensure `Flask` is installed in the PythonAnywhere virtualenv.
+- Configure `PROJECT_DB_PATH` (if using a shared DB) or upload a snapshot `project_data.db` for read-only viewing.
+- Static assets load via CDN; optional `header.png` can be served via a static mapping to your workspace file.
+
+### Vendoring frontend assets (offline / restricted networks)
+
+The web viewer prefers a local copy of the Gantt JS to avoid flaky CDNs. Place either file in `web/static/vendor/`:
+
+- `frappe-gantt.umd.js` (preferred UMD build) or
+- `frappe-gantt.min.js` (minified build)
+- Optional styles: `frappe-gantt.css`
+
+If neither JS file exists, the page will try the CDN and, if that fails, falls back to a tiny local stub that shows a preview instead of the interactive chart. You can source the files from a trusted machine and copy them into the folder. The route `/static/vendor/frappe-gantt.umd.js` will serve `.umd.js` if present, else `.min.js`. If `frappe-gantt.css` exists, it's loaded after the fallback CSS and will take precedence.
+
 ## Building a Frozen Executable (Windows)
 
 PyInstaller spec files are provided for two build modes:

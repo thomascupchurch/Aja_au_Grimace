@@ -1,0 +1,143 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Project Gantt (Read-only)</title>
+  <!-- Fallback minimal CSS -->
+  <link rel="stylesheet" href="/static/frappe-gantt.css">
+  <!-- Optional vendored full CSS (overrides) -->
+  <link rel="stylesheet" href="/static/vendor/frappe-gantt.css" onerror="this.remove()">
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; }
+    header { padding: 12px 16px; background: #222; color: #fff; display:flex; align-items:center; gap:12px; }
+    header img { height: 28px; }
+    main { padding: 12px; }
+    #gantt { overflow-x: auto; border-top: 1px solid #eee; }
+    .toolbar { display:flex; gap:8px; align-items:center; padding:8px 0; }
+    .toolbar select, .toolbar button { padding:6px 10px; }
+    .info { margin: 8px 0; color:#444; font-size: 12px; }
+    .empty { padding: 24px; color:#777; text-align:center; }
+    .error { padding: 12px; color: #a00; background:#fee; border:1px solid #fbb; margin:8px 0; }
+    #gantt > div { min-height: 320px; }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="/static/header.png" alt="Header" onerror="this.style.display='none'"/>
+    <div>Project Gantt (Read-only)</div>
+  </header>
+  <main>
+    <div class="toolbar">
+      <label>View:</label>
+      <select id="view-mode">
+        <option value="Day">Day</option>
+        <option value="Week">Week</option>
+        <option value="Month">Month</option>
+        <option value="Year">Year</option>
+      </select>
+      <button id="refresh">Refresh</button>
+    </div>
+    <div class="info" id="db-info"></div>
+    <div class="info" id="status"></div>
+    <div id="gantt"></div>
+  </main>
+
+  <!-- Prefer local vendored asset (.min.js or .umd.js); fall back to CDN; then to tiny local stub route -->
+  <script>
+    (function(){
+      function inject(src, next){
+        var s=document.createElement('script');
+        s.src=src;
+        s.onload=function(){
+          // If script loaded but didn't define Gantt, continue chain
+          if(typeof window.Gantt !== 'function') {
+            if(next) next();
+          }
+        };
+        s.onerror=function(){ if(next) next(); };
+        document.body.appendChild(s);
+      }
+      // try local vendor (serves .umd.js or .min.js if present & valid)
+      inject('/static/vendor/frappe-gantt.umd.js', function(){
+        // try CDN UMD
+        inject('https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.umd.js', function(){
+          // final local stub
+          inject('/static/frappe-gantt.umd.js');
+        });
+      });
+    })();
+  </script>
+  <script>
+    let gantt;
+
+    async function loadTasks() {
+      // Show DB path and row count to help diagnose empty data
+      try {
+        const dbg = await fetch('/api/debug').then(r => r.json());
+        const info = document.querySelector('#db-info');
+        info.textContent = `DB: ${dbg.db_path || 'unknown'} | exists: ${dbg.db_exists} | project_parts rows: ${dbg.row_count}`;
+      } catch (e) {
+        console.warn('debug fetch failed', e);
+      }
+
+      const res = await fetch('/api/tasks');
+      const tasks = await res.json();
+      document.querySelector('#status').textContent = `Tasks fetched: ${tasks?.length ?? 0}`;
+      const el = document.querySelector('#gantt');
+      el.innerHTML = '';
+      if (!tasks || tasks.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'No tasks to show. Verify your database path (PROJECT_DB_PATH or db_path.txt) and that project_parts has data.';
+        el.appendChild(empty);
+        return;
+      }
+
+      const container = document.createElement('div');
+      el.appendChild(container);
+      // Convert to Date objects to avoid client-side parsing quirks
+      const parsed = tasks.map(t => ({
+        ...t,
+        start: new Date(t.start),
+        end: new Date(t.end)
+      }));
+      try {
+        gantt = new Gantt(container, parsed, {
+          view_mode: document.querySelector('#view-mode').value,
+          date_format: 'YYYY-MM-DD',
+          custom_popup_html: task => {
+            const fields = [
+              ['Name', task.name],
+              ['Start', t(task.start)],
+              ['End', t(task.end)],
+              ['Progress', `${task.progress}%`],
+              ['Type', task.type],
+              ['Dependencies', task.dependencies]
+            ];
+            function t(d) { try { return d?.toISOString?.().slice(0,10) || d; } catch { return d; } }
+            return `<div class="details-container">${fields.map(([k,v]) => `<div><strong>${k}:</strong> ${v||''}</div>`).join('')}</div>`;
+          }
+        });
+      } catch (e) {
+        console.error('Gantt render error', e);
+        const err = document.createElement('div');
+        err.className = 'error';
+        err.textContent = `Error rendering Gantt: ${e?.message || e}`;
+        el.appendChild(err);
+        // As a fallback, list first few tasks
+        const pre = document.createElement('pre');
+        pre.textContent = JSON.stringify(parsed.slice(0,5), null, 2);
+        el.appendChild(pre);
+      }
+    }
+
+    document.querySelector('#view-mode').addEventListener('change', () => {
+      if (gantt) gantt.change_view_mode(document.querySelector('#view-mode').value);
+    });
+    document.querySelector('#refresh').addEventListener('click', loadTasks);
+
+    loadTasks();
+  </script>
+</body>
+</html>
