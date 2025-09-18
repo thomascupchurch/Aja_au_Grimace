@@ -50,6 +50,37 @@ def _to_iso(d):
     return d.strftime("%Y-%m-%d") if d else ""
 
 
+def _sqlite_connect(path: str):
+    """Connect to SQLite. If WEB_SQLITE_RO is set (to '1' or 'true'),
+    open the database in read-only mode using SQLite URI. This is helpful
+    when the DB lives on a network share (SMB/OneDrive folder) and the web
+    viewer should never write or lock the file.
+
+    Env:
+      WEB_SQLITE_RO=1|true  -> use mode=ro
+    """
+    ro = (os.environ.get('WEB_SQLITE_RO', '').lower() in ('1', 'true', 'yes'))
+    if not ro:
+        # Normal direct connection (default)
+        return sqlite3.connect(path)
+
+    # Build a file: URI with mode=ro that works on Windows and UNC paths
+    # Examples:
+    #   C:\data\db.sqlite -> file:///C:/data/db.sqlite?mode=ro
+    #   \\server\share\db.sqlite -> file:////server/share/db.sqlite?mode=ro
+    p = path.replace('\\', '/')
+    if p.startswith('//'):
+        # UNC path //server/share/...
+        uri = f"file:{p}"
+    else:
+        # Drive letter path C:/...
+        if ':' in p and not p.startswith('/'):
+            p = '/' + p
+        uri = f"file://{p}"
+    uri += ("&" if "?" in uri else "?") + "mode=ro"
+    return sqlite3.connect(uri, uri=True)
+
+
 def fetch_tasks():
     db = get_db_path()
     cols = [
@@ -61,7 +92,7 @@ def fetch_tasks():
     tasks = []
     if not os.path.exists(db):
         return tasks
-    con = sqlite3.connect(db)
+    con = _sqlite_connect(db)
     try:
         cur = con.cursor()
         cur.execute("SELECT {} FROM project_parts".format(
@@ -324,7 +355,7 @@ def api_debug():
     if not os.path.exists(db):
         return jsonify(info)
     try:
-        con = sqlite3.connect(db)
+        con = _sqlite_connect(db)
         cur = con.cursor()
         cur.execute("SELECT count(*) FROM project_parts")
         info["row_count"] = cur.fetchone()[0]

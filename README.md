@@ -94,6 +94,9 @@ Manual run:
 .venv\Scripts\python.exe .\web\app.py
 ```
 
+Deployment guides:
+- See `DEPLOY.md` for step-by-step instructions for PythonAnywhere and Render, including minimal web-only requirements and start commands.
+
 PythonAnywhere (notes):
 - Create a new Flask app; point WSGI to `web/app.py` and set the working directory to the project folder.
 - Ensure `Flask` is installed in the PythonAnywhere virtualenv.
