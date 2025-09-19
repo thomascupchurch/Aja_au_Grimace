@@ -59,6 +59,7 @@
         <option value="gantt">Gantt</option>
         <option value="calendar">Calendar</option>
         <option value="timeline">Timeline</option>
+        <option value="tree">Tree</option>
       </select>
       
       <label>View:</label>
@@ -86,6 +87,9 @@
     </div>
     <div id="timeline-view" class="view" hidden>
       <div id="timeline" class="timeline"></div>
+    </div>
+    <div id="tree-view" class="view" hidden>
+      <div id="tree" class="tree"></div>
     </div>
   </main>
 
@@ -117,7 +121,7 @@
   <script>
     let gantt;
     let cachedTasks = null; // cache parsed Date objects for re-render without refetching
-    let currentMode = 'gantt';
+  let currentMode = 'gantt';
     let calMonth = null; // Date at first of month for calendar
     const body = document.body;
     
@@ -299,6 +303,8 @@
           renderCalendar(parsed, calMonth);
         } else if (currentMode === 'timeline') {
           renderTimeline(parsed);
+        } else if (currentMode === 'tree') {
+          renderTree(parsed);
         }
       } catch (e) {
         console.error('Render error', e);
@@ -327,7 +333,8 @@
       // Toggle view containers
       document.getElementById('gantt-view').hidden = mode !== 'gantt';
       document.getElementById('calendar-view').hidden = mode !== 'calendar';
-      document.getElementById('timeline-view').hidden = mode !== 'timeline';
+  document.getElementById('timeline-view').hidden = mode !== 'timeline';
+  document.getElementById('tree-view').hidden = mode !== 'tree';
       // Render immediately if we already have data
       if (!cachedTasks) return;
       if (mode === 'gantt') {
@@ -337,6 +344,8 @@
         renderCalendar(cachedTasks, calMonth);
       } else if (mode === 'timeline') {
         renderTimeline(cachedTasks);
+      } else if (mode === 'tree') {
+        renderTree(cachedTasks);
       }
     }
     document.getElementById('display-mode').addEventListener('change', (e) => setMode(e.target.value));
@@ -352,6 +361,7 @@
         if (currentMode === 'gantt') renderGantt(cachedTasks);
         else if (currentMode === 'calendar') renderCalendar(cachedTasks, calMonth);
         else if (currentMode === 'timeline') renderTimeline(cachedTasks);
+        else if (currentMode === 'tree') renderTree(cachedTasks);
       }, 120);
     });
 
@@ -581,6 +591,78 @@
 
       container.appendChild(svg);
     }
+
+    // ---- Tree view implementation ----
+    function buildTree(tasks) {
+      const byId = new Map();
+      const roots = [];
+      tasks.forEach(t => { byId.set(t.id, { ...t, children: [] }); });
+      // Attach children to parents where possible; non-existent parents treated as roots
+      byId.forEach(node => {
+        const pid = node.parent_id;
+        if (pid && byId.has(pid) && pid !== node.id) {
+          byId.get(pid).children.push(node);
+        } else {
+          roots.push(node);
+        }
+      });
+      return roots;
+    }
+
+    function renderTree(tasks) {
+      const container = document.getElementById('tree');
+      container.innerHTML = '';
+      const roots = buildTree(tasks);
+      // Simple list with indentation and expand/collapse
+      const list = document.createElement('div');
+      list.className = 'tree-list';
+      container.appendChild(list);
+
+      function row(node, depth=0) {
+        const r = document.createElement('div');
+        r.className = 'tree-row';
+        r.style.paddingLeft = `${depth*16 + 8}px`;
+        const toggle = document.createElement('button');
+        toggle.className = 'tree-toggle';
+        toggle.textContent = node.children && node.children.length ? '▾' : '•';
+        toggle.disabled = !(node.children && node.children.length);
+        const name = document.createElement('span');
+        name.className = 'tree-name';
+        name.textContent = node.name;
+        const when = document.createElement('span');
+        when.className = 'tree-when';
+        const s = new Date(node.start).toISOString().slice(0,10);
+        const e = new Date(node.end).toISOString().slice(0,10);
+        when.textContent = `${s} → ${e}`;
+        const prog = document.createElement('span');
+        prog.className = 'tree-progress';
+        prog.textContent = `${node.progress ?? 0}%`;
+        prog.style.background = node.color_progress || '#FF8200';
+        r.appendChild(toggle);
+        r.appendChild(name);
+        r.appendChild(when);
+        r.appendChild(prog);
+
+        let expanded = true;
+        const childWrap = document.createElement('div');
+        childWrap.className = 'tree-children';
+        r.appendChild(childWrap);
+        function rerenderChildren() {
+          childWrap.innerHTML = '';
+          if (!expanded) return;
+          (node.children||[]).forEach(c => childWrap.appendChild(row(c, depth+1)));
+        }
+        toggle.addEventListener('click', () => {
+          if (!node.children || !node.children.length) return;
+          expanded = !expanded;
+          toggle.textContent = expanded ? '▾' : '▸';
+          rerenderChildren();
+        });
+        rerenderChildren();
+        return r;
+      }
+      roots.forEach(n => list.appendChild(row(n, 0)));
+    }
   </script>
   <style>
     /* Mode-specific control visibility */
@@ -612,6 +694,16 @@
     /* Timeline styles */
     #timeline { overflow:auto; border-top:1px solid #6a6a6a; min-height:320px; }
     .timeline-svg text { user-select:none; }
+
+    /* Tree styles */
+    #tree { border-top:1px solid #6a6a6a; }
+    .tree-list { display:flex; flex-direction:column; gap:4px; padding:8px 0; }
+    .tree-row { display:flex; gap:8px; align-items:center; background:#585858; border:1px solid #6a6a6a; border-radius:6px; padding:6px 8px; }
+    .tree-toggle { width:24px; min-width:24px; height:24px; line-height:20px; text-align:center; border:1px solid #cfcfcf; border-radius:6px; background:#fff; color:#222; padding:0; }
+    .tree-toggle:disabled { opacity:0.5; }
+    .tree-name { color:#f3f4f6; font-weight:600; }
+    .tree-when { color:#d1d5db; font-size:12px; margin-left:auto; }
+    .tree-progress { color:#111; font-size:12px; font-weight:600; padding:2px 6px; border-radius:999px; margin-left:8px; }
   </style>
 </body>
 </html>

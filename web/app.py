@@ -199,6 +199,10 @@ def fetch_tasks():
             # Build task record with safe id
             colors = choose_colors(rec.get("Status"), progress, start_dt, end_dt)
 
+            # Parent mapping (for tree view)
+            parent_name = (rec.get("Parent") or "").strip()
+            parent_id = name_to_id.get(parent_name) if parent_name else None
+
             tasks.append({
                 "id": name_to_id.get(name, slugify(name)),
                 "name": name,
@@ -212,6 +216,7 @@ def fetch_tasks():
                 "duration": duration,
                 "color": colors["color"],
                 "color_progress": colors["color_progress"],
+                "parent_id": parent_id,
             })
     finally:
         con.close()
