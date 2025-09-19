@@ -225,7 +225,8 @@ def fetch_tasks():
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    watermark = os.environ.get("WEB_WATERMARK_TEXT", "For internal use only · Read‑only viewer")
+    return render_template("index.html", watermark=watermark)
 
 
 @app.route("/api/tasks")
