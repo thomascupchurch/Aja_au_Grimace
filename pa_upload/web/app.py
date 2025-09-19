@@ -303,7 +303,7 @@ def static_frappe_gantt_js():
         "    console.error('frappe-gantt not loaded; using minimal stub');\n"
         "    window.Gantt = function(container, tasks){\n"
         "      const pre = document.createElement('pre');\n"
-        "      pre.textContent = 'frappe-gantt missing. Tasks preview:\\n' + JSON.stringify(tasks.slice(0,5), null, 2);\n"
+        "      pre.textContent = 'frappe-gantt missing. Tasks preview:\n' + JSON.stringify(tasks.slice(0,5), null, 2);\n"
         "      container.appendChild(pre);\n"
         "    };\n"
         "    window.Gantt.prototype = { change_view_mode: function(){} };\n"

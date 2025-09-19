@@ -1,0 +1,289 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Project Gantt (Read-only)</title>
+  <link rel="icon" href="/favicon.ico">
+  <!-- Fallback minimal CSS -->
+  <link rel="stylesheet" href="/static/frappe-gantt.css">
+  <!-- Optional vendored full CSS (overrides) -->
+  <link rel="stylesheet" href="/static/vendor/frappe-gantt.css" onerror="this.remove()">
+  <!-- Dark theme overrides to match desktop app (#4B4B4B) -->
+  <style>
+    :root {
+      /* Gantt CSS variable overrides for dark background */
+      --g-header-background: #4B4B4B;
+      --g-row-color: #585858;
+      --g-row-border-color: #6a6a6a;
+      --g-text-dark: #f3f4f6;           /* near-white for labels */
+      --g-text-muted: #d1d5db;          /* light gray */
+      --g-tick-color: #6b7280;          /* slate-ish */
+      --g-tick-color-thick: #81858f;
+      --g-arrow-color: #d1d5db;
+      --g-progress-color: #9ca3af;      /* progress fill on dark */
+      --g-expected-progress: #a7a7d6;
+      --g-today-highlight: #ffffff66;   /* subtle, semi-transparent */
+      --g-actions-background: #4B4B4B;
+      --g-popup-actions: #5b5b5b;
+      --g-weekend-highlight-color: #4B4B4B; /* blend with background to reduce noise */
+      --g-bar-border: transparent;
+    }
+  </style>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; background:#4B4B4B; color:#f5f5f5; }
+    header { padding: 12px 16px; background: #4B4B4B; color: #fff; display:flex; align-items:center; gap:12px; border-bottom:1px solid #6a6a6a; }
+    header img { height: 28px; }
+    main { padding: 12px; background:#4B4B4B; }
+    #gantt { overflow-x: auto; border-top: 1px solid #6a6a6a; }
+    .toolbar { display:flex; gap:8px; align-items:center; padding:8px 0; }
+    .toolbar select, .toolbar button { padding:6px 10px; background:#fff; color:#222; border:1px solid #cfcfcf; border-radius:6px; }
+    .toolbar label { color:#e5e7eb; }
+    .info { margin: 8px 0; color:#e5e7eb; font-size: 12px; }
+    .empty { padding: 24px; color:#e5e7eb; text-align:center; }
+    .error { padding: 12px; color: #fee; background:#7f1d1d; border:1px solid #fca5a5; margin:8px 0; border-radius:6px; }
+    #gantt > div { min-height: 320px; }
+    /* Reduce busyness: hide diagonal hatch for ignored dates */
+    .gantt .ignored-bar { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="/static/header.png" alt="Header" onerror="this.style.display='none'"/>
+    <div>Project Gantt (Read-only)</div>
+  </header>
+  <main>
+    <div class="toolbar">
+      <label>View:</label>
+      <select id="view-mode">
+        <option value="Day">Day</option>
+        <option value="Week">Week</option>
+        <option value="Month">Month</option>
+        <option value="Year">Year</option>
+      </select>
+      <button id="refresh">Refresh</button>
+    </div>
+    <div class="info" id="db-info"></div>
+    <div class="info" id="status"></div>
+    <div id="gantt"></div>
+  </main>
+
+  <!-- Prefer local vendored asset (.min.js or .umd.js); fall back to CDN; then to tiny local stub route -->
+  <script>
+    (function(){
+      function inject(src, next){
+        var s=document.createElement('script');
+        s.src=src;
+        s.onload=function(){
+          // If script loaded but didn't define Gantt, continue chain
+          if(typeof window.Gantt !== 'function') {
+            if(next) next();
+          }
+        };
+        s.onerror=function(){ if(next) next(); };
+        document.body.appendChild(s);
+      }
+      // try local vendor (serves .umd.js or .min.js if present & valid)
+      inject('/static/vendor/frappe-gantt.umd.js', function(){
+        // try CDN UMD
+        inject('https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.umd.js', function(){
+          // final local stub
+          inject('/static/frappe-gantt.umd.js');
+        });
+      });
+    })();
+  </script>
+  <script>
+    let gantt;
+    let cachedTasks = null; // cache parsed Date objects for re-render without refetching
+
+    // Compute overall date range of tasks
+    function computeRange(tasks) {
+      let min = null, max = null;
+      for (const t of tasks || []) {
+        if (!(t.start instanceof Date) || !(t.end instanceof Date)) continue;
+        if (!min || t.start < min) min = t.start;
+        if (!max || t.end > max) max = t.end;
+      }
+      return { min, max };
+    }
+
+    // Count columns for a given view between [start, end] inclusive
+    function countColumns(view, start, end) {
+      if (!start || !end) return 1;
+      const msPerDay = 24*60*60*1000;
+      const days = Math.max(1, Math.ceil((end - start) / msPerDay) + 1);
+      switch(view) {
+        case 'Day':
+          return days + 2; // padding
+        case 'Week':
+          return Math.ceil(days / 7) + 1;
+        case 'Month': {
+          // Count month ticks inclusive
+          let c = 1;
+          let d = new Date(start.getFullYear(), start.getMonth()+1, 1);
+          while (d <= end) { c++; d = new Date(d.getFullYear(), d.getMonth()+1, 1); }
+          return c;
+        }
+        case 'Year':
+          return end.getFullYear() - start.getFullYear() + 1;
+        default:
+          return days + 2;
+      }
+    }
+
+    // Choose view mode and column_width that approximately fits container width
+    function chooseFitSettings(containerWidth, tasks, preferredView) {
+      const { min, max } = computeRange(tasks);
+      const views = preferredView ? [preferredView] : ['Day','Week','Month','Year'];
+      const bounds = { min: 12, max: 80 };
+      for (const v of views) {
+        const cols = Math.max(1, countColumns(v, min, max));
+        const ideal = Math.floor(containerWidth / cols);
+        if (ideal >= bounds.min && ideal <= bounds.max) {
+          return { view: v, column_width: ideal };
+        }
+      }
+      // Fallback: pick the last tried view and clamp
+      const last = views[views.length - 1];
+      const cols = Math.max(1, countColumns(last, min, max));
+      return { view: last, column_width: Math.max(bounds.min, Math.min(bounds.max, Math.floor(containerWidth / cols))) };
+    }
+
+    function renderGantt(parsed, opts={}) {
+      const el = document.querySelector('#gantt');
+      el.innerHTML = '';
+      const container = document.createElement('div');
+      el.appendChild(container);
+
+      const toolbarView = document.querySelector('#view-mode').value;
+      const cw = chooseFitSettings(container.clientWidth || el.clientWidth || 1024, parsed, opts.view || toolbarView);
+      // keep the select in sync with chosen view
+      document.querySelector('#view-mode').value = cw.view;
+
+      // Helper to (re)apply progress colors and add label backgrounds
+      const enhanceBars = () => {
+        if (!gantt) return;
+        gantt.$svg.querySelectorAll('.bar-label-bg').forEach(n => n.remove());
+        for (const t of parsed) {
+          const group = gantt.$svg.querySelector(`.bar-wrapper[data-id="${t.id}"]`);
+          if (!group) continue;
+          const prog = group.querySelector('.bar-progress');
+          if (prog && t.color_progress) {
+            try { prog.style.fill = t.color_progress; } catch {}
+          }
+          const label = group.querySelector('.bar-label');
+          if (label) {
+            try {
+              const bbox = label.getBBox();
+              const padX = 6, padY = 3, rx = 4;
+              const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+              rect.setAttribute('x', String(bbox.x - padX));
+              rect.setAttribute('y', String(bbox.y - padY));
+              rect.setAttribute('width', String(bbox.width + padX * 2));
+              rect.setAttribute('height', String(bbox.height + padY * 2));
+              rect.setAttribute('rx', String(rx));
+              rect.setAttribute('ry', String(rx));
+              rect.setAttribute('class', 'bar-label-bg');
+              rect.setAttribute('fill', '#FF8200');
+              rect.setAttribute('pointer-events', 'none');
+              const ie = (t.internal_external || '').toLowerCase();
+              const stroke = ie === 'internal' ? '#ffffff' : (ie === 'external' ? '#000000' : 'none');
+              const strokeWidth = stroke === 'none' ? '0' : '1.25';
+              rect.setAttribute('stroke', stroke);
+              rect.setAttribute('stroke-width', strokeWidth);
+              label.parentNode.insertBefore(rect, label);
+            } catch {}
+          }
+        }
+      };
+
+      gantt = new Gantt(container, parsed, {
+        view_mode: cw.view,
+        column_width: cw.column_width,
+        date_format: 'YYYY-MM-DD',
+        language: 'en',
+        lines: 'vertical',
+        today_button: true,
+        ignore: 'weekend',
+        holidays: { 'var(--g-weekend-highlight-color)': 'weekend' },
+        view_mode_select: true,
+        on_view_change: () => { requestAnimationFrame(enhanceBars); },
+        custom_popup_html: task => {
+          const fields = [
+            ['Name', task.name],
+            ['Start', t(task.start)],
+            ['End', t(task.end)],
+            ['Progress', `${task.progress}%`],
+            ['Type', task.type],
+            ['Dependencies', task.dependencies]
+          ];
+          function t(d) { try { return d?.toISOString?.().slice(0,10) || d; } catch { return d; } }
+          return `<div class="details-container">${fields.map(([k,v]) => `<div><strong>${k}:</strong> ${v||''}</div>`).join('')}</div>`;
+        }
+      });
+      requestAnimationFrame(enhanceBars);
+    }
+
+    async function loadTasks() {
+      // Show DB path and row count to help diagnose empty data
+      try {
+        const dbg = await fetch('/api/debug').then(r => r.json());
+        const info = document.querySelector('#db-info');
+        info.textContent = `DB: ${dbg.db_path || 'unknown'} | exists: ${dbg.db_exists} | project_parts rows: ${dbg.row_count}`;
+      } catch (e) {
+        console.warn('debug fetch failed', e);
+      }
+
+      const res = await fetch('/api/tasks');
+      const tasks = await res.json();
+      document.querySelector('#status').textContent = `Tasks fetched: ${tasks?.length ?? 0}`;
+      const el = document.querySelector('#gantt');
+      el.innerHTML = '';
+      if (!tasks || tasks.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'No tasks to show. Verify your database path (PROJECT_DB_PATH or db_path.txt) and that project_parts has data.';
+        el.appendChild(empty);
+        return;
+      }
+      // Convert to Date objects to avoid client-side parsing quirks
+      const parsed = tasks.map(t => ({
+        ...t,
+        start: new Date(t.start),
+        end: new Date(t.end)
+      }));
+      cachedTasks = parsed;
+      try {
+        renderGantt(parsed);
+      } catch (e) {
+        console.error('Gantt render error', e);
+        const err = document.createElement('div');
+        err.className = 'error';
+        err.textContent = `Error rendering Gantt: ${e?.message || e}`;
+        el.appendChild(err);
+        // As a fallback, list first few tasks
+        const pre = document.createElement('pre');
+        pre.textContent = JSON.stringify(parsed.slice(0,5), null, 2);
+        el.appendChild(pre);
+      }
+    }
+
+    document.querySelector('#view-mode').addEventListener('change', () => {
+      // Re-render with the chosen view, still fitting the width
+      if (cachedTasks) renderGantt(cachedTasks, { view: document.querySelector('#view-mode').value });
+    });
+    document.querySelector('#refresh').addEventListener('click', loadTasks);
+
+    loadTasks();
+
+    // Fit on resize
+    let resizeTimer = null;
+    window.addEventListener('resize', () => {
+      if (!cachedTasks) return;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => renderGantt(cachedTasks), 100);
+    });
+  </script>
+</body>
+</html>
