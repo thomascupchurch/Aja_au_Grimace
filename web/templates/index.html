@@ -227,10 +227,12 @@
               rect.setAttribute('pointer-events', 'none');
               const ie = (t.internal_external || '').toLowerCase();
               const stroke = ie === 'internal' ? '#ffffff' : (ie === 'external' ? '#000000' : 'none');
-              const strokeWidth = stroke === 'none' ? '0' : '1.25';
+              const strokeWidth = stroke === 'none' ? '0' : '2';
               rect.setAttribute('stroke', stroke);
               rect.setAttribute('stroke-width', strokeWidth);
               label.parentNode.insertBefore(rect, label);
+              // Ensure label text is readable over orange background
+              label.style.fill = '#111';
             } catch {}
           }
         }
@@ -261,6 +263,27 @@
         }
       });
       requestAnimationFrame(enhanceBars);
+
+      // Re-apply enhancements on scroll/pan and DOM churn
+      const scrollBox = container.querySelector('.gantt-container') || el;
+      let scrollDebounce;
+      const triggerEnhance = () => {
+        if (!gantt) return;
+        requestAnimationFrame(enhanceBars);
+        clearTimeout(scrollDebounce);
+        scrollDebounce = setTimeout(() => requestAnimationFrame(enhanceBars), 60);
+      };
+      scrollBox.addEventListener('scroll', triggerEnhance, { passive: true });
+      el.addEventListener('scroll', triggerEnhance, { passive: true });
+      scrollBox.addEventListener('wheel', triggerEnhance, { passive: true });
+      el.addEventListener('wheel', triggerEnhance, { passive: true });
+      const mo = new MutationObserver(() => {
+        if (!gantt) return;
+        // Debounce to avoid loops
+        clearTimeout(scrollDebounce);
+        scrollDebounce = setTimeout(() => requestAnimationFrame(enhanceBars), 20);
+      });
+      try { mo.observe(gantt.$svg, { childList: true, subtree: true }); } catch {}
     }
 
     async function loadTasks() {
@@ -704,6 +727,23 @@
     .tree-name { color:#f3f4f6; font-weight:600; }
     .tree-when { color:#d1d5db; font-size:12px; margin-left:auto; }
     .tree-progress { color:#111; font-size:12px; font-weight:600; padding:2px 6px; border-radius:999px; margin-left:8px; }
+
+    /* Gantt popup readability (dark theme) */
+    .gantt .popup-wrapper { background:#2f2f2f !important; color:#f5f5f5 !important; border:1px solid #6a6a6a; box-shadow: 0 6px 24px rgba(0,0,0,0.35); }
+  .gantt .popup-wrapper { font-size:14px !important; line-height:1.4; }
+  .gantt .popup-wrapper .title { color:#fff !important; font-size:16px !important; font-weight:700; margin-bottom:6px; }
+  .gantt .popup-wrapper .details-container { color:#e5e7eb !important; }
+  .gantt .popup-wrapper .details-container div { margin:4px 0; }
+    .gantt .popup-wrapper .details-container strong { color:#fff !important; }
+    .gantt .popup-wrapper .pointer { border-top-color:#2f2f2f !important; }
+
+    /* Unscoped fallback in case popup is appended to <body> instead of inside .gantt */
+    .popup-wrapper { background:#2f2f2f !important; color:#f5f5f5 !important; border:1px solid #6a6a6a; box-shadow: 0 6px 24px rgba(0,0,0,0.35); font-size:14px !important; line-height:1.4; }
+    .popup-wrapper .title { color:#fff !important; font-size:16px !important; font-weight:700; margin-bottom:6px; }
+    .popup-wrapper .details-container { color:#e5e7eb !important; }
+    .popup-wrapper .details-container div { margin:4px 0; }
+    .popup-wrapper .details-container strong { color:#fff !important; }
+    .popup-wrapper .pointer { border-top-color:#2f2f2f !important; }
   </style>
 </body>
 </html>
