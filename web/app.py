@@ -372,6 +372,11 @@ def api_debug():
             pass
     return jsonify(info)
 
+@app.route("/health")
+def health():
+    # Lightweight health check endpoint for load balancers/monitors
+    return Response("ok", mimetype="text/plain")
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

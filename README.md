@@ -97,11 +97,14 @@ Manual run:
 Deployment guides:
 - See `DEPLOY.md` for step-by-step instructions for PythonAnywhere and Render, including minimal web-only requirements and start commands.
 
-PythonAnywhere (notes):
-- Create a new Flask app; point WSGI to `web/app.py` and set the working directory to the project folder.
-- Ensure `Flask` is installed in the PythonAnywhere virtualenv.
-- Configure `PROJECT_DB_PATH` (if using a shared DB) or upload a snapshot `project_data.db` for read-only viewing.
-- Static assets load via CDN; optional `header.png` can be served via a static mapping to your workspace file.
+PythonAnywhere quick setup:
+- Create a Manual (Flask) Web App and set a new virtualenv.
+- Install deps: `pip install -r ~/Aja_au_Grimace/web/requirements-web.txt`.
+- In the WSGI file, paste the contents of `web/pythonanywhere_wsgi.py` (or point to it) which imports `web/app.py`.
+- Set environment vars in the PA UI (optional): `PROJECT_DB_PATH=/home/youruser/Aja_au_Grimace/project_data.db`, `WEB_SQLITE_RO=1`.
+- Reload, then verify:
+   - `/health` → ok
+   - `/api/debug` → shows db path, existence, and row count
 
 ### Vendoring frontend assets (offline / restricted networks)
 

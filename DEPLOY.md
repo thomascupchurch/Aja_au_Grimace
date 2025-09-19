@@ -65,6 +65,17 @@ from app import app as application
 - Open the PythonAnywhere dashboard page for the web app and click “Reload”
 - Visit your site; see verification below
 
+7) Optional: sync DB updates
+- Use the helper script to atomically replace the deployed DB from a source path and reload:
+  ```bash
+  # In a PythonAnywhere Bash console
+  python3 web/pa_sync_db.py --src /home/youruser/incoming/project_data.db --backup --reload
+  ```
+  Flags:
+  - `--dest` defaults to `~/Aja_au_Grimace/project_data.db`
+  - `--wsgi` defaults to `~/Aja_au_Grimace/web/pythonanywhere_wsgi.py`
+  - `--backup` creates `project_data.db.bak_YYYYmmdd_HHMMSS`
+
 
 ## Render.com
 
