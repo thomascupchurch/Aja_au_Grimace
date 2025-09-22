@@ -4,7 +4,7 @@ import re
 import base64
 import sqlite3
 from datetime import datetime, timedelta
-from flask import Flask, jsonify, render_template, send_from_directory, Response
+from flask import Flask, jsonify, render_template, send_from_directory, Response, abort
 
 app = Flask(__name__)
 
@@ -83,22 +83,17 @@ def _sqlite_connect(path: str):
 
 def fetch_tasks():
     db = get_db_path()
-    cols = [
-        "Project Part", "Parent", "Children", "Start Date", "Duration (days)", "Internal/External",
-        "Dependencies", "Type", "Calculated End Date", "Resources", "Notes", "Responsible",
-        "Images", "Pace Link", "Attachments", "% Complete", "Status", "Actual Start Date",
-        "Actual Finish Date", "Baseline Start Date", "Baseline End Date"
-    ]
     tasks = []
     if not os.path.exists(db):
         return tasks
     con = _sqlite_connect(db)
     try:
         cur = con.cursor()
-        cur.execute("SELECT {} FROM project_parts".format(
-            ", ".join([f'"{c}"' for c in cols])
-        ))
-        rows = [ {k: v for k, v in zip(cols, row)} for row in cur.fetchall() ]
+        # Fetch all columns so we can expose the original row in task["raw"] for full details
+        cur.execute("SELECT * FROM project_parts")
+        all_rows = cur.fetchall()
+        all_cols = [d[0] for d in cur.description]
+        rows = [ {k: v for k, v in zip(all_cols, row)} for row in all_rows ]
 
         # Helper: slugify names to ID-safe strings usable in CSS selectors
         def slugify(text: str) -> str:
@@ -146,6 +141,35 @@ def fetch_tasks():
                 return {"color": "#ffffff", "color_progress": "#FF8200"}  # UT orange progress
             # Planned / not started yet
             return {"color": "#e5e7eb", "color_progress": "#9ca3af"}  # gray bar, light progress
+
+        def parse_images_field(val: str):
+            root = _images_root()
+            out = []
+            if not val:
+                return out
+            # Split by common separators: comma, semicolon, newline
+            parts = []
+            for chunk in re.split(r"[\n;,]", str(val)):
+                p = chunk.strip()
+                if p:
+                    parts.append(p)
+            exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
+            seen = set()
+            for p in parts:
+                name = os.path.basename(p)
+                ext = os.path.splitext(name)[1].lower()
+                if ext not in exts:
+                    continue
+                if name in seen:
+                    continue
+                seen.add(name)
+                # Only include if the file exists under images/
+                try:
+                    if os.path.isfile(os.path.join(root, name)):
+                        out.append({"name": name, "url": f"/images/{name}"})
+                except Exception:
+                    continue
+            return out
 
         for rec in rows:
             name = (rec.get("Project Part") or "").strip()
@@ -217,6 +241,9 @@ def fetch_tasks():
                 "color": colors["color"],
                 "color_progress": colors["color_progress"],
                 "parent_id": parent_id,
+                "images": parse_images_field(rec.get("Images") or ""),
+                # Expose full original row for details panel across views
+                "raw": rec,
             })
     finally:
         con.close()
@@ -382,6 +409,44 @@ def api_debug():
 def health():
     # Lightweight health check endpoint for load balancers/monitors
     return Response("ok", mimetype="text/plain")
+
+
+# Images: list and serve from repo_root/images
+def _images_root():
+    return os.path.join(os.path.dirname(app.root_path), "images")
+
+
+@app.route("/api/images")
+def api_images():
+    root = _images_root()
+    out = []
+    if not os.path.isdir(root):
+        return jsonify(out)
+    exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
+    try:
+        for name in sorted(os.listdir(root)):
+            # Skip hidden/system files
+            if name.startswith("."):
+                continue
+            p = os.path.join(root, name)
+            if os.path.isfile(p) and os.path.splitext(name)[1].lower() in exts:
+                out.append({
+                    "name": name,
+                    "url": f"/images/{name}",
+                    "size": os.path.getsize(p)
+                })
+    except Exception:
+        pass
+    return jsonify(out)
+
+
+@app.route("/images/<path:filename>")
+def serve_image(filename: str):
+    root = _images_root()
+    # Basic path safety: prevent directory traversal
+    if ".." in filename or filename.startswith("/"):
+        abort(400)
+    return send_from_directory(root, filename)
 
 
 if __name__ == "__main__":

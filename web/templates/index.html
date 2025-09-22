@@ -34,20 +34,30 @@
   body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; background:#4B4B4B; color:#f5f5f5; display:flex; flex-direction:column; min-height:100vh; }
     header { padding: 12px 16px; background: #4B4B4B; color: #fff; display:flex; align-items:center; gap:12px; border-bottom:1px solid #6a6a6a; }
     header img { height: 28px; }
-  main { padding: 12px; background:#4B4B4B; flex:1; }
-    #gantt { overflow-x: auto; border-top: 1px solid #6a6a6a; }
+  main { padding: 12px; background:#4B4B4B; flex:1; display:flex; flex-direction:column; min-height:0; }
+  .view { flex: 1; display:flex; flex-direction:column; min-height:0; }
+  /* Ensure [hidden] actually hides view containers despite display:flex above */
+  .view[hidden] { display: none !important; }
+    #gantt { flex:1; min-height:0; overflow: hidden; border-top: 1px solid #6a6a6a; display:flex; }
     .toolbar { display:flex; gap:8px; align-items:center; padding:8px 0; }
     .toolbar select, .toolbar button { padding:6px 10px; background:#fff; color:#222; border:1px solid #cfcfcf; border-radius:6px; }
     .toolbar label { color:#e5e7eb; }
     .info { margin: 8px 0; color:#e5e7eb; font-size: 12px; }
     .empty { padding: 24px; color:#e5e7eb; text-align:center; }
     .error { padding: 12px; color: #fee; background:#7f1d1d; border:1px solid #fca5a5; margin:8px 0; border-radius:6px; }
-    #gantt > div { min-height: 320px; }
+    #gantt > div { flex:1; min-height: 0; }
     /* Reduce busyness: hide diagonal hatch for ignored dates */
     .gantt .ignored-bar { display: none; }
     /* Watermark footer */
     .watermark { width: 100%; background: #4B4B4B; border-top: 1px solid #6a6a6a; padding: 6px 12px; display:flex; justify-content:center; }
     .watermark-text { color: #d1d5db; font-size: 12px; opacity: 0.8; user-select: none; }
+    /* Gantt-only controls */
+    .toolbar .gantt-only { display: none; }
+    body.mode-gantt .toolbar .gantt-only { display: inline-flex; }
+    /* Fullscreen adjustments */
+    body.gantt-fullscreen { overflow: hidden; }
+    body.gantt-fullscreen header, body.gantt-fullscreen .watermark { display:none; }
+    body.gantt-fullscreen main { padding: 8px 12px; }
   </style>
 </head>
 <body>
@@ -63,6 +73,7 @@
         <option value="calendar">Calendar</option>
         <option value="timeline">Timeline</option>
         <option value="tree">Tree</option>
+        <option value="images">Images</option>
       </select>
       
       <label>View:</label>
@@ -72,6 +83,11 @@
         <option value="Month">Month</option>
         <option value="Year">Year</option>
       </select>
+      <button id="zoom-out" class="gantt-only" title="Zoom out">−</button>
+      <button id="zoom-in" class="gantt-only" title="Zoom in">+</button>
+      <button id="fit" class="gantt-only" title="Fit to width">Fit</button>
+      <button id="today" class="gantt-only" title="Center on today">Today</button>
+      <button id="fullscreen" class="gantt-only" title="Enter Fullscreen">⛶</button>
       <button id="refresh">Refresh</button>
     </div>
     <div class="info" id="db-info"></div>
@@ -94,6 +110,20 @@
     <div id="tree-view" class="view" hidden>
       <div id="tree" class="tree"></div>
     </div>
+    <div id="images-view" class="view" hidden>
+      <div id="images-toolbar" class="images-toolbar">
+        <input id="images-filter" type="text" placeholder="Filter images by name..." />
+      </div>
+      <div id="images" class="images-grid"></div>
+    </div>
+    <!-- Details Drawer -->
+    <aside id="details" class="details" hidden>
+      <div class="details-header">
+        <div class="details-title">Details</div>
+        <button id="details-close" title="Close">✕</button>
+      </div>
+      <div id="details-body" class="details-body"></div>
+    </aside>
   </main>
 
   <footer class="watermark" aria-label="Watermark">
@@ -131,6 +161,8 @@
   let currentMode = 'gantt';
     let calMonth = null; // Date at first of month for calendar
     const body = document.body;
+    let ganttState = { view: 'Day', column_width: 40 };
+  let cachedImages = null; // cache image listing
     
     // Wait for frappe-gantt to be loaded (window.Gantt defined)
     async function waitForGantt(timeoutMs = 8000) {
@@ -195,14 +227,19 @@
       return { view: last, column_width: Math.max(bounds.min, Math.min(bounds.max, Math.floor(containerWidth / cols))) };
     }
 
-    function renderGantt(parsed, opts={}) {
+  function renderGantt(parsed, opts={}) {
       const el = document.querySelector('#gantt');
       el.innerHTML = '';
       const container = document.createElement('div');
       el.appendChild(container);
 
       const toolbarView = document.querySelector('#view-mode').value;
-      const cw = chooseFitSettings(container.clientWidth || el.clientWidth || 1024, parsed, opts.view || toolbarView);
+      let cw;
+      if (opts && typeof opts.column_width === 'number' && opts.column_width > 0) {
+        cw = { view: opts.view || toolbarView, column_width: opts.column_width };
+      } else {
+        cw = chooseFitSettings(container.clientWidth || el.clientWidth || 1024, parsed, opts.view || toolbarView);
+      }
       // keep the select in sync with chosen view
       document.querySelector('#view-mode').value = cw.view;
 
@@ -245,15 +282,13 @@
         }
       };
 
-      gantt = new Gantt(container, parsed, {
+      const gopts = {
         view_mode: cw.view,
         column_width: cw.column_width,
         date_format: 'YYYY-MM-DD',
         language: 'en',
         lines: 'vertical',
         today_button: true,
-        ignore: 'weekend',
-        holidays: { 'var(--g-weekend-highlight-color)': 'weekend' },
         view_mode_select: true,
         on_view_change: () => { requestAnimationFrame(enhanceBars); },
         custom_popup_html: task => {
@@ -268,8 +303,40 @@
           function t(d) { try { return d?.toISOString?.().slice(0,10) || d; } catch { return d; } }
           return `<div class="details-container">${fields.map(([k,v]) => `<div><strong>${k}:</strong> ${v||''}</div>`).join('')}</div>`;
         }
-      });
+      };
+      if (cw.view === 'Day' || cw.view === 'Week') {
+        gopts.ignore = 'weekend';
+      }
+      gantt = new Gantt(container, parsed, gopts);
       requestAnimationFrame(enhanceBars);
+      // Record last used gantt state
+      ganttState = { view: cw.view, column_width: cw.column_width };
+
+      // Post-render sanity check: if no bars drawn or all bars have ~0 width (possible with unsupported view
+      // like 'Year' in some builds), fall back and inform the user.
+      setTimeout(() => {
+        try {
+          const svg = gantt && gantt.$svg;
+          const wrappers = svg ? svg.querySelectorAll('.bar-wrapper') : [];
+          const bars = svg ? svg.querySelectorAll('.bar-wrapper .bar') : [];
+          const zeroish = bars && bars.length > 0 ? Array.from(bars).every(b => {
+            const w = parseFloat(b.getAttribute('width') || '0');
+            return !w || w < 0.5;
+          }) : true;
+          if ((!wrappers || wrappers.length === 0) || zeroish) {
+            const statusEl = document.getElementById('status');
+            if (cw.view === 'Year') {
+              statusEl && (statusEl.textContent = 'Year view not available in this build; falling back to Month.');
+              document.querySelector('#view-mode').value = 'Month';
+              renderGantt(parsed, { view: 'Month', column_width: ganttState.column_width });
+            } else if (cw.view === 'Month') {
+              statusEl && (statusEl.textContent = 'Month view failed to render; falling back to Week.');
+              document.querySelector('#view-mode').value = 'Week';
+              renderGantt(parsed, { view: 'Week', column_width: ganttState.column_width });
+            }
+          }
+        } catch {}
+      }, 0);
 
       // Re-apply enhancements on scroll/pan and DOM churn
       const scrollBox = container.querySelector('.gantt-container') || el;
@@ -291,6 +358,32 @@
         scrollDebounce = setTimeout(() => requestAnimationFrame(enhanceBars), 20);
       });
       try { mo.observe(gantt.$svg, { childList: true, subtree: true }); } catch {}
+    }
+
+    function getGanttContainer() {
+      const el = document.querySelector('#gantt');
+      return el.querySelector('.gantt-container') || el;
+    }
+
+    function centerGanttOnToday() {
+      const sc = getGanttContainer();
+      if (!sc) return;
+      // Try using the current-highlight marker
+      const marker = sc.querySelector('.current-highlight');
+      if (marker && marker.style && marker.style.left) {
+        const x = parseFloat(marker.style.left) || 0;
+        sc.scrollLeft = Math.max(0, x - sc.clientWidth / 2);
+        return;
+      }
+      // Fallback: approximate using date range
+      if (!cachedTasks || cachedTasks.length === 0) return;
+      const { min, max } = computeRange(cachedTasks);
+      if (!min || !max) return;
+      const today = new Date();
+      const total = max - min;
+      const pos = Math.max(0, Math.min(1, (today - min) / (total || 1)));
+      const maxScroll = sc.scrollWidth - sc.clientWidth;
+      sc.scrollLeft = Math.max(0, Math.min(maxScroll, pos * sc.scrollWidth - sc.clientWidth / 2));
     }
 
     async function loadTasks() {
@@ -353,19 +446,61 @@
       // Re-render with the chosen view, still fitting the width
       if (cachedTasks) renderGantt(cachedTasks, { view: document.querySelector('#view-mode').value });
     });
-    document.querySelector('#refresh').addEventListener('click', loadTasks);
+    document.querySelector('#refresh').addEventListener('click', () => {
+      if (currentMode === 'images') {
+        renderImages(true);
+      } else {
+        loadTasks();
+      }
+    });
+    // Advanced Gantt controls
+    document.getElementById('zoom-in').addEventListener('click', () => {
+      if (currentMode !== 'gantt' || !cachedTasks) return;
+      const cw = Math.min(160, Math.round((ganttState.column_width || 40) * 1.2));
+      renderGantt(cachedTasks, { view: ganttState.view, column_width: cw });
+    });
+    document.getElementById('zoom-out').addEventListener('click', () => {
+      if (currentMode !== 'gantt' || !cachedTasks) return;
+      const cw = Math.max(8, Math.round((ganttState.column_width || 40) / 1.2));
+      renderGantt(cachedTasks, { view: ganttState.view, column_width: cw });
+    });
+    document.getElementById('fit').addEventListener('click', () => {
+      if (currentMode !== 'gantt' || !cachedTasks) return;
+      renderGantt(cachedTasks, { view: document.querySelector('#view-mode').value });
+    });
+    document.getElementById('today').addEventListener('click', () => {
+      if (currentMode !== 'gantt') return;
+      centerGanttOnToday();
+    });
+    document.getElementById('fullscreen').addEventListener('click', () => {
+      if (currentMode !== 'gantt') return;
+      const fs = !body.classList.contains('gantt-fullscreen');
+      body.classList.toggle('gantt-fullscreen', fs);
+      // Rerender to recompute fit and SVG sizing, then center on today
+      if (cachedTasks) {
+        renderGantt(cachedTasks, { view: document.querySelector('#view-mode').value });
+        setTimeout(centerGanttOnToday, 0);
+      }
+      // Update button label
+      const btn = document.getElementById('fullscreen');
+      btn.textContent = fs ? '⤢' : '⛶';
+      btn.title = fs ? 'Exit Fullscreen' : 'Enter Fullscreen';
+    });
 
     // Display mode switching
     function setMode(mode) {
       currentMode = mode;
-      body.classList.remove('mode-gantt','mode-calendar','mode-timeline');
+  body.classList.remove('mode-gantt','mode-calendar','mode-timeline','mode-tree','mode-images');
       body.classList.add(`mode-${mode}`);
       // Toggle view containers
       document.getElementById('gantt-view').hidden = mode !== 'gantt';
       document.getElementById('calendar-view').hidden = mode !== 'calendar';
   document.getElementById('timeline-view').hidden = mode !== 'timeline';
   document.getElementById('tree-view').hidden = mode !== 'tree';
-      // Render immediately if we already have data
+      document.getElementById('images-view').hidden = mode !== 'images';
+      // Render immediately
+      if (mode === 'images') { renderImages(); return; }
+      // Other modes depend on tasks
       if (!cachedTasks) return;
       if (mode === 'gantt') {
         waitForGantt(8000).then(ok => { if (ok) renderGantt(cachedTasks); });
@@ -693,12 +828,342 @@
       }
       roots.forEach(n => list.appendChild(row(n, 0)));
     }
+    // ---- Images view implementation ----
+    async function fetchImages() {
+      const res = await fetch('/api/images');
+      if (!res.ok) throw new Error('Failed to load images');
+      return res.json();
+    }
+
+    async function renderImages(forceReload=false) {
+      const grid = document.getElementById('images');
+      grid.innerHTML = '';
+      try {
+        if (!cachedImages || forceReload) {
+          cachedImages = await fetchImages();
+        }
+        const filter = (document.getElementById('images-filter').value || '').toLowerCase().trim();
+        const items = cachedImages.filter(it => !filter || it.name.toLowerCase().includes(filter));
+        if (items.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'empty';
+          empty.textContent = 'No images found. Place images under the images/ folder.';
+          grid.appendChild(empty);
+          return;
+        }
+        const frag = document.createDocumentFragment();
+        for (const it of items) {
+          const card = document.createElement('div');
+          card.className = 'img-card';
+          const wrap = document.createElement('div');
+          wrap.className = 'img-wrap';
+          const img = document.createElement('img');
+          img.loading = 'lazy';
+          img.src = it.url;
+          img.alt = it.name;
+          wrap.appendChild(img);
+          const cap = document.createElement('div');
+          cap.className = 'img-name';
+          cap.textContent = it.name;
+          card.appendChild(wrap);
+          card.appendChild(cap);
+          card.addEventListener('click', () => openLightbox(it.url, it.name));
+          frag.appendChild(card);
+        }
+        grid.appendChild(frag);
+      } catch (e) {
+        const err = document.createElement('div');
+        err.className = 'error';
+        err.textContent = `Error loading images: ${e?.message || e}`;
+        grid.appendChild(err);
+      }
+    }
+
+    function openLightbox(url, name) {
+      const lb = document.getElementById('lightbox');
+      const img = document.getElementById('lightbox-img');
+      const cap = document.getElementById('lightbox-cap');
+      img.src = url; img.alt = name; cap.textContent = name;
+      lb.classList.add('open');
+    }
+    function closeLightbox() {
+      const lb = document.getElementById('lightbox');
+      lb.classList.remove('open');
+      const img = document.getElementById('lightbox-img');
+      img.src = ''; img.alt = '';
+    }
+    document.addEventListener('DOMContentLoaded', () => {
+      const ifi = document.getElementById('images-filter');
+      if (ifi) ifi.addEventListener('input', () => renderImages());
+      const lbc = document.getElementById('lightbox-close');
+      const lb = document.getElementById('lightbox');
+      if (lbc) lbc.addEventListener('click', closeLightbox);
+      if (lb) lb.addEventListener('click', (e) => { if (e.target === lb) closeLightbox(); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLightbox(); });
+    });
+
+    // ---- Hover preview helpers ----
+    let hoverRootEl = null;
+    let hoverImgEl = null;
+    function ensureHoverElements() {
+      if (!hoverRootEl) hoverRootEl = document.getElementById('hover-preview');
+      if (hoverRootEl && !hoverImgEl) hoverImgEl = hoverRootEl.querySelector('img');
+      return !!(hoverRootEl && hoverImgEl);
+    }
+    function placeHoverAt(evt, pad = 14) {
+      if (!ensureHoverElements()) return;
+      const vw = window.innerWidth || document.documentElement.clientWidth || 1024;
+      const vh = window.innerHeight || document.documentElement.clientHeight || 768;
+      const imgMaxW = 360, imgMaxH = 240;
+      let x = (evt?.clientX || 0) + pad;
+      let y = (evt?.clientY || 0) + pad;
+      if (x + imgMaxW + 16 > vw) x = Math.max(8, vw - imgMaxW - 16);
+      if (y + imgMaxH + 16 > vh) y = Math.max(8, vh - imgMaxH - 16);
+      hoverRootEl.style.left = `${x}px`;
+      hoverRootEl.style.top = `${y}px`;
+    }
+    function showHoverPreview(url, evt) {
+      if (!url || !ensureHoverElements()) return;
+      hoverImgEl.src = url;
+      placeHoverAt(evt);
+      hoverRootEl.classList.add('open');
+    }
+    function moveHoverPreview(evt) {
+      if (!ensureHoverElements() || !hoverRootEl.classList.contains('open')) return;
+      placeHoverAt(evt);
+    }
+    function hideHoverPreview() {
+      if (!ensureHoverElements()) return;
+      hoverRootEl.classList.remove('open');
+      hoverImgEl.src = '';
+      hoverImgEl.alt = '';
+    }
+    document.addEventListener('scroll', hideHoverPreview, { passive: true });
+    window.addEventListener('blur', hideHoverPreview);
+
+    // Attach hover preview to Images grid
+    function bindImageGridHover() {
+      const grid = document.getElementById('images');
+      if (!grid || grid.dataset.hoverBound === '1') return;
+      grid.dataset.hoverBound = '1';
+      grid.addEventListener('mousemove', (e) => {
+        const card = e.target.closest('.img-card');
+        if (!card) { hideHoverPreview(); return; }
+        const img = card.querySelector('img');
+        if (img && img.src) { showHoverPreview(img.src, e); moveHoverPreview(e); }
+      });
+      grid.addEventListener('mouseleave', hideHoverPreview);
+    }
+
+    // Helper to get first image URL for a task (from cachedTasks entries)
+    function firstImageUrlForTask(taskId) {
+      if (!cachedTasks) return null;
+      const t = cachedTasks.find(tt => tt.id === taskId);
+      const img = t && Array.isArray(t.images) && t.images.length ? t.images[0] : null;
+      return img ? img.url : null;
+    }
+    // ---- Details Drawer ----
+    function openDetailsForTask(task) {
+      if (!task) return;
+      const panel = document.getElementById('details');
+      const body = document.getElementById('details-body');
+      body.innerHTML = '';
+      const titleEl = panel.querySelector('.details-title');
+      if (titleEl) titleEl.textContent = task.name || 'Details';
+      const raw = task.raw && typeof task.raw === 'object' ? task.raw : task;
+      const kv = document.createElement('div');
+      kv.className = 'kv';
+      Object.entries(raw).forEach(([k,v]) => {
+        const ke = document.createElement('div'); ke.className='k'; ke.textContent = k;
+        const ve = document.createElement('div'); ve.className='v';
+        let text = v;
+        if (v instanceof Date) text = v.toISOString().slice(0,10);
+        else if (v == null) text = '';
+        else text = String(v);
+        ve.textContent = text;
+        kv.appendChild(ke); kv.appendChild(ve);
+      });
+      if (Array.isArray(task.images) && task.images.length) {
+        const hr = document.createElement('hr'); hr.style.borderColor = '#6a6a6a'; hr.style.margin='10px 0';
+        const imgs = document.createElement('div'); imgs.style.display='grid'; imgs.style.gridTemplateColumns='repeat(auto-fill, minmax(96px,1fr))'; imgs.style.gap='8px';
+        task.images.forEach(im => {
+          const a = document.createElement('a'); a.href = im.url; a.target = '_blank'; a.title = im.name;
+          const img = document.createElement('img'); img.src = im.url; img.alt = im.name; img.style.width='100%'; img.style.borderRadius='4px'; img.style.border='1px solid #6a6a6a';
+          a.appendChild(img); imgs.appendChild(a);
+        });
+        body.appendChild(kv); body.appendChild(hr); body.appendChild(imgs);
+      } else {
+        body.appendChild(kv);
+      }
+      panel.hidden = false;
+    }
+    function closeDetails() { const panel = document.getElementById('details'); if (panel) panel.hidden = true; }
+    document.addEventListener('DOMContentLoaded', () => {
+      const x = document.getElementById('details-close');
+      if (x) x.addEventListener('click', closeDetails);
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetails(); });
+    });
+
+    // Gantt hover binding
+    function bindGanttHover() {
+      try {
+        const svg = gantt && gantt.$svg;
+        if (!svg || svg.dataset.hoverBound === '1') return;
+        svg.dataset.hoverBound = '1';
+        svg.addEventListener('mousemove', (e) => {
+          const wrap = e.target.closest('.bar-wrapper');
+          if (!wrap) { hideHoverPreview(); return; }
+          const id = wrap.getAttribute('data-id');
+          const url = firstImageUrlForTask(id);
+          if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
+        });
+        svg.addEventListener('mouseleave', hideHoverPreview);
+        svg.addEventListener('click', (e) => {
+          const wrap = e.target.closest('.bar-wrapper');
+          if (!wrap) return;
+          const id = wrap.getAttribute('data-id');
+          const t = cachedTasks && cachedTasks.find(tt => tt.id === id);
+          if (t) openDetailsForTask(t);
+        });
+      } catch {}
+    }
+
+    // After Gantt render, bind hover over bars
+    const _origRenderGantt = renderGantt;
+    renderGantt = function(parsed, opts={}) {
+      _origRenderGantt(parsed, opts);
+      bindGanttHover();
+    }
+
+    // Calendar details hover
+    function bindCalendarHover() {
+      const list = document.querySelector('#calendar-details .cal-list');
+      if (!list || list.dataset.hoverBound === '1') return;
+      list.dataset.hoverBound = '1';
+      list.addEventListener('mousemove', (e) => {
+        const li = e.target.closest('li');
+        if (!li) { hideHoverPreview(); return; }
+        const name = li.querySelector('.cal-name')?.textContent || '';
+        const t = cachedTasks && cachedTasks.find(x => x.name === name);
+        const url = t && t.images && t.images[0] ? t.images[0].url : null;
+        if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
+      });
+      list.addEventListener('mouseleave', hideHoverPreview);
+      list.addEventListener('click', (e) => {
+        const li = e.target.closest('li');
+        if (!li) return;
+        const name = li.querySelector('.cal-name')?.textContent || '';
+        const t = cachedTasks && cachedTasks.find(x => x.name === name);
+        if (t) openDetailsForTask(t);
+      });
+    }
+
+    // Timeline hover
+    function bindTimelineHover() {
+      const svg = document.querySelector('#timeline svg');
+      if (!svg || svg.dataset.hoverBound === '1') return;
+      svg.dataset.hoverBound = '1';
+      svg.addEventListener('mousemove', (e) => {
+        const rect = e.target.closest('rect');
+        if (!rect) { hideHoverPreview(); return; }
+        // Find label sibling to map back to task name
+        const y = rect.getAttribute('y');
+        const label = Array.from(svg.querySelectorAll('text')).find(t => t.getAttribute('y') === String(Number(y) + 12));
+        const name = label?.textContent || '';
+        const t = cachedTasks && cachedTasks.find(x => x.name === name);
+        const url = t && t.images && t.images[0] ? t.images[0].url : null;
+        if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
+      });
+      svg.addEventListener('mouseleave', hideHoverPreview);
+      svg.addEventListener('click', (e) => {
+        const rect = e.target.closest('rect');
+        if (!rect) return;
+        const y = rect.getAttribute('y');
+        const label = Array.from(svg.querySelectorAll('text')).find(t => t.getAttribute('y') === String(Number(y) + 12));
+        const name = label?.textContent || '';
+        const t = cachedTasks && cachedTasks.find(x => x.name === name);
+        if (t) openDetailsForTask(t);
+      });
+    }
+
+    // Tree hover
+    function bindTreeHover() {
+      const list = document.querySelector('#tree');
+      if (!list || list.dataset.hoverBound === '1') return;
+      list.dataset.hoverBound = '1';
+      list.addEventListener('mousemove', (e) => {
+        const row = e.target.closest('.tree-row');
+        if (!row) { hideHoverPreview(); return; }
+        const name = row.querySelector('.tree-name')?.textContent || '';
+        const t = cachedTasks && cachedTasks.find(x => x.name === name);
+        const url = t && t.images && t.images[0] ? t.images[0].url : null;
+        if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
+      });
+      list.addEventListener('mouseleave', hideHoverPreview);
+      list.addEventListener('click', (e) => {
+        const row = e.target.closest('.tree-row');
+        if (!row) return;
+        const name = row.querySelector('.tree-name')?.textContent || '';
+        const t = cachedTasks && cachedTasks.find(x => x.name === name);
+        if (t) openDetailsForTask(t);
+      });
+    }
+
+    // Hook bindings after renders
+    const _origRenderCalendar = renderCalendar;
+    renderCalendar = function(tasks, monthDate) {
+      _origRenderCalendar(tasks, monthDate);
+      setTimeout(bindCalendarHover, 0);
+    };
+    const _origRenderTimeline = renderTimeline;
+    renderTimeline = function(tasks) {
+      _origRenderTimeline(tasks);
+      setTimeout(bindTimelineHover, 0);
+    };
+    const _origRenderTree = renderTree;
+    renderTree = function(tasks) {
+      _origRenderTree(tasks);
+      setTimeout(bindTreeHover, 0);
+    };
+
+    // Also bind image grid hover after rendering
+    const _origRenderImages = renderImages;
+    renderImages = async function(forceReload=false) {
+      await _origRenderImages(forceReload);
+      setTimeout(() => {
+        bindImageGridHover();
+        const grid = document.getElementById('images');
+        if (grid && !grid.dataset.detailsBound) {
+          grid.dataset.detailsBound = '1';
+          grid.addEventListener('contextmenu', (e) => {
+            const card = e.target.closest('.img-card');
+            if (!card) return;
+            e.preventDefault();
+            const src = card.querySelector('img')?.src || '';
+            const file = src.split('/').pop();
+            const t = cachedTasks && cachedTasks.find(x => Array.isArray(x.images) && x.images.some(im => im.name === file));
+            if (t) openDetailsForTask(t);
+          });
+        }
+      }, 0);
+    };
+
+    // Try to bind hovers in case initial render raced ahead
+    function rebindAllHovers() {
+      if (currentMode === 'gantt') bindGanttHover();
+      if (currentMode === 'calendar') bindCalendarHover();
+      if (currentMode === 'timeline') bindTimelineHover();
+      if (currentMode === 'tree') bindTreeHover();
+      if (currentMode === 'images') bindImageGridHover();
+    }
+    window.addEventListener('load', () => setTimeout(rebindAllHovers, 0));
   </script>
   <style>
     /* Mode-specific control visibility */
     body.mode-gantt .toolbar #view-mode, body.mode-gantt .toolbar label:nth-of-type(2) { display: inline-block; }
     body.mode-calendar .toolbar #view-mode, body.mode-calendar .toolbar label:nth-of-type(2),
-    body.mode-timeline .toolbar #view-mode, body.mode-timeline .toolbar label:nth-of-type(2) { display: none; }
+    body.mode-timeline .toolbar #view-mode, body.mode-timeline .toolbar label:nth-of-type(2),
+    body.mode-images .toolbar #view-mode, body.mode-images .toolbar label:nth-of-type(2) { display: none; }
 
     /* Calendar styles */
     .cal-toolbar { display:flex; gap:8px; align-items:center; padding:8px 0; }
@@ -751,6 +1216,45 @@
     .popup-wrapper .details-container div { margin:4px 0; }
     .popup-wrapper .details-container strong { color:#fff !important; }
     .popup-wrapper .pointer { border-top-color:#2f2f2f !important; }
+
+    /* Images gallery */
+    .images-toolbar { display:flex; gap:8px; align-items:center; padding:8px 0; }
+    .images-toolbar input { padding:6px 10px; border-radius:6px; border:1px solid #cfcfcf; background:#fff; color:#222; }
+    .images-grid { --min: 180px; display:grid; grid-template-columns: repeat(auto-fill, minmax(var(--min), 1fr)); gap:10px; border-top:1px solid #6a6a6a; padding-top:10px; }
+    .img-card { background:#585858; border:1px solid #6a6a6a; border-radius:8px; overflow:hidden; display:flex; flex-direction:column; cursor:pointer; }
+    .img-wrap { position:relative; padding-top:66%; background:#333; }
+    .img-wrap img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+    .img-name { padding:6px 8px; color:#f3f4f6; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-top:1px solid #6a6a6a; background:#4f4f4f; }
+    /* Lightbox */
+    .lightbox { position:fixed; inset:0; background:rgba(0,0,0,0.85); display:none; align-items:center; justify-content:center; z-index:9999; }
+    .lightbox.open { display:flex; }
+    .lightbox img { max-width:95vw; max-height:90vh; box-shadow:0 10px 30px rgba(0,0,0,0.6); border-radius:8px; }
+    .lightbox .close { position:absolute; top:14px; right:18px; color:#fff; background:#00000066; border:1px solid #ffffff55; border-radius:6px; padding:6px 10px; cursor:pointer; }
+    .lightbox .caption { position:absolute; bottom:12px; left:0; right:0; text-align:center; color:#e5e7eb; font-size:12px; }
+
+    /* Hover preview (floating image on hover) */
+    .hover-preview { position: fixed; pointer-events: none; z-index: 9998; display:none; }
+    .hover-preview.open { display:block; }
+    .hover-preview img { max-width: 360px; max-height: 240px; box-shadow: 0 10px 30px rgba(0,0,0,0.55); border-radius: 6px; border: 1px solid #6a6a6a; background:#222; }
+    /* Details drawer */
+    .details { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 92vw); background:#2f2f2f; border-left:1px solid #6a6a6a; box-shadow: -10px 0 30px rgba(0,0,0,0.4); display:flex; flex-direction:column; z-index: 9997; }
+    .details[hidden] { display:none !important; }
+    .details-header { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border-bottom:1px solid #6a6a6a; }
+    .details-title { font-weight:700; color:#fff; }
+    #details-close { padding:6px 10px; background:#fff; color:#222; border:1px solid #cfcfcf; border-radius:6px; cursor:pointer; }
+    .details-body { overflow:auto; padding:10px 12px; color:#e5e7eb; font-size:13px; }
+    .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 10px; }
+    .kv .k { color:#d1d5db; }
+    .kv .v { color:#f3f4f6; word-break:break-word; }
   </style>
+
+  <!-- Images lightbox root -->
+  <div id="lightbox" class="lightbox" role="dialog" aria-modal="true" aria-label="Image viewer">
+    <button class="close" id="lightbox-close" title="Close">Close</button>
+    <img id="lightbox-img" alt="" />
+    <div class="caption" id="lightbox-cap"></div>
+  </div>
+  <!-- Hover preview root -->
+  <div id="hover-preview" class="hover-preview"><img alt=""/></div>
 </body>
 </html>
