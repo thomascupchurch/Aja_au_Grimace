@@ -223,6 +223,10 @@ def fetch_tasks():
             # Build task record with safe id
             colors = choose_colors(rec.get("Status"), progress, start_dt, end_dt)
 
+            # Parent mapping (for potential tree view)
+            parent_name = (rec.get("Parent") or "").strip()
+            parent_id = name_to_id.get(parent_name) if parent_name else None
+
             tasks.append({
                 "id": name_to_id.get(name, slugify(name)),
                 "name": name,
@@ -236,7 +240,7 @@ def fetch_tasks():
                 "duration": duration,
                 "color": colors["color"],
                 "color_progress": colors["color_progress"],
-                # Note: pa template currently doesn't use parent view; parent_id omitted for now
+                "parent_id": parent_id,
                 "images": parse_images_field(rec.get("Images") or ""),
                 # Expose full original row for details panel across views
                 "raw": rec,

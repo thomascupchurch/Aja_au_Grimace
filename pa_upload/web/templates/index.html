@@ -34,25 +34,61 @@
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; background:#4B4B4B; color:#f5f5f5; display:flex; flex-direction:column; min-height:100vh; }
     header { padding: 12px 16px; background: #4B4B4B; color: #fff; display:flex; align-items:center; gap:12px; border-bottom:1px solid #6a6a6a; }
     header img { height: 28px; }
-  main { padding: 12px; background:#4B4B4B; flex:1; }
-    .view { display:block; }
+    main { padding: 12px; background:#4B4B4B; flex:1; display:flex; flex-direction:column; min-height:0; }
+    .view { flex:1; display:flex; flex-direction:column; min-height:0; }
     .view[hidden] { display:none !important; }
-    #gantt { overflow-x: auto; border-top: 1px solid #6a6a6a; }
+    #gantt { flex:1; min-height:0; overflow:hidden; border-top: 1px solid #6a6a6a; display:flex; }
     .toolbar { display:flex; gap:8px; align-items:center; padding:8px 0; }
     .toolbar select, .toolbar button { padding:6px 10px; background:#fff; color:#222; border:1px solid #cfcfcf; border-radius:6px; }
     .toolbar label { color:#e5e7eb; }
     .info { margin: 8px 0; color:#e5e7eb; font-size: 12px; }
     .empty { padding: 24px; color:#e5e7eb; text-align:center; }
     .error { padding: 12px; color: #fee; background:#7f1d1d; border:1px solid #fca5a5; margin:8px 0; border-radius:6px; }
-    #gantt > div { min-height: 320px; }
+    #gantt > div { flex:1; min-height:0; }
     /* Reduce busyness: hide diagonal hatch for ignored dates */
     .gantt .ignored-bar { display: none; }
     /* Watermark footer */
     .watermark { width: 100%; background: #4B4B4B; border-top: 1px solid #6a6a6a; padding: 6px 12px; display:flex; justify-content:center; }
     .watermark-text { color: #d1d5db; font-size: 12px; opacity: 0.8; user-select: none; }
 
-    /* Mode-specific control visibility */
-    body.mode-images .toolbar #view-mode, body.mode-images .toolbar label:nth-of-type(2) { display: none; }
+  /* Mode-specific control visibility */
+  body.mode-gantt .toolbar #view-mode, body.mode-gantt .toolbar label:nth-of-type(2) { display:inline-block; }
+  body.mode-calendar .toolbar #view-mode, body.mode-calendar .toolbar label:nth-of-type(2),
+  body.mode-timeline .toolbar #view-mode, body.mode-timeline .toolbar label:nth-of-type(2),
+  body.mode-images .toolbar #view-mode, body.mode-images .toolbar label:nth-of-type(2) { display: none; }
+  /* Calendar styles */
+  .cal-toolbar { display:flex; gap:8px; align-items:center; padding:8px 0; }
+  .cal-toolbar button { padding:4px 8px; }
+  .cal-title { flex:1; text-align:center; font-weight:600; color:#e5e7eb; }
+  .calendar { display:grid; grid-template-columns: repeat(7, 1fr); gap:6px; }
+  .cal-head { display:grid; grid-template-columns: repeat(7, 1fr); gap:4px; margin-bottom:4px; grid-column: 1 / -1; }
+  .cal-head-cell { text-align:center; color:#d1d5db; font-size:12px; }
+  .calendar .cal-cell { display:flex; flex-direction:column; border:1px solid #6a6a6a; border-radius:6px; padding:6px; min-height:72px; gap:6px; }
+  .cal-cell.dim { opacity: 0.5; }
+  .cal-cell.today { outline:2px solid #ffffff66; }
+  .cal-daynum { font-weight:600; color:#e5e7eb; }
+  .cal-badge { align-self:flex-start; background:#FF8200; color:#111; font-weight:600; font-size:12px; padding:2px 6px; border-radius:999px; }
+  .calendar-details { margin-top:12px; border-top:1px solid #6a6a6a; padding-top:8px; }
+  .cal-details-title { color:#e5e7eb; font-weight:600; margin-bottom:6px; }
+  .cal-list { list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:6px; }
+  .cal-list li { display:flex; align-items:center; gap:8px; background:#585858; border:1px solid #6a6a6a; border-radius:6px; padding:6px 8px; }
+  .cal-dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+  .cal-name { color:#f3f4f6; font-weight:600; }
+  .cal-when { color:#d1d5db; font-size:12px; margin-left:auto; }
+
+  /* Timeline styles */
+  #timeline { overflow:auto; border-top:1px solid #6a6a6a; min-height:320px; }
+  .timeline-svg text { user-select:none; }
+
+  /* Tree styles */
+  #tree { border-top:1px solid #6a6a6a; }
+  .tree-list { display:flex; flex-direction:column; gap:4px; padding:8px 0; }
+  .tree-row { display:flex; gap:8px; align-items:center; background:#585858; border:1px solid #6a6a6a; border-radius:6px; padding:6px 8px; }
+  .tree-toggle { width:24px; min-width:24px; height:24px; line-height:20px; text-align:center; border:1px solid #cfcfcf; border-radius:6px; background:#fff; color:#222; padding:0; }
+  .tree-toggle:disabled { opacity:0.5; }
+  .tree-name { color:#f3f4f6; font-weight:600; }
+  .tree-when { color:#d1d5db; font-size:12px; margin-left:auto; }
+  .tree-progress { color:#111; font-size:12px; font-weight:600; padding:2px 6px; border-radius:999px; margin-left:8px; }
 
     /* Images gallery */
     .images-toolbar { display:flex; gap:8px; align-items:center; padding:8px 0; }
@@ -95,6 +131,9 @@
       <label>Display:</label>
       <select id="display-mode">
         <option value="gantt">Gantt</option>
+        <option value="calendar">Calendar</option>
+        <option value="timeline">Timeline</option>
+        <option value="tree">Tree</option>
         <option value="images">Images</option>
       </select>
       <label>View:</label>
@@ -110,6 +149,21 @@
     <div class="info" id="status"></div>
     <div id="gantt-view" class="view">
       <div id="gantt"></div>
+    </div>
+    <div id="calendar-view" class="view" hidden>
+      <div class="cal-toolbar">
+        <button id="cal-prev" title="Previous Month">◀</button>
+        <div id="cal-title" class="cal-title"></div>
+        <button id="cal-next" title="Next Month">▶</button>
+      </div>
+      <div id="calendar" class="calendar"></div>
+      <div id="calendar-details" class="calendar-details"></div>
+    </div>
+    <div id="timeline-view" class="view" hidden>
+      <div id="timeline" class="timeline"></div>
+    </div>
+    <div id="tree-view" class="view" hidden>
+      <div id="tree" class="tree"></div>
     </div>
     <div id="images-view" class="view" hidden>
       <div id="images-toolbar" class="images-toolbar">
@@ -157,8 +211,9 @@
   </script>
   <script>
     let gantt;
-    let cachedTasks = null; // cache parsed Date objects for re-render without refetching
-    let currentMode = 'gantt';
+  let cachedTasks = null; // cache parsed Date objects for re-render without refetching
+  let currentMode = 'gantt';
+  let calMonth = null; // calendar month anchor
     let cachedImages = null; // cache image listing
 
     // Compute overall date range of tasks
@@ -214,7 +269,7 @@
       return { view: last, column_width: Math.max(bounds.min, Math.min(bounds.max, Math.floor(containerWidth / cols))) };
     }
 
-    function renderGantt(parsed, opts={}) {
+  function renderGantt(parsed, opts={}) {
       const el = document.querySelector('#gantt');
       el.innerHTML = '';
       const container = document.createElement('div');
@@ -302,8 +357,8 @@
       const res = await fetch('/api/tasks');
       const tasks = await res.json();
       document.querySelector('#status').textContent = `Tasks fetched: ${tasks?.length ?? 0}`;
-      const el = document.querySelector('#gantt');
-      el.innerHTML = '';
+  const target = currentMode === 'calendar' ? document.getElementById('calendar') : (currentMode === 'timeline' ? document.getElementById('timeline') : document.getElementById('gantt'));
+  if (target) target.innerHTML = '';
       if (!tasks || tasks.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'empty';
@@ -319,17 +374,26 @@
       }));
       cachedTasks = parsed;
       try {
-        renderGantt(parsed);
+        if (currentMode === 'gantt') {
+          renderGantt(parsed);
+        } else if (currentMode === 'calendar') {
+          ensureCalMonth(parsed);
+          renderCalendar(parsed, calMonth);
+        } else if (currentMode === 'timeline') {
+          renderTimeline(parsed);
+        } else if (currentMode === 'tree') {
+          renderTree(parsed);
+        }
       } catch (e) {
-        console.error('Gantt render error', e);
+        console.error('Render error', e);
         const err = document.createElement('div');
         err.className = 'error';
-        err.textContent = `Error rendering Gantt: ${e?.message || e}`;
-        el.appendChild(err);
+        err.textContent = `Error rendering: ${e?.message || e}`;
+        (target || document.body).appendChild(err);
         // As a fallback, list first few tasks
         const pre = document.createElement('pre');
         pre.textContent = JSON.stringify(parsed.slice(0,5), null, 2);
-        el.appendChild(pre);
+        (target || document.body).appendChild(pre);
       }
     }
 
@@ -344,14 +408,204 @@
     // Display mode switching
     function setMode(mode) {
       currentMode = mode;
-      document.body.classList.remove('mode-gantt','mode-images');
+      document.body.classList.remove('mode-gantt','mode-calendar','mode-timeline','mode-tree','mode-images');
       document.body.classList.add(`mode-${mode}`);
       document.getElementById('gantt-view').hidden = mode !== 'gantt';
+      document.getElementById('calendar-view').hidden = mode !== 'calendar';
+      document.getElementById('timeline-view').hidden = mode !== 'timeline';
+      document.getElementById('tree-view').hidden = mode !== 'tree';
       document.getElementById('images-view').hidden = mode !== 'images';
       if (mode === 'images') { renderImages(); return; }
-      if (cachedTasks) renderGantt(cachedTasks); else loadTasks();
+      if (!cachedTasks) return;
+      if (mode === 'gantt') renderGantt(cachedTasks);
+      else if (mode === 'calendar') { ensureCalMonth(cachedTasks); renderCalendar(cachedTasks, calMonth); }
+      else if (mode === 'timeline') renderTimeline(cachedTasks);
+      else if (mode === 'tree') renderTree(cachedTasks);
     }
     document.getElementById('display-mode').addEventListener('change', (e) => setMode(e.target.value));
+
+    // ---- Calendar view implementation ----
+    function ensureCalMonth(tasks) {
+      if (calMonth) return;
+      const { min, max } = computeRange(tasks);
+      const today = new Date();
+      let base = today;
+      if (min && max) {
+        const mid = new Date((min.getTime() + max.getTime())/2);
+        base = mid;
+      }
+      calMonth = new Date(base.getFullYear(), base.getMonth(), 1);
+    }
+    function monthName(d) { return d.toLocaleString(undefined, { month: 'long', year: 'numeric' }); }
+    function dayKey(d) { return d.toISOString().slice(0,10); }
+    function overlapsDay(t, day) {
+      const start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0,0,0,0);
+      const end = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23,59,59,999);
+      return t.start <= end && t.end >= start;
+    }
+    function buildCalendarGrid(monthDate) {
+      const first = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+      const start = new Date(first);
+      start.setDate(start.getDate() - start.getDay()); // back to Sunday
+      const cells = [];
+      for (let i=0; i<42; i++) { const d = new Date(start); d.setDate(start.getDate() + i); cells.push(d); }
+      return cells;
+    }
+    function renderCalendar(tasks, monthDate) {
+      const grid = document.getElementById('calendar');
+      grid.innerHTML = '';
+      const details = document.getElementById('calendar-details');
+      const title = document.getElementById('cal-title');
+      title.textContent = monthName(monthDate);
+      const weekdays = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+      const head = document.createElement('div'); head.className = 'cal-head';
+      for (const w of weekdays) { const c = document.createElement('div'); c.className = 'cal-head-cell'; c.textContent = w; head.appendChild(c); }
+      grid.appendChild(head);
+      const cells = buildCalendarGrid(monthDate);
+      const todayKey = dayKey(new Date());
+      const monthIdx = monthDate.getMonth();
+      const frag = document.createDocumentFragment();
+      for (const d of cells) {
+        const cell = document.createElement('div'); cell.className = 'cal-cell';
+        if (d.getMonth() !== monthIdx) cell.classList.add('dim');
+        const dk = dayKey(d); if (dk === todayKey) cell.classList.add('today');
+        const dayNum = document.createElement('div'); dayNum.className = 'cal-daynum'; dayNum.textContent = String(d.getDate()); cell.appendChild(dayNum);
+        let count = 0; const items = [];
+        for (const t of tasks) { if (overlapsDay(t, d)) { count++; items.push(t); } }
+        if (count > 0) { const badge = document.createElement('div'); badge.className = 'cal-badge'; badge.textContent = String(count); cell.appendChild(badge); }
+        cell.addEventListener('click', () => { renderCalDetails(d, items); });
+        frag.appendChild(cell);
+      }
+      grid.appendChild(frag);
+      const base = (cells.find(d => dayKey(d) === todayKey) || new Date(monthDate));
+      const baseItems = tasks.filter(t => overlapsDay(t, base));
+      renderCalDetails(base, baseItems);
+    }
+    function renderCalDetails(day, items) {
+      const details = document.getElementById('calendar-details');
+      details.innerHTML = '';
+      const h = document.createElement('div'); h.className = 'cal-details-title';
+      h.textContent = day.toLocaleDateString(undefined, { weekday:'long', month:'long', day:'numeric', year:'numeric' });
+      details.appendChild(h);
+      if (!items || items.length === 0) { const p = document.createElement('div'); p.className = 'empty'; p.textContent = 'No tasks on this day.'; details.appendChild(p); return; }
+      const list = document.createElement('ul'); list.className = 'cal-list';
+      for (const t of items) {
+        const li = document.createElement('li');
+        const dot = document.createElement('span'); dot.className = 'cal-dot'; dot.style.background = t.color_progress || '#FF8200';
+        const name = document.createElement('span'); name.className = 'cal-name'; name.textContent = t.name;
+        const when = document.createElement('span'); when.className = 'cal-when';
+        const s = t.start.toISOString().slice(0,10); const e = t.end.toISOString().slice(0,10);
+        when.textContent = `${s} → ${e}`;
+        li.appendChild(dot); li.appendChild(name); li.appendChild(when);
+        list.appendChild(li);
+      }
+      details.appendChild(list);
+    }
+    document.addEventListener('DOMContentLoaded', () => {
+      const prev = document.getElementById('cal-prev'); const next = document.getElementById('cal-next');
+      if (prev) prev.addEventListener('click', () => { if (!calMonth) return; calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()-1, 1); if (cachedTasks) renderCalendar(cachedTasks, calMonth); });
+      if (next) next.addEventListener('click', () => { if (!calMonth) return; calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()+1, 1); if (cachedTasks) renderCalendar(cachedTasks, calMonth); });
+    });
+
+    // ---- Timeline view implementation ----
+    function renderTimeline(tasks) {
+      const container = document.getElementById('timeline');
+      container.innerHTML = '';
+      const { min, max } = computeRange(tasks);
+      if (!min || !max) return;
+      const padDays = 1;
+      const start = new Date(min.getFullYear(), min.getMonth(), min.getDate() - padDays);
+      const end = new Date(max.getFullYear(), max.getMonth(), max.getDate() + padDays);
+      const msPerDay = 24*60*60*1000;
+      const totalDays = Math.max(1, Math.ceil((end - start) / msPerDay));
+      const width = container.clientWidth || 1024;
+      const rowH = 22; const padding = 48;
+      const tasksSorted = tasks.slice().sort((a,b)=>a.start-b.start || a.end-b.end);
+      const height = padding + tasksSorted.length * rowH + 30;
+
+      function xFor(d) { return padding + ((d - start) / msPerDay) * (width - padding*2) / totalDays; }
+
+      const svgNS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(svgNS, 'svg');
+      svg.setAttribute('width', String(width));
+      svg.setAttribute('height', String(height));
+      svg.classList.add('timeline-svg');
+
+      let tick = new Date(start.getFullYear(), start.getMonth(), 1);
+      while (tick <= end) {
+        const x = xFor(tick);
+        const line = document.createElementNS(svgNS, 'line');
+        line.setAttribute('x1', String(x)); line.setAttribute('y1', '0');
+        line.setAttribute('x2', String(x)); line.setAttribute('y2', String(height));
+        line.setAttribute('stroke', '#6a6a6a'); line.setAttribute('stroke-width', '1');
+        svg.appendChild(line);
+        const lbl = document.createElementNS(svgNS, 'text'); lbl.setAttribute('x', String(x + 4)); lbl.setAttribute('y', '14'); lbl.setAttribute('fill', '#e5e7eb'); lbl.setAttribute('font-size', '12');
+        lbl.textContent = tick.toLocaleString(undefined, { month:'short', year:'numeric' });
+        svg.appendChild(lbl);
+        tick = new Date(tick.getFullYear(), tick.getMonth()+1, 1);
+      }
+
+      const today = new Date();
+      const tx = xFor(new Date(today.getFullYear(), today.getMonth(), today.getDate()));
+      const tline = document.createElementNS(svgNS, 'line');
+      tline.setAttribute('x1', String(tx)); tline.setAttribute('y1', '0');
+      tline.setAttribute('x2', String(tx)); tline.setAttribute('y2', String(height));
+      tline.setAttribute('stroke', '#ffffff66'); tline.setAttribute('stroke-width', '2');
+      svg.appendChild(tline);
+
+      tasksSorted.forEach((t, i) => {
+        const y = padding + i * rowH;
+        const x1 = xFor(t.start);
+        const x2 = xFor(t.end);
+        const bw = Math.max(3, x2 - x1);
+        const rect = document.createElementNS(svgNS, 'rect');
+        rect.setAttribute('x', String(x1)); rect.setAttribute('y', String(y));
+        rect.setAttribute('width', String(bw)); rect.setAttribute('height', '14'); rect.setAttribute('rx', '3');
+        rect.setAttribute('fill', t.color_progress || '#FF8200');
+        svg.appendChild(rect);
+        const label = document.createElementNS(svgNS, 'text');
+        label.setAttribute('x', String(x1 + 4)); label.setAttribute('y', String(y + 12));
+        label.setAttribute('fill', '#111'); label.setAttribute('font-size', '12');
+        label.textContent = t.name; svg.appendChild(label);
+      });
+
+      container.appendChild(svg);
+    }
+
+    // ---- Tree view implementation ----
+    function buildTree(tasks) {
+      const byId = new Map();
+      const roots = [];
+      tasks.forEach(t => { byId.set(t.id, { ...t, children: [] }); });
+      byId.forEach(node => {
+        const pid = node.parent_id;
+        if (pid && byId.has(pid) && pid !== node.id) { byId.get(pid).children.push(node); }
+        else { roots.push(node); }
+      });
+      return roots;
+    }
+    function renderTree(tasks) {
+      const container = document.getElementById('tree');
+      container.innerHTML = '';
+      const roots = buildTree(tasks);
+      const list = document.createElement('div'); list.className = 'tree-list';
+      container.appendChild(list);
+      function row(node, depth=0) {
+        const r = document.createElement('div'); r.className = 'tree-row'; r.style.paddingLeft = `${depth*16 + 8}px`;
+        const toggle = document.createElement('button'); toggle.className = 'tree-toggle'; toggle.textContent = node.children && node.children.length ? '▾' : '•'; toggle.disabled = !(node.children && node.children.length);
+        const name = document.createElement('span'); name.className = 'tree-name'; name.textContent = node.name;
+        const when = document.createElement('span'); when.className = 'tree-when';
+        const s = new Date(node.start).toISOString().slice(0,10); const e = new Date(node.end).toISOString().slice(0,10);
+        when.textContent = `${s} → ${e}`;
+        const prog = document.createElement('span'); prog.className = 'tree-progress'; prog.textContent = `${node.progress ?? 0}%`; prog.style.background = node.color_progress || '#FF8200';
+        r.appendChild(toggle); r.appendChild(name); r.appendChild(when); r.appendChild(prog);
+        let expanded = true; const childWrap = document.createElement('div'); childWrap.className = 'tree-children'; r.appendChild(childWrap);
+        function rerenderChildren() { childWrap.innerHTML = ''; if (!expanded) return; (node.children||[]).forEach(c => childWrap.appendChild(row(c, depth+1))); }
+        toggle.addEventListener('click', () => { if (!node.children || !node.children.length) return; expanded = !expanded; toggle.textContent = expanded ? '▾' : '▸'; rerenderChildren(); });
+        rerenderChildren(); return r;
+      }
+      roots.forEach(n => list.appendChild(row(n, 0)));
+    }
 
     // ---- Images view implementation ----
     async function fetchImages() {
@@ -480,6 +734,96 @@
       grid.addEventListener('mouseleave', hideHoverPreview);
     }
 
+    // Calendar details hover + click to open details
+    function bindCalendarHover() {
+      const list = document.querySelector('#calendar-details .cal-list');
+      if (!list || list.dataset.hoverBound === '1') return;
+      list.dataset.hoverBound = '1';
+      list.addEventListener('mousemove', (e) => {
+        const li = e.target.closest('li');
+        if (!li) { hideHoverPreview(); return; }
+        const name = li.querySelector('.cal-name')?.textContent || '';
+        const t = cachedTasks && cachedTasks.find(x => x.name === name);
+        const url = t && t.images && t.images[0] ? t.images[0].url : null;
+        if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
+      });
+      list.addEventListener('mouseleave', hideHoverPreview);
+      list.addEventListener('click', (e) => {
+        const li = e.target.closest('li');
+        if (!li) return;
+        const name = li.querySelector('.cal-name')?.textContent || '';
+        const t = cachedTasks && cachedTasks.find(x => x.name === name);
+        if (t) openDetailsForTask(t);
+      });
+    }
+
+    // Timeline hover + click
+    function bindTimelineHover() {
+      const svg = document.querySelector('#timeline svg');
+      if (!svg || svg.dataset.hoverBound === '1') return;
+      svg.dataset.hoverBound = '1';
+      svg.addEventListener('mousemove', (e) => {
+        const rect = e.target.closest('rect');
+        if (!rect) { hideHoverPreview(); return; }
+        const y = rect.getAttribute('y');
+        const label = Array.from(svg.querySelectorAll('text')).find(t => t.getAttribute('y') === String(Number(y) + 12));
+        const name = label?.textContent || '';
+        const t = cachedTasks && cachedTasks.find(x => x.name === name);
+        const url = t && t.images && t.images[0] ? t.images[0].url : null;
+        if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
+      });
+      svg.addEventListener('mouseleave', hideHoverPreview);
+      svg.addEventListener('click', (e) => {
+        const rect = e.target.closest('rect');
+        if (!rect) return;
+        const y = rect.getAttribute('y');
+        const label = Array.from(svg.querySelectorAll('text')).find(t => t.getAttribute('y') === String(Number(y) + 12));
+        const name = label?.textContent || '';
+        const t = cachedTasks && cachedTasks.find(x => x.name === name);
+        if (t) openDetailsForTask(t);
+      });
+    }
+
+    // Tree hover + click
+    function bindTreeHover() {
+      const list = document.querySelector('#tree');
+      if (!list || list.dataset.hoverBound === '1') return;
+      list.dataset.hoverBound = '1';
+      list.addEventListener('mousemove', (e) => {
+        const row = e.target.closest('.tree-row');
+        if (!row) { hideHoverPreview(); return; }
+        const name = row.querySelector('.tree-name')?.textContent || '';
+        const t = cachedTasks && cachedTasks.find(x => x.name === name);
+        const url = t && t.images && t.images[0] ? t.images[0].url : null;
+        if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
+      });
+      list.addEventListener('mouseleave', hideHoverPreview);
+      list.addEventListener('click', (e) => {
+        const row = e.target.closest('.tree-row');
+        if (!row) return;
+        const name = row.querySelector('.tree-name')?.textContent || '';
+        const t = cachedTasks && cachedTasks.find(x => x.name === name);
+        if (t) openDetailsForTask(t);
+      });
+    }
+
+    // Post-render binders for new views
+    const _hostedRenderCalendar = renderCalendar;
+    renderCalendar = function(tasks, monthDate) { _hostedRenderCalendar(tasks, monthDate); setTimeout(bindCalendarHover, 0); };
+    const _hostedRenderTimeline = renderTimeline;
+    renderTimeline = function(tasks) { _hostedRenderTimeline(tasks); setTimeout(bindTimelineHover, 0); };
+    const _hostedRenderTree = renderTree;
+    renderTree = function(tasks) { _hostedRenderTree(tasks); setTimeout(bindTreeHover, 0); };
+
+    // Safety: try to bind on load for current mode
+    function rebindAllHovers() {
+      if (currentMode === 'gantt') bindGanttHover();
+      if (currentMode === 'calendar') bindCalendarHover();
+      if (currentMode === 'timeline') bindTimelineHover();
+      if (currentMode === 'tree') bindTreeHover();
+      if (currentMode === 'images') bindImageGridHover();
+    }
+    window.addEventListener('load', () => setTimeout(rebindAllHovers, 0));
     // Helper to get first image URL for a task (from cachedTasks entries)
     function firstImageUrlForTask(taskId) {
       if (!cachedTasks) return null;
