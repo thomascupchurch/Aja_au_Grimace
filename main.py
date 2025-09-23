@@ -1218,6 +1218,23 @@ class GanttChartView(QWidget):
 
     def _export_scene_with_header(self, scene, title="Export"):
         from PyQt5.QtGui import QPainter
+        import os
+        # Prefer SVG header if available; fallback to PNG
+        base_dir = os.path.dirname(__file__)
+        svg_name = "University - CenteredLogo-OnDark (RGB).svg"
+        svg_path = os.path.join(base_dir, svg_name)
+        header_is_svg = False
+        header_svg_renderer = None
+        try:
+            if os.path.exists(svg_path):
+                from PyQt5.QtSvg import QSvgRenderer  # type: ignore
+                r = QSvgRenderer(svg_path)
+                if r.isValid():
+                    header_is_svg = True
+                    header_svg_renderer = r
+        except Exception:
+            header_is_svg = False
+            header_svg_renderer = None
         # Ask for target format (PNG or PDF)
         path, _ = QFileDialog.getSaveFileName(self, f"Export {title}", f"{title.lower().replace(' ', '_')}.png", "PNG Files (*.png);;PDF Files (*.pdf)")
         if not path:
@@ -1227,7 +1244,7 @@ class GanttChartView(QWidget):
             print("Scene is empty; nothing to export.")
             return
         is_pdf = path.lower().endswith('.pdf')
-        header_path = os.path.join(os.path.dirname(__file__), "header.png")
+        header_path = os.path.join(base_dir, "header.png")
         header_pixmap = QPixmap(header_path) if os.path.exists(header_path) else None
         if is_pdf:
             # Use QPrinter for PDF
@@ -1240,7 +1257,22 @@ class GanttChartView(QWidget):
             painter = QPainter(printer)
             page_rect = printer.pageRect()
             y_offset = 0
-            if header_pixmap:
+            # Draw header (SVG preferred)
+            if header_is_svg and header_svg_renderer:
+                ds = header_svg_renderer.defaultSize()
+                target_w = page_rect.width()
+                # Guard against zero size SVGs
+                if ds.width() > 0 and ds.height() > 0:
+                    header_h = int(round(ds.height() * (target_w / ds.width())))
+                    target_rect = QRectF(0, 0, target_w, header_h)
+                    header_svg_renderer.render(painter, target_rect)
+                    y_offset = header_h + 10
+                elif header_pixmap and not header_pixmap.isNull():
+                    header_w = page_rect.width()
+                    scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
+                    painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
+                    y_offset = scaled_header.height() + 10
+            elif header_pixmap and not header_pixmap.isNull():
                 header_w = page_rect.width()
                 scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
                 painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
@@ -1252,7 +1284,19 @@ class GanttChartView(QWidget):
             for col in range(cols):
                 if col > 0:
                     printer.newPage()
-                    if header_pixmap:
+                    # Repaint header on each page
+                    if header_is_svg and header_svg_renderer:
+                        ds = header_svg_renderer.defaultSize()
+                        target_w = page_rect.width()
+                        if ds.width() > 0 and ds.height() > 0:
+                            header_h = int(round(ds.height() * (target_w / ds.width())))
+                            target_rect = QRectF(0, 0, target_w, header_h)
+                            header_svg_renderer.render(painter, target_rect)
+                        elif header_pixmap and not header_pixmap.isNull():
+                            header_w = page_rect.width()
+                            scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
+                            painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
+                    elif header_pixmap and not header_pixmap.isNull():
                         header_w = page_rect.width()
                         scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
                         painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
@@ -1272,7 +1316,38 @@ class GanttChartView(QWidget):
         painter = QPainter(content_pixmap)
         scene.render(painter)
         painter.end()
-        if header_pixmap:
+        # Compose header + content into a single pixmap (header centered)
+        if header_is_svg and header_svg_renderer:
+            ds = header_svg_renderer.defaultSize()
+            target_w = content_pixmap.width()
+            if ds.width() > 0 and ds.height() > 0 and target_w > 0:
+                header_h = int(round(ds.height() * (target_w / ds.width())))
+                combined_width = max(target_w, content_pixmap.width())
+                combined_height = header_h + content_pixmap.height()
+                combined = QPixmap(combined_width, combined_height)
+                combined.fill()
+                painter = QPainter(combined)
+                # Render SVG centered at top into target rect of width target_w
+                from PyQt5.QtCore import QRectF
+                target_rect = QRectF((combined_width - target_w) / 2, 0, target_w, header_h)
+                header_svg_renderer.render(painter, target_rect)
+                painter.drawPixmap(0, header_h, content_pixmap)
+                painter.end()
+                combined.save(path, 'PNG')
+            elif header_pixmap and not header_pixmap.isNull():
+                combined_width = max(header_pixmap.width(), content_pixmap.width())
+                combined_height = header_pixmap.height() + content_pixmap.height()
+                combined = QPixmap(combined_width, combined_height)
+                combined.fill()
+                painter = QPainter(combined)
+                header_x = (combined_width - header_pixmap.width()) // 2
+                painter.drawPixmap(header_x, 0, header_pixmap)
+                painter.drawPixmap(0, header_pixmap.height(), content_pixmap)
+                painter.end()
+                combined.save(path, 'PNG')
+            else:
+                content_pixmap.save(path, 'PNG')
+        elif header_pixmap and not header_pixmap.isNull():
             combined_width = max(header_pixmap.width(), content_pixmap.width())
             combined_height = header_pixmap.height() + content_pixmap.height()
             combined = QPixmap(combined_width, combined_height)
