@@ -46,7 +46,7 @@
   .controlbar-inner { padding: 6px 12px; display:flex; align-items:center; gap:8px; }
   /* Hide control bar in Gantt fullscreen */
   body.gantt-fullscreen .controlbar { display:none; }
-    .view { flex:1; display:flex; flex-direction:column; min-height:0; }
+  .view { flex:1; display:flex; flex-direction:column; min-height:0; position: relative; }
     .view[hidden] { display:none !important; }
     #gantt { flex:1; min-height:0; overflow:hidden; border-top: 1px solid #6a6a6a; display:flex; }
     .toolbar { display:flex; gap:8px; align-items:center; padding:8px 0; }
@@ -152,6 +152,23 @@
     .popup-wrapper .details-container div { margin:4px 0; }
     .popup-wrapper .details-container strong { color:#fff !important; }
     .popup-wrapper .pointer { border-top-color:#2f2f2f !important; }
+    /* Export watermark overlay */
+    .export-wm {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      user-select: none;
+      font-weight: 900;
+      letter-spacing: 4px;
+      color: #ffffff;
+      opacity: 0.25;
+      transform: rotate(-28deg);
+      font-size: min(12vw, 120px);
+      text-shadow: 0 2px 6px rgba(0,0,0,0.35);
+    }
   </style>
 </head>
 <body>
@@ -182,6 +199,10 @@
       <button id="today" class="gantt-only" title="Center on today">Today</button>
       <button id="fullscreen" class="gantt-only" title="Enter Fullscreen">⛶</button>
       <button id="copy-link" title="Copy shareable link">Copy Link</button>
+      <label style="margin-left:8px; display:inline-flex; align-items:center; gap:6px;">
+        <input type="checkbox" id="export-watermark" /> Watermark
+      </label>
+      <button id="export-view" title="Export current view as PNG">Export</button>
       <button id="refresh">Refresh</button>
       </div>
     </div>
@@ -249,6 +270,22 @@
           inject('/static/frappe-gantt.umd.js');
         });
       });
+    })();
+  </script>
+  <!-- dom-to-image-more for client-side PNG export (CDN with fallback) -->
+  <script>
+    (function(){
+      function inject(src, next){
+        var s=document.createElement('script'); s.src=src; s.async=true;
+        s.onload=function(){ if(typeof window.domtoimage==='object'){ return; } if(next) next(); };
+        s.onerror=function(){ if(next) next(); };
+        document.body.appendChild(s);
+      }
+      if(!window.domtoimage){
+        inject('https://cdn.jsdelivr.net/npm/dom-to-image-more@3.5.0/dist/dom-to-image-more.min.js', function(){
+          inject('https://unpkg.com/dom-to-image-more@3.5.0/dist/dom-to-image-more.min.js');
+        });
+      }
     })();
   </script>
   <script>
@@ -600,6 +637,40 @@
       btn.textContent = fs ? '⤢' : '⛶';
       btn.title = fs ? 'Exit Fullscreen' : 'Enter Fullscreen';
     });
+
+    // ---- Export current view (PNG) with optional diagonal watermark ----
+    function visibleViewNode() {
+      return document.querySelector('.view:not([hidden])') || document.getElementById('gantt-view');
+    }
+    function addTemporaryWatermark(target, text) {
+      const wm = document.createElement('div');
+      wm.className = 'export-wm';
+      wm.textContent = text || 'INTERNAL USE ONLY';
+      target.appendChild(wm);
+      return wm;
+    }
+    async function exportCurrentViewPNG() {
+      try {
+        if (!window.domtoimage) { flashStatus('Export library not loaded'); return; }
+        const node = visibleViewNode();
+        if (!node) { flashStatus('Nothing to export'); return; }
+        const withWM = !!document.getElementById('export-watermark')?.checked;
+        let wmEl = null;
+        if (withWM) { wmEl = addTemporaryWatermark(node, 'INTERNAL USE ONLY'); }
+        const opts = { bgcolor: '#4B4B4B', quality: 1 };
+        const blob = await window.domtoimage.toBlob(node, opts);
+        if (wmEl) wmEl.remove();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+        a.download = (window.currentMode || 'view') + '-' + ts + '.png';
+        a.href = url; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+      } catch (e) {
+        flashStatus('Export failed: ' + (e?.message || e));
+      }
+    }
+    document.getElementById('export-view').addEventListener('click', exportCurrentViewPNG);
 
     // Display mode switching
     function setMode(mode) {
