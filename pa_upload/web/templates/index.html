@@ -145,7 +145,7 @@
 </head>
 <body>
   <header>
-    <img src="/static/header.png" alt="Header" onerror="this.style.display='none'"/>
+    <img src="/static/header.svg" alt="Header" onerror="this.onerror=null;this.src='/static/header.png'"/>
     <div>Project Gantt (Read-only)</div>
   </header>
   <main>
@@ -170,6 +170,7 @@
       <button id="fit" class="gantt-only" title="Fit to width">Fit</button>
       <button id="today" class="gantt-only" title="Center on today">Today</button>
       <button id="fullscreen" class="gantt-only" title="Enter Fullscreen">⛶</button>
+      <button id="copy-link" title="Copy shareable link">Copy Link</button>
       <button id="refresh">Refresh</button>
     </div>
     <div class="info" id="db-info"></div>
@@ -263,6 +264,44 @@
         await new Promise(r => setTimeout(r, 50));
       }
       return true;
+    }
+
+    // URL state helpers (display/view/month)
+    function getStateParams() {
+      const display = currentMode;
+      const view = document.querySelector('#view-mode')?.value || 'Day';
+      const cal = (display === 'calendar' && calMonth) ? calMonth.toISOString().slice(0,7) : null;
+      const sp = new URLSearchParams();
+      if (display) sp.set('display', display);
+      if (display === 'gantt' && view) sp.set('view', view);
+      if (cal) sp.set('cal', cal);
+      return sp;
+    }
+    function applyStateFromUrl() {
+      const sp = new URLSearchParams(location.search);
+      const display = sp.get('display');
+      const view = sp.get('view');
+      const cal = sp.get('cal');
+      if (display) {
+        const sel = document.getElementById('display-mode');
+        if (sel) sel.value = display;
+        currentMode = display;
+      }
+      if (view) {
+        const vm = document.getElementById('view-mode');
+        if (vm) vm.value = view;
+      }
+      if (cal) {
+        const d = new Date(`${cal}-01T00:00:00`);
+        if (!isNaN(d.getTime())) calMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+      }
+      // Toggle views to match display (will render once tasks are loaded)
+      setMode(currentMode);
+    }
+    function updateUrlFromState(replace=true) {
+      const sp = getStateParams();
+      const url = `${location.pathname}?${sp.toString()}`;
+      if (replace) history.replaceState(null, '', url); else history.pushState(null, '', url);
     }
 
     // Compute overall date range of tasks
@@ -508,9 +547,11 @@
     document.querySelector('#view-mode').addEventListener('change', () => {
       // Re-render with the chosen view, still fitting the width
       if (cachedTasks) renderGantt(cachedTasks, { view: document.querySelector('#view-mode').value });
+      updateUrlFromState(true);
     });
     document.querySelector('#refresh').addEventListener('click', () => {
       if (currentMode === 'images') { renderImages(true); } else { loadTasks(); }
+      updateUrlFromState(true);
     });
 
     // Advanced Gantt controls
@@ -556,6 +597,7 @@
       document.getElementById('timeline-view').hidden = mode !== 'timeline';
       document.getElementById('tree-view').hidden = mode !== 'tree';
       document.getElementById('images-view').hidden = mode !== 'images';
+      updateUrlFromState(true);
       if (mode === 'images') { renderImages(); return; }
       if (!cachedTasks) return;
       if (mode === 'gantt') {
@@ -566,6 +608,22 @@
       else if (mode === 'tree') renderTree(cachedTasks);
     }
     document.getElementById('display-mode').addEventListener('change', (e) => setMode(e.target.value));
+    document.getElementById('copy-link').addEventListener('click', async () => {
+      try {
+        updateUrlFromState(true);
+        const url = location.href;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(url);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = url; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+        }
+        flashStatus('Link copied to clipboard');
+      } catch (e) {
+        console.warn('copy failed', e);
+        flashStatus('Copy failed');
+      }
+    });
 
     // ---- Calendar view implementation ----
     function ensureCalMonth(tasks) {
@@ -634,6 +692,7 @@
       const list = document.createElement('ul'); list.className = 'cal-list';
       for (const t of items) {
         const li = document.createElement('li');
+        if (t.id) li.dataset.id = String(t.id);
         const dot = document.createElement('span'); dot.className = 'cal-dot'; dot.style.background = t.color_progress || '#FF8200';
         const name = document.createElement('span'); name.className = 'cal-name'; name.textContent = t.name;
         const when = document.createElement('span'); when.className = 'cal-when';
@@ -705,6 +764,7 @@
         rect.setAttribute('x', String(x1)); rect.setAttribute('y', String(y));
         rect.setAttribute('width', String(bw)); rect.setAttribute('height', '14'); rect.setAttribute('rx', '3');
         rect.setAttribute('fill', t.color_progress || '#FF8200');
+        if (t.id) rect.setAttribute('data-id', String(t.id));
         svg.appendChild(rect);
         const label = document.createElementNS(svgNS, 'text');
         label.setAttribute('x', String(x1 + 4)); label.setAttribute('y', String(y + 12));
@@ -734,7 +794,7 @@
       const list = document.createElement('div'); list.className = 'tree-list';
       container.appendChild(list);
       function row(node, depth=0) {
-        const r = document.createElement('div'); r.className = 'tree-row'; r.style.paddingLeft = `${depth*16 + 8}px`;
+        const r = document.createElement('div'); r.className = 'tree-row'; r.style.paddingLeft = `${depth*16 + 8}px`; if (node.id) r.dataset.id = String(node.id);
         const toggle = document.createElement('button'); toggle.className = 'tree-toggle'; toggle.textContent = node.children && node.children.length ? '▾' : '•'; toggle.disabled = !(node.children && node.children.length);
         const name = document.createElement('span'); name.className = 'tree-name'; name.textContent = node.name;
         const when = document.createElement('span'); when.className = 'tree-when';
@@ -885,17 +945,16 @@
       list.addEventListener('mousemove', (e) => {
         const li = e.target.closest('li');
         if (!li) { hideHoverPreview(); return; }
-        const name = li.querySelector('.cal-name')?.textContent || '';
-        const t = cachedTasks && cachedTasks.find(x => x.name === name);
-        const url = t && t.images && t.images[0] ? t.images[0].url : null;
+        const id = li.dataset.id;
+        const url = id ? firstImageUrlForTask(id) : null;
         if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
       });
       list.addEventListener('mouseleave', hideHoverPreview);
       list.addEventListener('click', (e) => {
         const li = e.target.closest('li');
         if (!li) return;
-        const name = li.querySelector('.cal-name')?.textContent || '';
-        const t = cachedTasks && cachedTasks.find(x => x.name === name);
+        const id = li.dataset.id;
+        const t = cachedTasks && id && cachedTasks.find(x => String(x.id) === String(id));
         if (t) openDetailsForTask(t);
       });
     }
@@ -908,21 +967,16 @@
       svg.addEventListener('mousemove', (e) => {
         const rect = e.target.closest('rect');
         if (!rect) { hideHoverPreview(); return; }
-        const y = rect.getAttribute('y');
-        const label = Array.from(svg.querySelectorAll('text')).find(t => t.getAttribute('y') === String(Number(y) + 12));
-        const name = label?.textContent || '';
-        const t = cachedTasks && cachedTasks.find(x => x.name === name);
-        const url = t && t.images && t.images[0] ? t.images[0].url : null;
+        const id = rect.getAttribute('data-id');
+        const url = id ? firstImageUrlForTask(id) : null;
         if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
       });
       svg.addEventListener('mouseleave', hideHoverPreview);
       svg.addEventListener('click', (e) => {
         const rect = e.target.closest('rect');
         if (!rect) return;
-        const y = rect.getAttribute('y');
-        const label = Array.from(svg.querySelectorAll('text')).find(t => t.getAttribute('y') === String(Number(y) + 12));
-        const name = label?.textContent || '';
-        const t = cachedTasks && cachedTasks.find(x => x.name === name);
+        const id = rect.getAttribute('data-id');
+        const t = cachedTasks && id && cachedTasks.find(x => String(x.id) === String(id));
         if (t) openDetailsForTask(t);
       });
     }
@@ -935,17 +989,16 @@
       list.addEventListener('mousemove', (e) => {
         const row = e.target.closest('.tree-row');
         if (!row) { hideHoverPreview(); return; }
-        const name = row.querySelector('.tree-name')?.textContent || '';
-        const t = cachedTasks && cachedTasks.find(x => x.name === name);
-        const url = t && t.images && t.images[0] ? t.images[0].url : null;
+        const id = row.dataset.id;
+        const url = id ? firstImageUrlForTask(id) : null;
         if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
       });
       list.addEventListener('mouseleave', hideHoverPreview);
       list.addEventListener('click', (e) => {
         const row = e.target.closest('.tree-row');
         if (!row) return;
-        const name = row.querySelector('.tree-name')?.textContent || '';
-        const t = cachedTasks && cachedTasks.find(x => x.name === name);
+        const id = row.dataset.id;
+        const t = cachedTasks && id && cachedTasks.find(x => String(x.id) === String(id));
         if (t) openDetailsForTask(t);
       });
     }
@@ -986,14 +1039,51 @@
       const raw = task.raw && typeof task.raw === 'object' ? task.raw : task;
       const kv = document.createElement('div');
       kv.className = 'kv';
+      function renderTextWithLinks(el, text) {
+        const urlRe = /(https?:\/\/[^\s]+)/g;
+        const lines = String(text).split('\n');
+        for (let li = 0; li < lines.length; li++) {
+          const line = lines[li];
+          let last = 0; let m;
+          while ((m = urlRe.exec(line)) !== null) {
+            const before = line.slice(last, m.index);
+            if (before) el.appendChild(document.createTextNode(before));
+            const a = document.createElement('a'); a.href = m[0]; a.textContent = m[0]; a.target = '_blank'; a.rel = 'noopener';
+            el.appendChild(a);
+            last = m.index + m[0].length;
+          }
+          const rest = line.slice(last);
+          if (rest) el.appendChild(document.createTextNode(rest));
+          if (li < lines.length - 1) el.appendChild(document.createElement('br'));
+        }
+      }
       Object.entries(raw).forEach(([k,v]) => {
         const ke = document.createElement('div'); ke.className='k'; ke.textContent = k;
         const ve = document.createElement('div'); ve.className='v';
-        let text = v;
-        if (v instanceof Date) text = v.toISOString().slice(0,10);
-        else if (v == null) text = '';
-        else text = String(v);
-        ve.textContent = text;
+        let text = v instanceof Date ? v.toISOString().slice(0,10) : (v == null ? '' : String(v));
+        if (text.length > 400 || (text.match(/\n/g)||[]).length > 6) {
+          const short = text.slice(0, 400) + '…';
+          const span = document.createElement('span');
+          renderTextWithLinks(span, short);
+          const more = document.createElement('button');
+          more.textContent = 'Show more';
+          more.style.marginLeft = '8px';
+          more.style.padding = '2px 6px';
+          more.style.borderRadius = '4px';
+          more.style.border = '1px solid #cfcfcf';
+          more.style.background = '#fff';
+          more.style.color = '#222';
+          let expanded = false;
+          more.addEventListener('click', () => {
+            expanded = !expanded;
+            span.innerHTML = '';
+            renderTextWithLinks(span, expanded ? text : short);
+            more.textContent = expanded ? 'Show less' : 'Show more';
+          });
+          ve.appendChild(span); ve.appendChild(more);
+        } else {
+          renderTextWithLinks(ve, text);
+        }
         kv.appendChild(ke); kv.appendChild(ve);
       });
       if (Array.isArray(task.images) && task.images.length) {
@@ -1046,7 +1136,9 @@
       bindGanttHover();
     }
 
-    loadTasks();
+  // Apply state from URL (if any) before first load
+  applyStateFromUrl();
+  loadTasks();
 
     // Fit on resize (all modes)
     let resizeTimer = null;

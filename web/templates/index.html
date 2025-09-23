@@ -62,7 +62,7 @@
 </head>
 <body>
   <header>
-    <img src="/static/header.png" alt="Header" onerror="this.style.display='none'"/>
+    <img src="/static/header.svg" alt="Header" onerror="this.onerror=null;this.src='/static/header.png'"/>
     <div>Project Gantt (Read-only)</div>
   </header>
   <main>
@@ -88,6 +88,7 @@
       <button id="fit" class="gantt-only" title="Fit to width">Fit</button>
       <button id="today" class="gantt-only" title="Center on today">Today</button>
       <button id="fullscreen" class="gantt-only" title="Enter Fullscreen">⛶</button>
+  <button id="copy-link" title="Copy shareable link">Copy Link</button>
       <button id="refresh">Refresh</button>
     </div>
     <div class="info" id="db-info"></div>
@@ -524,6 +525,20 @@
       }
     }
     document.getElementById('display-mode').addEventListener('change', (e) => setMode(e.target.value));
+    document.getElementById('copy-link').addEventListener('click', async () => {
+      try {
+        const url = location.href;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(url);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = url; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+        }
+        flashStatus('Link copied to clipboard');
+      } catch (e) {
+        console.warn('copy failed', e);
+      }
+    });
 
     loadTasks();
 
