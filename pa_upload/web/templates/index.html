@@ -50,6 +50,13 @@
     /* Watermark footer */
     .watermark { width: 100%; background: #4B4B4B; border-top: 1px solid #6a6a6a; padding: 6px 12px; display:flex; justify-content:center; }
     .watermark-text { color: #d1d5db; font-size: 12px; opacity: 0.8; user-select: none; }
+  /* Gantt-only controls */
+  .toolbar .gantt-only { display: none; }
+  body.mode-gantt .toolbar .gantt-only { display: inline-flex; }
+  /* Fullscreen adjustments for Gantt */
+  body.gantt-fullscreen { overflow: hidden; }
+  body.gantt-fullscreen header, body.gantt-fullscreen .watermark { display:none; }
+  body.gantt-fullscreen main { padding: 8px 12px; }
 
   /* Mode-specific control visibility */
   body.mode-gantt .toolbar #view-mode, body.mode-gantt .toolbar label:nth-of-type(2) { display:inline-block; }
@@ -119,6 +126,21 @@
     .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 10px; }
     .kv .k { color:#d1d5db; }
     .kv .v { color:#f3f4f6; word-break:break-word; }
+    /* Gantt popup readability (dark theme) */
+    .gantt .popup-wrapper { background:#2f2f2f !important; color:#f5f5f5 !important; border:1px solid #6a6a6a; box-shadow: 0 6px 24px rgba(0,0,0,0.35); }
+    .gantt .popup-wrapper { font-size:14px !important; line-height:1.4; }
+    .gantt .popup-wrapper .title { color:#fff !important; font-size:16px !important; font-weight:700; margin-bottom:6px; }
+    .gantt .popup-wrapper .details-container { color:#e5e7eb !important; }
+    .gantt .popup-wrapper .details-container div { margin:4px 0; }
+    .gantt .popup-wrapper .details-container strong { color:#fff !important; }
+    .gantt .popup-wrapper .pointer { border-top-color:#2f2f2f !important; }
+    /* Unscoped fallback in case popup attaches to body */
+    .popup-wrapper { background:#2f2f2f !important; color:#f5f5f5 !important; border:1px solid #6a6a6a; box-shadow: 0 6px 24px rgba(0,0,0,0.35); font-size:14px !important; line-height:1.4; }
+    .popup-wrapper .title { color:#fff !important; font-size:16px !important; font-weight:700; margin-bottom:6px; }
+    .popup-wrapper .details-container { color:#e5e7eb !important; }
+    .popup-wrapper .details-container div { margin:4px 0; }
+    .popup-wrapper .details-container strong { color:#fff !important; }
+    .popup-wrapper .pointer { border-top-color:#2f2f2f !important; }
   </style>
 </head>
 <body>
@@ -143,6 +165,11 @@
         <option value="Month">Month</option>
         <option value="Year">Year</option>
       </select>
+      <button id="zoom-out" class="gantt-only" title="Zoom out">−</button>
+      <button id="zoom-in" class="gantt-only" title="Zoom in">+</button>
+      <button id="fit" class="gantt-only" title="Fit to width">Fit</button>
+      <button id="today" class="gantt-only" title="Center on today">Today</button>
+      <button id="fullscreen" class="gantt-only" title="Enter Fullscreen">⛶</button>
       <button id="refresh">Refresh</button>
     </div>
     <div class="info" id="db-info"></div>
@@ -215,6 +242,28 @@
   let currentMode = 'gantt';
   let calMonth = null; // calendar month anchor
     let cachedImages = null; // cache image listing
+    let ganttState = { view: 'Day', column_width: 40 };
+    // Status flash helper
+    let _statusTimer = null;
+    function flashStatus(msg, ms=4000) {
+      const el = document.getElementById('status');
+      if (!el) return;
+      el.textContent = msg || '';
+      if (_statusTimer) clearTimeout(_statusTimer);
+      if (msg && ms > 0) {
+        _statusTimer = setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, ms);
+      }
+    }
+
+    // Wait for frappe-gantt to be loaded (window.Gantt defined)
+    async function waitForGantt(timeoutMs = 8000) {
+      const start = Date.now();
+      while (typeof window.Gantt !== 'function') {
+        if (Date.now() - start > timeoutMs) return false;
+        await new Promise(r => setTimeout(r, 50));
+      }
+      return true;
+    }
 
     // Compute overall date range of tasks
     function computeRange(tasks) {
@@ -276,7 +325,12 @@
       el.appendChild(container);
 
       const toolbarView = document.querySelector('#view-mode').value;
-      const cw = chooseFitSettings(container.clientWidth || el.clientWidth || 1024, parsed, opts.view || toolbarView);
+      let cw;
+      if (opts && typeof opts.column_width === 'number' && opts.column_width > 0) {
+        cw = { view: opts.view || toolbarView, column_width: opts.column_width };
+      } else {
+        cw = chooseFitSettings(container.clientWidth || el.clientWidth || 1024, parsed, opts.view || toolbarView);
+      }
       // keep the select in sync with chosen view
       document.querySelector('#view-mode').value = cw.view;
 
@@ -317,15 +371,13 @@
         }
       };
 
-      gantt = new Gantt(container, parsed, {
+      const gopts = {
         view_mode: cw.view,
         column_width: cw.column_width,
         date_format: 'YYYY-MM-DD',
         language: 'en',
         lines: 'vertical',
         today_button: true,
-        ignore: 'weekend',
-        holidays: { 'var(--g-weekend-highlight-color)': 'weekend' },
         view_mode_select: true,
         on_view_change: () => { requestAnimationFrame(enhanceBars); },
         custom_popup_html: task => {
@@ -340,8 +392,62 @@
           function t(d) { try { return d?.toISOString?.().slice(0,10) || d; } catch { return d; } }
           return `<div class="details-container">${fields.map(([k,v]) => `<div><strong>${k}:</strong> ${v||''}</div>`).join('')}</div>`;
         }
-      });
+      };
+      if (cw.view === 'Day' || cw.view === 'Week') {
+        gopts.ignore = 'weekend';
+      }
+      gantt = new Gantt(container, parsed, gopts);
       requestAnimationFrame(enhanceBars);
+      // Record last used gantt state
+      ganttState = { view: cw.view, column_width: cw.column_width };
+
+      // Post-render sanity check: if no bars drawn or all bars ~0 width (unsupported view), fall back
+      setTimeout(() => {
+        try {
+          const svg = gantt && gantt.$svg;
+          const wrappers = svg ? svg.querySelectorAll('.bar-wrapper') : [];
+          const bars = svg ? svg.querySelectorAll('.bar-wrapper .bar') : [];
+          const zeroish = bars && bars.length > 0 ? Array.from(bars).every(b => {
+            const w = parseFloat(b.getAttribute('width') || '0');
+            return !w || w < 0.5;
+          }) : true;
+          if ((!wrappers || wrappers.length === 0) || zeroish) {
+            if (cw.view === 'Year') {
+              flashStatus('Year view not available in this build; falling back to Month.');
+              document.querySelector('#view-mode').value = 'Month';
+              renderGantt(parsed, { view: 'Month', column_width: ganttState.column_width });
+            } else if (cw.view === 'Month') {
+              flashStatus('Month view failed to render; falling back to Week.');
+              document.querySelector('#view-mode').value = 'Week';
+              renderGantt(parsed, { view: 'Week', column_width: ganttState.column_width });
+            }
+          }
+        } catch {}
+      }, 0);
+    }
+
+    function getGanttContainer() {
+      const el = document.querySelector('#gantt');
+      return el.querySelector('.gantt-container') || el;
+    }
+
+    function centerGanttOnToday() {
+      const sc = getGanttContainer();
+      if (!sc) return;
+      const marker = sc.querySelector('.current-highlight');
+      if (marker && marker.style && marker.style.left) {
+        const x = parseFloat(marker.style.left) || 0;
+        sc.scrollLeft = Math.max(0, x - sc.clientWidth / 2);
+        return;
+      }
+      if (!cachedTasks || cachedTasks.length === 0) return;
+      const { min, max } = computeRange(cachedTasks);
+      if (!min || !max) return;
+      const today = new Date();
+      const total = max - min;
+      const pos = Math.max(0, Math.min(1, (today - min) / (total || 1)));
+      const maxScroll = sc.scrollWidth - sc.clientWidth;
+      sc.scrollLeft = Math.max(0, Math.min(maxScroll, pos * sc.scrollWidth - sc.clientWidth / 2));
     }
 
     async function loadTasks() {
@@ -357,13 +463,13 @@
       const res = await fetch('/api/tasks');
       const tasks = await res.json();
       document.querySelector('#status').textContent = `Tasks fetched: ${tasks?.length ?? 0}`;
-  const target = currentMode === 'calendar' ? document.getElementById('calendar') : (currentMode === 'timeline' ? document.getElementById('timeline') : document.getElementById('gantt'));
-  if (target) target.innerHTML = '';
+      const target = currentMode === 'calendar' ? document.getElementById('calendar') : (currentMode === 'timeline' ? document.getElementById('timeline') : document.getElementById('gantt'));
+      if (target) target.innerHTML = '';
       if (!tasks || tasks.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'empty';
         empty.textContent = 'No tasks to show. Verify your database path (PROJECT_DB_PATH or db_path.txt) and that project_parts has data.';
-        el.appendChild(empty);
+        (target || document.body).appendChild(empty);
         return;
       }
       // Convert to Date objects to avoid client-side parsing quirks
@@ -375,6 +481,8 @@
       cachedTasks = parsed;
       try {
         if (currentMode === 'gantt') {
+          const ok = await waitForGantt(8000);
+          if (!ok) throw new Error('Gantt library not loaded');
           renderGantt(parsed);
         } else if (currentMode === 'calendar') {
           ensureCalMonth(parsed);
@@ -405,6 +513,39 @@
       if (currentMode === 'images') { renderImages(true); } else { loadTasks(); }
     });
 
+    // Advanced Gantt controls
+    document.getElementById('zoom-in').addEventListener('click', () => {
+      if (currentMode !== 'gantt' || !cachedTasks) return;
+      const cw = Math.min(160, Math.round((ganttState.column_width || 40) * 1.2));
+      renderGantt(cachedTasks, { view: ganttState.view, column_width: cw });
+    });
+    document.getElementById('zoom-out').addEventListener('click', () => {
+      if (currentMode !== 'gantt' || !cachedTasks) return;
+      const cw = Math.max(8, Math.round((ganttState.column_width || 40) / 1.2));
+      renderGantt(cachedTasks, { view: ganttState.view, column_width: cw });
+    });
+    document.getElementById('fit').addEventListener('click', () => {
+      if (currentMode !== 'gantt' || !cachedTasks) return;
+      renderGantt(cachedTasks, { view: document.querySelector('#view-mode').value });
+    });
+    document.getElementById('today').addEventListener('click', () => {
+      if (currentMode !== 'gantt') return;
+      centerGanttOnToday();
+    });
+    document.getElementById('fullscreen').addEventListener('click', () => {
+      if (currentMode !== 'gantt') return;
+      const body = document.body;
+      const fs = !body.classList.contains('gantt-fullscreen');
+      body.classList.toggle('gantt-fullscreen', fs);
+      if (cachedTasks) {
+        renderGantt(cachedTasks, { view: document.querySelector('#view-mode').value });
+        setTimeout(centerGanttOnToday, 0);
+      }
+      const btn = document.getElementById('fullscreen');
+      btn.textContent = fs ? '⤢' : '⛶';
+      btn.title = fs ? 'Exit Fullscreen' : 'Enter Fullscreen';
+    });
+
     // Display mode switching
     function setMode(mode) {
       currentMode = mode;
@@ -417,7 +558,9 @@
       document.getElementById('images-view').hidden = mode !== 'images';
       if (mode === 'images') { renderImages(); return; }
       if (!cachedTasks) return;
-      if (mode === 'gantt') renderGantt(cachedTasks);
+      if (mode === 'gantt') {
+        waitForGantt(8000).then(ok => { if (ok) renderGantt(cachedTasks); });
+      }
       else if (mode === 'calendar') { ensureCalMonth(cachedTasks); renderCalendar(cachedTasks, calMonth); }
       else if (mode === 'timeline') renderTimeline(cachedTasks);
       else if (mode === 'tree') renderTree(cachedTasks);
@@ -905,12 +1048,17 @@
 
     loadTasks();
 
-    // Fit on resize
+    // Fit on resize (all modes)
     let resizeTimer = null;
     window.addEventListener('resize', () => {
       if (!cachedTasks) return;
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => renderGantt(cachedTasks), 100);
+      resizeTimer = setTimeout(() => {
+        if (currentMode === 'gantt') renderGantt(cachedTasks);
+        else if (currentMode === 'calendar') renderCalendar(cachedTasks, calMonth);
+        else if (currentMode === 'timeline') renderTimeline(cachedTasks);
+        else if (currentMode === 'tree') renderTree(cachedTasks);
+      }, 120);
     });
 
     // Also bind image grid hover after rendering

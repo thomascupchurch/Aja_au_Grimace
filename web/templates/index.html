@@ -163,6 +163,17 @@
     const body = document.body;
     let ganttState = { view: 'Day', column_width: 40 };
   let cachedImages = null; // cache image listing
+    // Status flash helper
+    let _statusTimer = null;
+    function flashStatus(msg, ms=4000) {
+      const el = document.getElementById('status');
+      if (!el) return;
+      el.textContent = msg || '';
+      if (_statusTimer) clearTimeout(_statusTimer);
+      if (msg && ms > 0) {
+        _statusTimer = setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, ms);
+      }
+    }
     
     // Wait for frappe-gantt to be loaded (window.Gantt defined)
     async function waitForGantt(timeoutMs = 8000) {
@@ -324,13 +335,12 @@
             return !w || w < 0.5;
           }) : true;
           if ((!wrappers || wrappers.length === 0) || zeroish) {
-            const statusEl = document.getElementById('status');
             if (cw.view === 'Year') {
-              statusEl && (statusEl.textContent = 'Year view not available in this build; falling back to Month.');
+              flashStatus('Year view not available in this build; falling back to Month.');
               document.querySelector('#view-mode').value = 'Month';
               renderGantt(parsed, { view: 'Month', column_width: ganttState.column_width });
             } else if (cw.view === 'Month') {
-              statusEl && (statusEl.textContent = 'Month view failed to render; falling back to Week.');
+              flashStatus('Month view failed to render; falling back to Week.');
               document.querySelector('#view-mode').value = 'Week';
               renderGantt(parsed, { view: 'Week', column_width: ganttState.column_width });
             }
