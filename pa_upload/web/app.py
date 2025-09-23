@@ -451,4 +451,7 @@ def serve_image(filename: str):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="127.0.0.1", port=port, debug=True)
+    # Allow disabling debug/reloader via env to avoid background-run issues
+    debug_env = os.environ.get("WEB_DEBUG", "1").lower()
+    debug = debug_env not in ("0", "false", "no")
+    app.run(host="127.0.0.1", port=port, debug=debug)
