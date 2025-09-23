@@ -1219,10 +1219,8 @@ class GanttChartView(QWidget):
     def _export_scene_with_header(self, scene, title="Export"):
         from PyQt5.QtGui import QPainter
         import os
-        # Prefer SVG header if available; fallback to PNG
-        base_dir = os.path.dirname(__file__)
-        svg_name = "University - CenteredLogo-OnDark (RGB).svg"
-        svg_path = os.path.join(base_dir, svg_name)
+        # Prefer SVG header from repo root; fallback to PNG
+        svg_path = resolve_resource_path("header.svg")
         header_is_svg = False
         header_svg_renderer = None
         try:
@@ -1244,7 +1242,7 @@ class GanttChartView(QWidget):
             print("Scene is empty; nothing to export.")
             return
         is_pdf = path.lower().endswith('.pdf')
-        header_path = os.path.join(base_dir, "header.png")
+        header_path = resolve_resource_path("header.png")
         header_pixmap = QPixmap(header_path) if os.path.exists(header_path) else None
         if is_pdf:
             # Use QPrinter for PDF

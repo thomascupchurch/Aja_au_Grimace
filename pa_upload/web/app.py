@@ -267,18 +267,26 @@ def static_header_png():
     parent_dir = os.path.dirname(app.root_path)
     return send_from_directory(parent_dir, "header.png")
 
-# Serve the newly added SVG header via /static/header.svg, with PNG fallback if missing
+# Serve repo-root header.svg via /static/header.svg (with PNG fallback)
 @app.route("/static/header.svg")
 def static_header_svg():
+    # In hosted layout, app.root_path is .../pa_upload/web; prefer grandparent (repo root)
     parent_dir = os.path.dirname(app.root_path)
-    svg_name = "University - CenteredLogo-OnDark (RGB).svg"
-    svg_path = os.path.join(parent_dir, svg_name)
-    if os.path.exists(svg_path):
-        return send_from_directory(parent_dir, svg_name, mimetype='image/svg+xml')
-    # Fallback to PNG if SVG not present
-    png_path = os.path.join(parent_dir, "header.png")
-    if os.path.exists(png_path):
-        return send_from_directory(parent_dir, "header.png", mimetype='image/png')
+    grandparent_dir = os.path.dirname(parent_dir)
+    # Prefer grandparent header.svg
+    for base in (grandparent_dir, parent_dir):
+        if not base:
+            continue
+        svg_path = os.path.join(base, "header.svg")
+        if os.path.exists(svg_path):
+            return send_from_directory(base, "header.svg", mimetype='image/svg+xml')
+    # Fallback: header.png from grandparent then parent
+    for base in (grandparent_dir, parent_dir):
+        if not base:
+            continue
+        png_path = os.path.join(base, "header.png")
+        if os.path.exists(png_path):
+            return send_from_directory(base, "header.png", mimetype='image/png')
     abort(404)
 
 # Serve a favicon to avoid 404s; prefer header.png, else tiny transparent PNG

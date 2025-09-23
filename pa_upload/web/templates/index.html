@@ -18,8 +18,9 @@
       --g-row-border-color: #6a6a6a;
       --g-text-dark: #f3f4f6;           /* near-white for labels */
       --g-text-muted: #d1d5db;          /* light gray */
-      --g-tick-color: #6b7280;          /* slate-ish */
-      --g-tick-color-thick: #81858f;
+  /* minimize background noise: no vertical ticks */
+  --g-tick-color: transparent;
+  --g-tick-color-thick: transparent;
       --g-arrow-color: #d1d5db;
       --g-progress-color: #9ca3af;      /* progress fill on dark */
       --g-expected-progress: #a7a7d6;
@@ -93,6 +94,11 @@
   .cal-dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
   .cal-name { color:#f3f4f6; font-weight:600; }
   .cal-when { color:#d1d5db; font-size:12px; margin-left:auto; }
+
+  /* Reduce busyness: hide vertical grid (ticks) and hatch */
+  .gantt .ignored-bar { display: none; }
+  .gantt .tick, .gantt .tick.thick { stroke: transparent !important; }
+  /* keep row separators for readability */
 
   /* Timeline styles */
   #timeline { overflow:auto; border-top:1px solid #6a6a6a; min-height:320px; }
@@ -169,6 +175,9 @@
       font-size: min(12vw, 120px);
       text-shadow: 0 2px 6px rgba(0,0,0,0.35);
     }
+    /* Floating toast */
+    .toast { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%) translateY(8px); background: #1f1f1f; color:#f5f5f5; border: 1px solid #6a6a6a; padding: 8px 12px; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.35); opacity: 0; pointer-events: none; transition: opacity 160ms ease, transform 160ms ease; z-index: 99999; font-size: 13px; }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   </style>
 </head>
 <body>
@@ -304,6 +313,18 @@
       if (_statusTimer) clearTimeout(_statusTimer);
       if (msg && ms > 0) {
         _statusTimer = setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, ms);
+      }
+    }
+    // Toast helper
+    let _toastTimer = null;
+    function showToast(msg, ms=2500) {
+      const el = document.getElementById('toast');
+      if (!el) return;
+      el.textContent = msg || '';
+      el.classList.add('show');
+      if (_toastTimer) clearTimeout(_toastTimer);
+      if (msg && ms > 0) {
+        _toastTimer = setTimeout(() => { el.classList.remove('show'); }, ms);
       }
     }
 
@@ -666,8 +687,11 @@
         a.download = (window.currentMode || 'view') + '-' + ts + '.png';
         a.href = url; a.click();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
+        showToast('PNG exported');
       } catch (e) {
-        flashStatus('Export failed: ' + (e?.message || e));
+        const msg = 'Export failed: ' + (e?.message || e);
+        flashStatus(msg);
+        showToast(msg);
       }
     }
     document.getElementById('export-view').addEventListener('click', exportCurrentViewPNG);
@@ -703,10 +727,10 @@
           const ta = document.createElement('textarea');
           ta.value = url; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
         }
-        flashStatus('Link copied to clipboard');
+        showToast('Link copied to clipboard');
       } catch (e) {
         console.warn('copy failed', e);
-        flashStatus('Copy failed');
+        showToast('Copy failed');
       }
     });
 
@@ -1274,5 +1298,7 @@
     <img id="lightbox-img" alt="" />
     <div class="caption" id="lightbox-cap"></div>
   </div>
+  <!-- Toast -->
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 </body>
 </html>

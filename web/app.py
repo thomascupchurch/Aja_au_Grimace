@@ -267,14 +267,13 @@ def static_header_png():
     parent_dir = os.path.dirname(app.root_path)
     return send_from_directory(parent_dir, "header.png")
 
-# Serve the newly added SVG header via /static/header.svg, with PNG fallback if missing
+# Serve repo-root header.svg via /static/header.svg (with PNG fallback)
 @app.route("/static/header.svg")
 def static_header_svg():
     parent_dir = os.path.dirname(app.root_path)
-    svg_name = "University - CenteredLogo-OnDark (RGB).svg"
-    svg_path = os.path.join(parent_dir, svg_name)
+    svg_path = os.path.join(parent_dir, "header.svg")
     if os.path.exists(svg_path):
-        return send_from_directory(parent_dir, svg_name, mimetype='image/svg+xml')
+        return send_from_directory(parent_dir, "header.svg", mimetype='image/svg+xml')
     # Fallback to PNG if SVG not present
     png_path = os.path.join(parent_dir, "header.png")
     if os.path.exists(png_path):

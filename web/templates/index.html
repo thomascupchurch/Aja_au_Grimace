@@ -18,8 +18,9 @@
       --g-row-border-color: #6a6a6a;
       --g-text-dark: #f3f4f6;           /* near-white for labels */
       --g-text-muted: #d1d5db;          /* light gray */
-      --g-tick-color: #6b7280;          /* slate-ish */
-      --g-tick-color-thick: #81858f;
+  /* minimize background noise: no vertical ticks */
+  --g-tick-color: transparent;
+  --g-tick-color-thick: transparent;
       --g-arrow-color: #d1d5db;
       --g-progress-color: #9ca3af;      /* progress fill on dark */
       --g-expected-progress: #a7a7d6;
@@ -56,8 +57,9 @@
     .empty { padding: 24px; color:#e5e7eb; text-align:center; }
     .error { padding: 12px; color: #fee; background:#7f1d1d; border:1px solid #fca5a5; margin:8px 0; border-radius:6px; }
     #gantt > div { flex:1; min-height: 0; }
-    /* Reduce busyness: hide diagonal hatch for ignored dates */
-    .gantt .ignored-bar { display: none; }
+  /* Reduce busyness: hide vertical grid (ticks) and hatch */
+  .gantt .ignored-bar { display: none; }
+  .gantt .tick, .gantt .tick.thick { stroke: transparent !important; }
     /* Watermark footer */
     .watermark { width: 100%; background: #4B4B4B; border-top: 1px solid #6a6a6a; padding: 6px 12px; display:flex; justify-content:center; }
     .watermark-text { color: #d1d5db; font-size: 12px; opacity: 0.8; user-select: none; }
@@ -206,6 +208,18 @@
       if (_statusTimer) clearTimeout(_statusTimer);
       if (msg && ms > 0) {
         _statusTimer = setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, ms);
+      }
+    }
+    // Toast helper
+    let _toastTimer = null;
+    function showToast(msg, ms=2500) {
+      const el = document.getElementById('toast');
+      if (!el) return;
+      el.textContent = msg || '';
+      el.classList.add('show');
+      if (_toastTimer) clearTimeout(_toastTimer);
+      if (msg && ms > 0) {
+        _toastTimer = setTimeout(() => { el.classList.remove('show'); }, ms);
       }
     }
     
@@ -560,8 +574,11 @@
         a.download = (window.currentMode || 'view') + '-' + ts + '.png';
         a.href = url; a.click();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
+        showToast('PNG exported');
       } catch (e) {
-        flashStatus('Export failed: ' + (e?.message || e));
+        const msg = 'Export failed: ' + (e?.message || e);
+        flashStatus(msg);
+        showToast(msg);
       }
     }
     document.getElementById('export-view').addEventListener('click', exportCurrentViewPNG);
@@ -602,9 +619,10 @@
           const ta = document.createElement('textarea');
           ta.value = url; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
         }
-        flashStatus('Link copied to clipboard');
+        showToast('Link copied to clipboard');
       } catch (e) {
         console.warn('copy failed', e);
+        showToast('Copy failed');
       }
     });
 
@@ -1357,6 +1375,9 @@
       font-size: min(12vw, 120px);
       text-shadow: 0 2px 6px rgba(0,0,0,0.35);
     }
+    /* Floating toast */
+    .toast { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%) translateY(8px); background: #1f1f1f; color:#f5f5f5; border: 1px solid #6a6a6a; padding: 8px 12px; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.35); opacity: 0; pointer-events: none; transition: opacity 160ms ease, transform 160ms ease; z-index: 99999; font-size: 13px; }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   </style>
 
   <!-- Images lightbox root -->
@@ -1367,5 +1388,7 @@
   </div>
   <!-- Hover preview root -->
   <div id="hover-preview" class="hover-preview"><img alt=""/></div>
+  <!-- Toast -->
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 </body>
 </html>
