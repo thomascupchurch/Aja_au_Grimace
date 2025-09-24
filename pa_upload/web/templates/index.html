@@ -690,14 +690,66 @@
     async function exportCurrentViewPNG() {
       try {
         if (!window.domtoimage) { flashStatus('Export library not loaded'); return; }
-        const node = visibleViewNode();
-        if (!node) { flashStatus('Nothing to export'); return; }
+        const viewNode = visibleViewNode();
+        if (!viewNode) { flashStatus('Nothing to export'); return; }
+
+        // Compose a temporary export container including the header logo
+        const rect = viewNode.getBoundingClientRect();
+        const exportWrap = document.createElement('div');
+        exportWrap.style.position = 'fixed';
+        exportWrap.style.left = '-10000px';
+        exportWrap.style.top = '0';
+        exportWrap.style.width = Math.ceil(rect.width) + 'px';
+        exportWrap.style.background = getComputedStyle(document.body).getPropertyValue('--bg') || '#4B4B4B';
+        exportWrap.style.color = getComputedStyle(document.body).getPropertyValue('--text') || '#f5f5f5';
+        exportWrap.style.display = 'flex';
+        exportWrap.style.flexDirection = 'column';
+
+        const headerImg = document.querySelector('header img');
+        if (headerImg) {
+          const headerBar = document.createElement('div');
+          headerBar.style.display = 'grid';
+          headerBar.style.placeItems = 'center';
+          headerBar.style.padding = '6px 16px';
+          headerBar.style.background = getComputedStyle(document.body).getPropertyValue('--bg') || '#4B4B4B';
+          headerBar.style.borderBottom = '1px solid ' + (getComputedStyle(document.body).getPropertyValue('--border') || '#6a6a6a');
+          const imgClone = headerImg.cloneNode(true);
+          const cs = getComputedStyle(headerImg);
+          imgClone.style.height = cs.height || '96px';
+          imgClone.style.filter = cs.filter || '';
+          headerBar.appendChild(imgClone);
+          exportWrap.appendChild(headerBar);
+        }
+
+  const viewClone = viewNode.cloneNode(true);
+  viewClone.style.flex = '1 1 auto';
+  viewClone.style.width = '100%';
+  viewClone.style.height = Math.ceil(rect.height) + 'px';
+        exportWrap.appendChild(viewClone);
+        document.body.appendChild(exportWrap);
+
         const withWM = !!document.getElementById('export-watermark')?.checked;
         let wmEl = null;
-        if (withWM) { wmEl = addTemporaryWatermark(node, 'INTERNAL USE ONLY'); }
-        const opts = { bgcolor: '#4B4B4B', quality: 1 };
-        const blob = await window.domtoimage.toBlob(node, opts);
+        if (withWM) { wmEl = addTemporaryWatermark(exportWrap, 'INTERNAL USE ONLY'); }
+
+        let filter = undefined;
+        if (currentMode === 'gantt') {
+          filter = (n) => {
+            try {
+              if (!(n instanceof Element)) return true;
+              const cls = n.classList;
+              const banned = ['grid', 'grid-tick', 'grid-row', 'grid-background', 'grid-highlight', 'highlight', 'tick', 'row-line', 'ignored-bar'];
+              if (cls) { for (const b of banned) { if (cls.contains(b)) return false; } }
+              if (n.tagName === 'rect' && n.parentElement && n.parentElement.classList && n.parentElement.classList.contains('grid-row')) return false;
+            } catch {}
+            return true;
+          };
+        }
+        const opts = { bgcolor: '#4B4B4B', quality: 1, filter };
+        const blob = await window.domtoimage.toBlob(exportWrap, opts);
         if (wmEl) wmEl.remove();
+        exportWrap.remove();
+
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
