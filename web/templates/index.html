@@ -102,6 +102,7 @@
   .gantt .grid, .gantt .grid * { pointer-events: none !important; }
   /* Allow interaction with actual bars and handles */
   .gantt .bar-wrapper, .gantt .bar-wrapper * { pointer-events: auto; }
+  .gantt .bar-wrapper:focus, .tree-row:focus, #timeline rect:focus, .cal-list li:focus { outline:2px solid var(--brand); outline-offset:2px; }
   .gantt-container { --g-weekend-highlight-color: transparent; --g-today-highlight: transparent; }
   .gantt .tick, .gantt .tick.thick { stroke: transparent !important; }
   .gantt .row-line { stroke: transparent !important; }
@@ -214,6 +215,7 @@
       <button id="today" class="gantt-only" title="Center on today">Today</button>
       <button id="fullscreen" class="gantt-only" title="Enter Fullscreen">⛶</button>
       <button id="theme-toggle" title="Toggle theme">Theme: Dark</button>
+  <button id="debug-toggle" title="Toggle debug / fallback hover logic">Debug: Off</button>
       <button id="copy-link" title="Copy shareable link">Copy Link</button>
       <label style="margin-left:8px; display:inline-flex; align-items:center; gap:6px;">
         <input type="checkbox" id="export-watermark" /> Watermark
@@ -366,12 +368,25 @@
         renderGantt(cachedTasks, { view: ganttState.view, column_width: ganttState.column_width });
       }
     }
+    // Debug mode (controls extra fallback hover logic & diagnostics if any)
+    window.debugMode = (localStorage.getItem('debugMode') === '1');
+    function updateDebugButton() {
+      const b = document.getElementById('debug-toggle'); if (b) b.textContent = 'Debug: ' + (window.debugMode ? 'On' : 'Off');
+    }
     document.addEventListener('DOMContentLoaded', () => {
       applyTheme(getSavedTheme());
       const tt = document.getElementById('theme-toggle'); if (tt) tt.addEventListener('click', () => {
         const next = document.body.classList.contains('theme-light') ? 'dark' : 'light';
         localStorage.setItem('theme', next);
         applyTheme(next);
+      });
+      updateDebugButton();
+      const dbg = document.getElementById('debug-toggle');
+      if (dbg) dbg.addEventListener('click', () => {
+        window.debugMode = !window.debugMode;
+        localStorage.setItem('debugMode', window.debugMode ? '1' : '0');
+        updateDebugButton();
+        flashStatus('Debug ' + (window.debugMode ? 'enabled' : 'disabled'));
       });
       // Apply URL state and trigger initial render (so content shows without manual Refresh)
       try {
@@ -425,6 +440,80 @@
       return true;
     }
 
+    // ---- Shared utility helpers (hover + task/image lookups) ----
+    function firstImageUrlForTask(taskId) {
+      if (!cachedTasks) return null;
+      if (!window._taskImgCache) window._taskImgCache = new Map();
+      const key = String(taskId);
+      if (window._taskImgCache.has(key)) {
+        const v = window._taskImgCache.get(key); return v || null;
+      }
+      const t = cachedTasks.find(tt => String(tt.id) === key);
+      const img = t && Array.isArray(t.images) && t.images.length ? t.images[0].url : null;
+      window._taskImgCache.set(key, img || '');
+      return img;
+    }
+    function resolveWrapperFromEventTarget(target, evt) {
+      if (!target) return null;
+      if (target.closest) {
+        let w = target.closest('.bar-wrapper'); if (w) return w;
+        w = target.closest('g[data-id]'); if (w) return w;
+        if (target.classList && target.classList.contains('bar')) {
+          let p = target.parentNode; let depth=0;
+          while (p && depth < 6) {
+            if (p.classList && p.classList.contains('bar-wrapper')) return p;
+            if (p.getAttribute && (p.getAttribute('data-id') || p.tagName === 'g')) return p;
+            p = p.parentNode; depth++;
+          }
+          return target.parentNode;
+        }
+      }
+      let node = target; for (let i=0;i<6 && node;i++){ if (node.classList && node.classList.contains('bar-wrapper')) return node; if (node.getAttribute && node.getAttribute('data-id')) return node; node = node.parentNode; }
+      try {
+        if (evt && typeof evt.clientX === 'number' && window.elementsFromPoint) {
+          const els = document.elementsFromPoint(evt.clientX, evt.clientY) || [];
+            const cand = els.find(e => (e.classList && (e.classList.contains('bar-wrapper') || e.classList.contains('bar'))));
+            if (cand) {
+              if (cand.classList && cand.classList.contains('bar-wrapper')) return cand;
+              if (cand.classList && cand.classList.contains('bar')) return cand.parentNode;
+            }
+        }
+      } catch(_) {}
+      return null;
+    }
+    function taskForWrapper(wrap) {
+      if (!wrap) return null;
+      let id = wrap.getAttribute('data-id');
+      if (!id) {
+        const bar = wrap.querySelector('.bar');
+        if (bar) id = bar.getAttribute('data-id') || bar.getAttribute('data-task-id');
+      }
+      let t = cachedTasks && id ? cachedTasks.find(x => String(x.id) === String(id)) : null;
+      if (!t) {
+        const lbl = wrap.querySelector('.bar-label');
+        const name = lbl && lbl.textContent ? lbl.textContent : '';
+        t = name && cachedTasks ? cachedTasks.find(x => x.name === name) : null;
+      }
+      return t;
+    }
+    function urlForWrapper(wrap) {
+      if (!wrap) return null;
+      const dataImg = wrap.getAttribute('data-img');
+      let id = wrap.getAttribute('data-id');
+      if (!id) {
+        const bar = wrap.querySelector('.bar');
+        if (bar) id = bar.getAttribute('data-id') || bar.getAttribute('data-task-id');
+      }
+      let url = dataImg || (id ? firstImageUrlForTask(id) : null);
+      if (!url) {
+        const lbl = wrap.querySelector('.bar-label');
+        const name = lbl && lbl.textContent ? lbl.textContent : '';
+        const t = name && cachedTasks ? cachedTasks.find(x => x.name === name) : null;
+        url = t && t.images && t.images[0] ? t.images[0].url : null;
+      }
+      return url;
+    }
+
     // URL state helpers (display/view/month)
     function getStateParams() {
       const display = currentMode;
@@ -442,6 +531,14 @@
       const display = sp.get('display');
       const view = sp.get('view');
       const cal = sp.get('cal');
+      // Optional debug flag via URL (?debug=1)
+      try {
+        if (sp.has('debug')) {
+          window.debugMode = sp.get('debug') === '1';
+          localStorage.setItem('debugMode', window.debugMode ? '1' : '0');
+          if (typeof updateDebugButton === 'function') updateDebugButton();
+        }
+      } catch(_) {}
       if (display) {
         const sel = document.getElementById('display-mode');
         if (sel) sel.value = display;
@@ -1050,6 +1147,13 @@
         let count = 0; const items = [];
         for (const t of tasks) { if (overlapsDay(t, d)) { count++; items.push(t); } }
         if (count > 0) { const badge = document.createElement('div'); badge.className = 'cal-badge'; badge.textContent = String(count); cell.appendChild(badge); }
+        // Assign first available task image (for hover preview) if any
+        try {
+          const withImg = items.find(it => Array.isArray(it.images) && it.images.length && it.images[0].url);
+            if (withImg && withImg.images[0] && withImg.images[0].url) {
+              cell.dataset.img = withImg.images[0].url;
+            }
+        } catch(_) {}
         cell.addEventListener('click', () => { renderCalDetails(d, items); });
         frag.appendChild(cell);
       }
@@ -1057,6 +1161,8 @@
       const base = (cells.find(d => dayKey(d) === todayKey) || new Date(monthDate));
       const baseItems = tasks.filter(t => overlapsDay(t, base));
       renderCalDetails(base, baseItems);
+      // Bind hover for calendar grid cells (once)
+      bindCalendarGridHover();
     }
     function renderCalDetails(day, items) {
       const details = document.getElementById('calendar-details');
@@ -1343,6 +1449,30 @@
         const t = cachedTasks && id && cachedTasks.find(x => String(x.id) === String(id));
         if (t) openDetailsForTask(t);
       });
+      // Keyboard accessibility for calendar list entries
+      try {
+        list.querySelectorAll('li[data-id]').forEach(li => {
+          if (!li.getAttribute('tabindex')) li.setAttribute('tabindex','0');
+          if (!li.getAttribute('role')) li.setAttribute('role','button');
+          if (!li._kbBound) {
+            li._kbBound = true;
+            li.addEventListener('keydown', (ke) => { if (ke.key==='Enter'||ke.key===' ') { ke.preventDefault(); li.click(); } });
+          }
+        });
+      } catch(_) {}
+    }
+
+    // Calendar grid cell hover (show preview from first task image in that day)
+    function bindCalendarGridHover() {
+      const grid = document.getElementById('calendar');
+      if (!grid || grid.dataset.cellHoverBound === '1') return;
+      grid.dataset.cellHoverBound = '1';
+      grid.addEventListener('mousemove', (e) => {
+        const cell = e.target.closest('.cal-cell');
+        if (!cell || !cell.dataset.img) { hideHoverPreview(); return; }
+        showHoverPreview(cell.dataset.img, e); moveHoverPreview(e);
+      });
+      grid.addEventListener('mouseleave', hideHoverPreview);
     }
 
     // Timeline hover + click
@@ -1378,6 +1508,17 @@
         }
         if (t) openDetailsForTask(t);
       });
+      // Keyboard accessibility for timeline bars
+      try {
+        svg.querySelectorAll('rect[data-id]').forEach(r => {
+          if (!r.getAttribute('tabindex')) r.setAttribute('tabindex','0');
+          if (!r.getAttribute('role')) r.setAttribute('role','button');
+          if (!r._kbBound) {
+            r._kbBound = true;
+            r.addEventListener('keydown', (ke) => { if (ke.key==='Enter'||ke.key===' ') { ke.preventDefault(); r.click(); } });
+          }
+        });
+      } catch(_) {}
     }
 
     // Tree hover + click
@@ -1400,6 +1541,17 @@
         const t = cachedTasks && id && cachedTasks.find(x => String(x.id) === String(id));
         if (t) openDetailsForTask(t);
       });
+      // Keyboard accessibility for tree rows
+      try {
+        list.querySelectorAll('.tree-row[data-id]').forEach(r => {
+          if (!r.getAttribute('tabindex')) r.setAttribute('tabindex','0');
+          if (!r.getAttribute('role')) r.setAttribute('role','button');
+          if (!r._kbBound) {
+            r._kbBound = true;
+            r.addEventListener('keydown', (ke) => { if (ke.key==='Enter'||ke.key===' ') { ke.preventDefault(); r.click(); } });
+          }
+        });
+      } catch(_) {}
     }
 
     // Helper to get first image URL for a task (from cachedTasks entries)
@@ -1497,159 +1649,45 @@
       try {
         const svg = (gantt && (gantt.$svg || gantt.svg)) || document.querySelector('#gantt svg');
         if (!svg) { if (force) flashStatus('Gantt hover: svg not ready'); return; }
-        if (svg && svg.dataset.hoverBound === '1' && !force) return;
-        if (svg) svg.dataset.hoverBound = '1';
+        if (svg && svg._unifiedHoverBound && !force) return;
+        if (svg) svg._unifiedHoverBound = true;
 
-        function resolveWrapperFromEventTarget(target, evt) {
-          if (!target) return null;
-          if (target.closest) {
-            let w = target.closest('.bar-wrapper');
-            if (w) return w;
-            w = target.closest('g[data-id]'); if (w) return w;
-            // If user is over the rect.bar itself
-            if (target.classList && target.classList.contains('bar')) {
-              // The parent <g> may lack data-id; try to climb
-              let p = target.parentNode; let depth=0;
-              while (p && depth < 6) {
-                if (p.classList && p.classList.contains('bar-wrapper')) return p;
-                if (p.getAttribute && (p.getAttribute('data-id') || p.tagName === 'g')) return p;
-                p = p.parentNode; depth++;
-              }
-              return target.parentNode;
-            }
-          }
-          // Manual climb if closest not available
-          let node = target;
-            for (let i=0; i<6 && node; i++) { // shallow climb safety
-              if (node.classList && node.classList.contains('bar-wrapper')) return node;
-              if (node.getAttribute && node.getAttribute('data-id')) return node;
-              node = node.parentNode;
-            }
-          // Last resort: use the actual pointer coordinates instead of target box center
-          try {
-            if (evt && typeof evt.clientX === 'number' && window.elementsFromPoint) {
-              const els = document.elementsFromPoint(evt.clientX, evt.clientY) || [];
-              const cand = els.find(e => (e.classList && (e.classList.contains('bar-wrapper') || e.classList.contains('bar'))));
-              if (cand) {
-                if (cand.classList && cand.classList.contains('bar-wrapper')) return cand;
-                if (cand.classList && cand.classList.contains('bar')) return cand.parentNode;
-              }
-            }
-          } catch(_) {}
-          return null;
-        }
+        // (Helper functions now defined in shared utilities section above)
 
-        function urlForWrapper(wrap) {
-          if (!wrap) return null;
-          const dataImg = wrap.getAttribute('data-img');
-          let id = wrap.getAttribute('data-id');
-          // Some builds may store id on a child (.bar) as data-id or data-task-id
-          if (!id) {
-            const bar = wrap.querySelector('.bar');
-            if (bar) id = bar.getAttribute('data-id') || bar.getAttribute('data-task-id');
-          }
-          let url = dataImg || (id ? firstImageUrlForTask(id) : null);
-          if (!url) {
-            const lbl = wrap.querySelector('.bar-label');
-            const name = lbl && lbl.textContent ? lbl.textContent : '';
-            const t = name && cachedTasks ? cachedTasks.find(x => x.name === name) : null;
-            url = t && t.images && t.images[0] ? t.images[0].url : null;
-          }
-          return url;
-        }
+        // Unified delegated listeners
+        svg.addEventListener('mousemove', (e) => {
+          const wrap = resolveWrapperFromEventTarget(e.target, e);
+          if (!wrap) { hideHoverPreview(); return; }
+          const url = urlForWrapper(wrap);
+          if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
+        });
+        svg.addEventListener('mouseleave', hideHoverPreview);
+        svg.addEventListener('click', (e) => {
+          const wrap = resolveWrapperFromEventTarget(e.target, e);
+          const t = taskForWrapper(wrap);
+          if (t) openDetailsForTask(t);
+        });
 
-        function taskForWrapper(wrap) {
-          if (!wrap) return null;
-          let id = wrap.getAttribute('data-id');
-          if (!id) {
-            const bar = wrap.querySelector('.bar');
-            if (bar) id = bar.getAttribute('data-id') || bar.getAttribute('data-task-id');
-          }
-          let t = cachedTasks && id ? cachedTasks.find(x => String(x.id) === String(id)) : null;
-          if (!t) {
-            const lbl = wrap.querySelector('.bar-label');
-            const name = lbl && lbl.textContent ? lbl.textContent : '';
-            t = name && cachedTasks ? cachedTasks.find(x => x.name === name) : null;
-          }
-          return t;
-        }
-
-        if (svg && !svg._delegatedHoverBound) {
-          let unresolvedMoves = 0;
-          svg._delegatedHoverBound = true;
-          svg.addEventListener('mousemove', (e) => {
-            const wrap = resolveWrapperFromEventTarget(e.target, e);
-            if (!wrap) {
-              unresolvedMoves++;
-              if (unresolvedMoves === 25) { flashStatus('Gantt hover: still not resolving bars – check pointer-events or DOM structure'); }
-              hideHoverPreview(); return;
-            }
-            unresolvedMoves = 0;
-            const url = urlForWrapper(wrap);
-            if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
-          });
-          svg.addEventListener('mouseleave', hideHoverPreview);
-          svg.addEventListener('click', (e) => {
-            const wrap = resolveWrapperFromEventTarget(e.target, e);
-            const t = taskForWrapper(wrap);
-            if (t) openDetailsForTask(t);
-          });
-        }
-
-        function ensurePerWrapperBindings() {
-          if (!svg) return;
+        // Accessibility pass (on each bind) – add keyboard & roles without per-wrapper mouse listeners
+        try {
           const wrappers = svg.querySelectorAll('.bar-wrapper, g[data-id]');
-          if (!wrappers.length) return;
           wrappers.forEach(w => {
-            if (w.dataset.hoverBound === '1') return;
-            w.dataset.hoverBound = '1';
-            w.addEventListener('mouseenter', (e) => { const url = urlForWrapper(w); if (url) showHoverPreview(url, e); });
-            w.addEventListener('mousemove', (e) => moveHoverPreview(e));
-            w.addEventListener('mouseleave', hideHoverPreview);
-            w.addEventListener('click', () => { const t = taskForWrapper(w); if (t) openDetailsForTask(t); });
+            if (!w.getAttribute('tabindex')) w.setAttribute('tabindex', '0');
+            if (!w.getAttribute('role')) w.setAttribute('role', 'button');
+            const lab = w.querySelector('.bar-label');
+            if (lab && lab.textContent && !w.getAttribute('aria-label')) w.setAttribute('aria-label', lab.textContent.trim());
+            if (!w._kbBound) {
+              w._kbBound = true;
+              w.addEventListener('keydown', (ke) => {
+                if (ke.key === 'Enter' || ke.key === ' ') { ke.preventDefault(); const t = taskForWrapper(w); if (t) openDetailsForTask(t); }
+              });
+            }
           });
-        }
-
-        ensurePerWrapperBindings();
-        try {
-          if (svg) {
-            if (svg._hoverObserver) svg._hoverObserver.disconnect();
-            const mo = new MutationObserver(() => { ensurePerWrapperBindings(); });
-            mo.observe(svg, { childList: true, subtree: true });
-            svg._hoverObserver = mo;
-          }
         } catch(_) {}
 
-        // Diagnostics
-        try {
-          if (svg) {
-            const c1 = svg.querySelectorAll('.bar-wrapper').length;
-            const c2 = svg.querySelectorAll('g[data-id]').length;
-            const bars = svg.querySelectorAll('.bar').length;
-            if (!c1 && !c2 && bars) flashStatus('Gantt hover: bars found ('+bars+') but no wrappers; using fallback climb');
-            else if (!c1 && !c2) flashStatus('Gantt hover: no bar wrappers detected (will retry)');
-          }
-        } catch(_) {}
+        // (Diagnostics removed in production mode)
 
-        // Extra safety: bind listeners on the container div to recover if svg events miss
-        try {
-          const container = document.querySelector('#gantt');
-          if (container && !container._hoverDelegateBound) {
-            container._hoverDelegateBound = true;
-            container.addEventListener('mousemove', (e) => {
-              if (!svg) return;
-              const wrap = resolveWrapperFromEventTarget(e.target, e);
-              const url = urlForWrapper(wrap);
-              if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else hideHoverPreview();
-            });
-            container.addEventListener('click', (e) => {
-              const wrap = resolveWrapperFromEventTarget(e.target, e);
-              const t = taskForWrapper(wrap);
-              if (t) openDetailsForTask(t);
-            });
-            container.addEventListener('mouseleave', hideHoverPreview);
-          }
-        } catch(_){ }
+        // (Container-level delegation removed; unified delegated listeners suffice. Global debug fallback remains.)
       } catch(err) {
         try { flashStatus('bindGanttHover error: ' + (err && err.message ? err.message : err)); } catch(_) {}
       }
@@ -1668,13 +1706,13 @@
         if (attempts < 8) setTimeout(retry, 120 * attempts); // backoff
       })();
 
-      // Global fallback (only install once) – uses elementsFromPoint to locate bars even if events fail
+      // Global fallback (debug mode only) – uses elementsFromPoint to locate bars if events fail
       if (!window._ganttGlobalHoverBound) {
         window._ganttGlobalHoverBound = true;
-        let raf = 0; let lastEvt = null; let unresolvedStreak = 0;
+        let raf = 0; let lastEvt = null;
         function frame() {
           raf = 0;
-          if (!lastEvt || currentMode !== 'gantt') return;
+          if (!lastEvt || currentMode !== 'gantt' || !window.debugMode) return;
           try {
             const x = lastEvt.clientX, y = lastEvt.clientY;
             if (typeof x !== 'number' || typeof y !== 'number') return;
@@ -1682,13 +1720,7 @@
             const barEl = els.find(e => e.classList && e.classList.contains('bar'));
             let wrap = els.find(e => e.classList && e.classList.contains('bar-wrapper'));
             if (!wrap && barEl) wrap = barEl.closest('.bar-wrapper') || barEl.parentNode;
-            if (!wrap || !(wrap instanceof Element)) {
-              unresolvedStreak++;
-              if (unresolvedStreak === 60) flashStatus('Global fallback also not seeing bar elements under pointer');
-              hideHoverPreview();
-              return;
-            }
-            unresolvedStreak = 0;
+            if (!wrap || !(wrap instanceof Element)) { hideHoverPreview(); return; }
             // Derive task id
             let id = wrap.getAttribute('data-id');
             if (!id && barEl) id = barEl.getAttribute('data-id') || barEl.getAttribute('data-task-id');
@@ -1712,7 +1744,7 @@
           if (!raf) raf = requestAnimationFrame(frame);
         }, true); // capture to ensure we see it even if something stops propagation
         window.addEventListener('click', (e) => {
-          if (currentMode !== 'gantt') return;
+          if (currentMode !== 'gantt' || !window.debugMode) return;
           try {
             const els = (document.elementsFromPoint && document.elementsFromPoint(e.clientX,e.clientY)) || [];
             const barEl = els.find(el => el.classList && el.classList.contains('bar'));
