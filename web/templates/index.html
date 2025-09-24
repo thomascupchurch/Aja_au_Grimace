@@ -621,6 +621,8 @@
           window.addEventListener('resize', () => requestAnimationFrame(enhanceBars));
         }
       } catch(_) {}
+      // Ensure smooth vertical-only inertial scroll (lock stray horizontal) for Gantt container.
+      try { ensureScrollLock(getGanttContainer()); } catch(_) {}
       // Record last used gantt state
       ganttState = { view: cw.view, column_width: cw.column_width };
 
@@ -652,6 +654,33 @@
     function getGanttContainer() {
       const el = document.querySelector('#gantt');
       return el.querySelector('.gantt-container') || el;
+    }
+
+    // Reusable scroll lock + inertia helper
+    function ensureScrollLock(scroller) {
+      if (!scroller || scroller.dataset.scrollLockBound === '1') return;
+      scroller.dataset.scrollLockBound = '1';
+      let velocity = 0;
+      let raf = 0;
+      const friction = 0.92; // inertia decay
+      const step = () => {
+        if (Math.abs(velocity) < 0.2) { velocity = 0; raf = 0; return; }
+        scroller.scrollTop += velocity;
+        velocity *= friction;
+        raf = requestAnimationFrame(step);
+      };
+      scroller.addEventListener('wheel', (e) => {
+        if (e.shiftKey) return; // allow intentional horizontal scroll via Shift
+        if (e.deltaX !== 0) {
+            e.preventDefault();
+            velocity += e.deltaY; // amplify vertical intended component
+        } else if (Math.abs(e.deltaY) > 0) {
+            // Optionally manage all vertical for consistent inertia
+            velocity += e.deltaY;
+            e.preventDefault();
+        }
+        if (!raf) raf = requestAnimationFrame(step);
+      }, { passive: false });
     }
 
     function centerGanttOnToday() {
@@ -1076,6 +1105,8 @@
       });
 
       container.appendChild(svg);
+      // Timeline vertical scroll lock (in case container becomes scrollable vertically in future or nested wrappers)
+      try { ensureScrollLock(container); } catch(_) {}
     }
 
     // ---- Tree view implementation ----
@@ -1111,6 +1142,7 @@
         rerenderChildren(); return r;
       }
       roots.forEach(n => list.appendChild(row(n, 0)));
+      try { ensureScrollLock(container); } catch(_) {}
     }
 
     // ---- Images view implementation ----
@@ -1160,12 +1192,14 @@
         grid.appendChild(frag);
         // Bind hover after content is in the DOM
         setTimeout(bindImageGridHover, 0);
+        try { ensureScrollLock(grid.parentElement || grid); } catch(_) {}
       } catch (e) {
         const err = document.createElement('div');
         err.className = 'error';
   err.textContent = 'Error loading images: ' + (e && e.message ? e.message : e);
         grid.appendChild(err);
         setTimeout(bindImageGridHover, 0);
+        try { ensureScrollLock(grid.parentElement || grid); } catch(_) {}
       }
     }
 
