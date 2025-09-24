@@ -808,6 +808,22 @@ class ProjectTreeView(QWidget):
         self.preview_label.setStyleSheet("border:1px solid #666; background:#222;")
         layout.addWidget(self.preview_label)
         self.setLayout(layout)
+        self._collapsed = set()  # names of collapsed nodes
+        self._minimap_view = None
+        # Minimap container (lightweight)
+        from PyQt5.QtWidgets import QFrame, QGraphicsView
+        self._mini_frame = QFrame()
+        self._mini_frame.setFixedHeight(120)
+        self._mini_frame.setStyleSheet("QFrame { border:1px solid #555; background:#111; }")
+        mini_layout = QVBoxLayout(self._mini_frame)
+        mini_layout.setContentsMargins(2,2,2,2)
+        self._mini_scene = QGraphicsScene()
+        self._mini_view = QGraphicsView(self._mini_scene)
+        self._mini_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._mini_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._mini_view.setRenderHints(self._mini_view.renderHints())
+        mini_layout.addWidget(self._mini_view)
+        layout.addWidget(self._mini_frame)
         self.refresh()
 
     # -------- Data & Layout --------
@@ -841,6 +857,8 @@ class ProjectTreeView(QWidget):
         y_cursor = 0
         def place(name, depth, y_start):
             ch = children.get(name, [])
+            if name in self._collapsed:
+                ch = []  # treat as leaf visually
             if not ch:
                 y_center = y_start + node_h/2
                 positions[name] = (depth*(node_w+h_gap), y_center - node_h/2)
@@ -876,6 +894,8 @@ class ProjectTreeView(QWidget):
             px, py = positions[parent]
             for c in chs:
                 if c not in positions: continue
+                if parent in self._collapsed:
+                    continue
                 cx, cy = positions[c]
                 # Parent right middle to child left middle via elbow
                 p_mid = (px+node_w, py + node_h/2)
@@ -904,6 +924,18 @@ class ProjectTreeView(QWidget):
             rect_item = self.scene.addRect(x, y, node_w, node_h, QPen(QColor('#888')), QBrush(base_color))
             rect_item.setData(0, name)
             rect_item.setFlag(rect_item.ItemIsSelectable, True)
+            # Collapse/expand indicator if has children
+            if name in children and children[name]:
+                tri_w = 12; tri_h = 12
+                from PyQt5.QtGui import QPolygonF
+                from PyQt5.QtCore import QPointF
+                if name in self._collapsed:
+                    pts = [QPointF(x+6, y+node_h/2 - tri_h/2), QPointF(x+6, y+node_h/2 + tri_h/2), QPointF(x+6+tri_w, y+node_h/2)]
+                else:
+                    pts = [QPointF(x+6, y+node_h/2 - tri_h/2), QPointF(x+6+tri_w, y+node_h/2 - tri_h/2), QPointF(x+6+tri_w/2, y+node_h/2 + tri_h/2)]
+                poly = self.scene.addPolygon(QPolygonF(pts), QPen(QColor('#ddd')), QBrush(QColor('#ddd')))
+                poly.setData(0, f"__toggle__::{name}")
+                poly.setZValue(rect_item.zValue()+3)
             # Progress overlay
             if pc > 0:
                 prog_w = int((pc/100)*node_w)
@@ -943,6 +975,7 @@ class ProjectTreeView(QWidget):
             self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
         except Exception:
             pass
+        self._update_minimap()
 
     # -------- Event Handling --------
     def eventFilter(self, obj, event):
@@ -952,14 +985,39 @@ class ProjectTreeView(QWidget):
             if item:
                 name = item.data(0)
                 if isinstance(name, str) and name:
+                    if name.startswith("__toggle__::"):
+                        target = name.split("::",1)[1]
+                        if target in self._collapsed:
+                            self._collapsed.remove(target)
+                        else:
+                            self._collapsed.add(target)
+                        self.refresh()
+                        return True
                     # selection + callback
                     if self.on_part_selected:
                         self.on_part_selected(name)
+                    # zoom to node
+                    try:
+                        r = item.sceneBoundingRect()
+                        if not r.isNull():
+                            self.view.fitInView(r.adjusted(-80,-60,80,60), Qt.KeepAspectRatio)
+                    except Exception:
+                        pass
                     # preview image
                     if self._hover_preview_enabled:
                         row = self._name_to_row.get(name)
                         if row:
                             self._show_image_for_row(row)
+            if event.button() == 2:  # Right click fallback if item not matched
+                self._show_context_menu(event.screenPos(), None)
+        elif event.type() == QEvent.GraphicsSceneContextMenu:
+            item = self.scene.itemAt(event.scenePos(), self.view.transform())
+            target_name = None
+            if item:
+                d = item.data(0)
+                if isinstance(d, str) and d and not d.startswith("__toggle__::"):
+                    target_name = d
+            self._show_context_menu(event.screenPos(), target_name)
         elif event.type() == QEvent.GraphicsSceneHoverMove:
             if not self._hover_preview_enabled:
                 self.preview_label.clear()
@@ -974,6 +1032,141 @@ class ProjectTreeView(QWidget):
         elif event.type() in (QEvent.GraphicsSceneLeave,):
             self.preview_label.clear()
         return super().eventFilter(obj, event)
+
+    # -------- Minimap --------
+    def _update_minimap(self):
+        if not hasattr(self, '_mini_scene'): return
+        self._mini_scene.clear()
+        # Render simplified rectangles from main scene
+        scale_factor = 0.12
+        for it in self.scene.items():
+            try:
+                if it.data(0):
+                    from PyQt5.QtGui import QBrush, QColor
+                    r = it.sceneBoundingRect()
+                    rect = self._mini_scene.addRect(r.x()*scale_factor, r.y()*scale_factor, r.width()*scale_factor, r.height()*scale_factor,
+                                                    pen=Qt.NoPen, brush=QBrush(QColor(255,130,0,90)))
+            except Exception:
+                pass
+        # Viewport box
+        try:
+            from PyQt5.QtGui import QPen, QColor, QBrush
+            vr = self.view.mapToScene(self.view.viewport().rect()).boundingRect()
+            vp = self._mini_scene.addRect(vr.x()*scale_factor, vr.y()*scale_factor, vr.width()*scale_factor, vr.height()*scale_factor,
+                                          pen=QPen(QColor('#ffffff')), brush=QBrush(Qt.NoBrush))
+            vp.setZValue(999)
+        except Exception:
+            pass
+        # Fit minimap view
+        try:
+            self._mini_view.fitInView(self._mini_scene.itemsBoundingRect().adjusted(-4,-4,4,4), Qt.KeepAspectRatio)
+        except Exception:
+            pass
+
+    # -------- Context Menu --------
+    def _show_context_menu(self, screen_pos, name):
+        from PyQt5.QtWidgets import QMenu, QAction, QApplication
+        menu = QMenu()
+        act_open = QAction("Open Details", menu)
+        act_jump = QAction("Jump To In Gantt", menu)
+        act_copy = QAction("Copy Name", menu)
+        act_set_parent = QAction("Set Parent…", menu)
+        act_expand = QAction("Expand Subtree", menu)
+        act_collapse = QAction("Collapse Subtree", menu)
+        for a in (act_open, act_jump, act_copy, act_set_parent, act_expand, act_collapse):
+            menu.addAction(a)
+        if not name:
+            act_open.setEnabled(False); act_jump.setEnabled(False); act_copy.setEnabled(False); act_set_parent.setEnabled(False); act_expand.setEnabled(False); act_collapse.setEnabled(False)
+        chosen = menu.exec_(screen_pos)
+        if not chosen or not name:
+            return
+        if chosen == act_open:
+            if self.on_part_selected:
+                self.on_part_selected(name)
+        elif chosen == act_jump:
+            self._emit_jump_to_gantt(name)
+        elif chosen == act_copy:
+            QApplication.clipboard().setText(name)
+        elif chosen == act_set_parent:
+            self._set_parent_dialog(name)
+        elif chosen == act_expand:
+            self._expand_subtree(name)
+        elif chosen == act_collapse:
+            self._collapse_subtree(name)
+
+    def _expand_subtree(self, name):
+        queue = [name]
+        while queue:
+            n = queue.pop()
+            if n in self._collapsed:
+                self._collapsed.remove(n)
+            # add children
+            for r in self.model.rows:
+                if r.get('Parent') == n:
+                    queue.append(r.get('Project Part',''))
+        self.refresh()
+
+    def _collapse_subtree(self, name):
+        queue = [name]
+        while queue:
+            n = queue.pop()
+            self._collapsed.add(n)
+            for r in self.model.rows:
+                if r.get('Parent') == n:
+                    queue.append(r.get('Project Part',''))
+        self.refresh()
+
+    def _emit_jump_to_gantt(self, name):
+        # Placeholder: could integrate with main window method if exposed
+        try:
+            print(f"[JumpToGantt] {name}")
+        except Exception:
+            pass
+
+    # -------- Reparent Dialog --------
+    def _set_parent_dialog(self, target_name):
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QDialogButtonBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Set Parent - {target_name}")
+        v = QVBoxLayout(dlg)
+        v.addWidget(QLabel("Choose new parent (or blank for top level):"))
+        combo = QComboBox(); combo.addItem("<None>")
+        # Candidate parents exclude target and its descendants
+        descendants = self._collect_descendants(target_name)
+        for r in self.model.rows:
+            n = r.get('Project Part','')
+            if n and n != target_name and n not in descendants:
+                combo.addItem(n)
+        v.addWidget(combo)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        v.addWidget(buttons)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        if dlg.exec_() == QDialog.Accepted:
+            new_parent = combo.currentText()
+            if new_parent == "<None>":
+                new_parent = None
+            # Update model
+            for r in self.model.rows:
+                if r.get('Project Part') == target_name:
+                    r['Parent'] = new_parent
+                    break
+            try:
+                self.model.save_to_db()
+            except Exception as e:
+                print(f"Reparent save failed: {e}")
+            self.refresh()
+
+    def _collect_descendants(self, name):
+        out = set(); queue = [name]
+        while queue:
+            n = queue.pop()
+            for r in self.model.rows:
+                if r.get('Parent') == n:
+                    child = r.get('Project Part','')
+                    if child and child not in out:
+                        out.add(child); queue.append(child)
+        return out
 
     def _show_image_for_row(self, row):
         img_path = row.get('Images','')
