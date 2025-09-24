@@ -85,9 +85,9 @@ class ExportSettingsDialog(QDialog):
         self.setWindowTitle("Export Settings")
         self.resize(380, 220)
         self.form = QFormLayout(self)
-        self.format_combo = QComboBox(); self.format_combo.addItems(["PNG", "PDF"]) 
-        self.size_combo = QComboBox(); self.size_combo.addItems(["A4", "Letter", "Legal", "Tabloid"]) 
-        self.orientation_combo = QComboBox(); self.orientation_combo.addItems(["Portrait", "Landscape"]) 
+        self.format_combo = QComboBox(); self.format_combo.addItems(["PNG", "PDF"])
+        self.size_combo = QComboBox(); self.size_combo.addItems(["A4", "Letter", "Legal", "Tabloid"])
+        self.orientation_combo = QComboBox(); self.orientation_combo.addItems(["Portrait", "Landscape"])
         def mkspin():
             sb = QDoubleSpinBox(); sb.setRange(0.0, 50.0); sb.setDecimals(1); sb.setSingleStep(0.5); sb.setSuffix(" mm"); return sb
         self.margin_left = mkspin(); self.margin_top = mkspin(); self.margin_right = mkspin(); self.margin_bottom = mkspin()
@@ -98,6 +98,10 @@ class ExportSettingsDialog(QDialog):
         self.form.addRow("Top Margin", self.margin_top)
         self.form.addRow("Right Margin", self.margin_right)
         self.form.addRow("Bottom Margin", self.margin_bottom)
+        from PyQt5.QtWidgets import QCheckBox
+        self.include_header_cb = QCheckBox("Include Header Graphic")
+        self.include_header_cb.setToolTip("If unchecked, exports omit the header.svg/header.png banner.")
+        self.form.addRow("Header", self.include_header_cb)
         # Buttons
         self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.buttons.accepted.connect(self.accept)
@@ -118,6 +122,10 @@ class ExportSettingsDialog(QDialog):
         if orient not in ("Portrait","Landscape"): orient = "Portrait"
         self.orientation_combo.setCurrentText(orient)
         self.margin_left.setValue(ml); self.margin_top.setValue(mt); self.margin_right.setValue(mr); self.margin_bottom.setValue(mb)
+        inc_header = s.value("Export/include_header", True)
+        if isinstance(inc_header, str):
+            inc_header = (inc_header.lower() in ("1","true","yes"))
+        self.include_header_cb.setChecked(bool(inc_header))
         # Disable PDF-only fields when PNG selected
         def update_pdf_only():
             is_pdf = (self.format_combo.currentText() == "PDF")
@@ -136,6 +144,7 @@ class ExportSettingsDialog(QDialog):
             s.setValue("Export/margin_top_mm", float(self.margin_top.value()))
             s.setValue("Export/margin_right_mm", float(self.margin_right.value()))
             s.setValue("Export/margin_bottom_mm", float(self.margin_bottom.value()))
+            s.setValue("Export/include_header", bool(self.include_header_cb.isChecked()))
         except Exception:
             pass
         return super().accept()
@@ -757,11 +766,13 @@ class ProjectTreeView(QWidget):
     """Horizontal left-to-right branching tree visualization (graphics based).
     Replaces prior multi-column QTreeWidget with a schematic layout closer to the web app's
     horizontally indented appearance, but rendered as a node graph for clarity.
+    on_jump_to_gantt: optional callback invoked when user selects Jump To In Gantt.
     """
-    def __init__(self, model, on_part_selected=None):
+    def __init__(self, model, on_part_selected=None, on_jump_to_gantt=None):
         super().__init__()
         self.model = model
         self.on_part_selected = on_part_selected
+        self.on_jump_to_gantt = on_jump_to_gantt
         self._name_to_row = {}
         self._name_to_item = {}
         self._hover_preview_enabled = True
@@ -800,6 +811,11 @@ class ProjectTreeView(QWidget):
         self.view = ZoomableGraphicsView()
         self.view.setScene(self.scene)
         self.view.setRenderHints(self.view.renderHints())
+        # Assign settings key to persist zoom
+        try:
+            self.view.setSettingsKey('TreeZoom')
+        except Exception:
+            pass
         layout.addWidget(self.view, 1)
         # Preview label (shares style with others)
         self.preview_label = QLabel()
@@ -810,6 +826,15 @@ class ProjectTreeView(QWidget):
         self.setLayout(layout)
         self._collapsed = set()  # names of collapsed nodes
         self._minimap_view = None
+        # Load persisted collapsed state
+        try:
+            from PyQt5.QtCore import QSettings
+            _ts = QSettings('LSI','ProjectApp')
+            saved = _ts.value('TreeCollapsed', [])
+            if isinstance(saved, list):
+                self._collapsed = set(saved)
+        except Exception:
+            pass
         # Minimap container (lightweight)
         from PyQt5.QtWidgets import QFrame, QGraphicsView
         self._mini_frame = QFrame()
@@ -825,6 +850,43 @@ class ProjectTreeView(QWidget):
         mini_layout.addWidget(self._mini_view)
         layout.addWidget(self._mini_frame)
         self.refresh()
+        # Connect viewport + interactions for minimap live updates
+        try:
+            self.view.viewport().installEventFilter(self)
+            # Debounced minimap updates
+            from PyQt5.QtCore import QTimer
+            self._minimap_timer = QTimer(self)
+            self._minimap_timer.setSingleShot(True)
+            self._minimap_timer.timeout.connect(self._update_minimap)
+            def schedule_minimap():
+                try:
+                    self._minimap_timer.start(120)
+                except Exception:
+                    pass
+            self.view.horizontalScrollBar().valueChanged.connect(schedule_minimap)
+            self.view.verticalScrollBar().valueChanged.connect(schedule_minimap)
+        except Exception:
+            pass
+        # Minimap click -> center main view
+        try:
+            orig_press = self._mini_view.mousePressEvent
+            def mini_click(ev):
+                if ev.button() == Qt.LeftButton:
+                    scene_pt = self._mini_view.mapToScene(ev.pos())
+                    # scale factor used in _update_minimap
+                    scale_factor = 0.12
+                    from PyQt5.QtCore import QRectF
+                    # Center main view around corresponding point
+                    center_target = QPointF(scene_pt.x()/scale_factor, scene_pt.y()/scale_factor)
+                    vr = self.view.mapToScene(self.view.viewport().rect()).boundingRect()
+                    new_rect = QRectF(center_target.x() - vr.width()/2, center_target.y() - vr.height()/2, vr.width(), vr.height())
+                    self.view.fitInView(new_rect, Qt.KeepAspectRatio)
+                    self._update_minimap()
+                orig_press(ev)
+            from PyQt5.QtCore import QPointF
+            self._mini_view.mousePressEvent = mini_click
+        except Exception:
+            pass
 
     # -------- Data & Layout --------
     def _build_hierarchy(self):
@@ -975,11 +1037,24 @@ class ProjectTreeView(QWidget):
             self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
         except Exception:
             pass
+        # After initial fit, apply persisted zoom scale (if user had manual zoom). Re-run restore.
+        try:
+            self.view._restore_zoom()
+        except Exception:
+            pass
         self._update_minimap()
 
     # -------- Event Handling --------
     def eventFilter(self, obj, event):
         from PyQt5.QtCore import QEvent
+        if event.type() in (QEvent.Wheel, QEvent.Resize):
+            try:
+                if hasattr(self, '_minimap_timer'):
+                    self._minimap_timer.start(120)
+                else:
+                    self._update_minimap()
+            except Exception:
+                pass
         if event.type() == QEvent.GraphicsSceneMousePress:
             item = self.scene.itemAt(event.scenePos(), self.view.transform())
             if item:
@@ -991,11 +1066,27 @@ class ProjectTreeView(QWidget):
                             self._collapsed.remove(target)
                         else:
                             self._collapsed.add(target)
+                        # Persist collapsed
+                        try:
+                            from PyQt5.QtCore import QSettings
+                            _ts = QSettings('LSI','ProjectApp')
+                            _ts.setValue('TreeCollapsed', list(self._collapsed))
+                        except Exception:
+                            pass
                         self.refresh()
                         return True
                     # selection + callback
                     if self.on_part_selected:
                         self.on_part_selected(name)
+                    # Also sync highlight in gantt if available (without switching view)
+                    try:
+                        mw = self.window()
+                        if hasattr(mw, 'gantt_chart_view') and hasattr(mw.gantt_chart_view, 'highlight_bar'):
+                            # Ensure gantt model is current
+                            mw.gantt_chart_view.render_gantt(mw.model)
+                            mw.gantt_chart_view.highlight_bar(name)
+                    except Exception:
+                        pass
                     # zoom to node
                     try:
                         r = item.sceneBoundingRect()
@@ -1029,14 +1120,23 @@ class ProjectTreeView(QWidget):
                         row = self._name_to_row.get(name)
                         if row:
                             self._show_image_for_row(row)
-        elif event.type() in (QEvent.GraphicsSceneLeave,):
+        elif event.type() == QEvent.GraphicsSceneHoverLeave:
             self.preview_label.clear()
         return super().eventFilter(obj, event)
 
     # -------- Minimap --------
     def _update_minimap(self):
-        if not hasattr(self, '_mini_scene'): return
-        self._mini_scene.clear()
+        if not hasattr(self, '_mini_scene'):
+            return
+        try:
+            if self.scene is None:
+                return
+        except Exception:
+            return
+        try:
+            self._mini_scene.clear()
+        except Exception:
+            return
         # Render simplified rectangles from main scene
         scale_factor = 0.12
         for it in self.scene.items():
@@ -1104,6 +1204,13 @@ class ProjectTreeView(QWidget):
             for r in self.model.rows:
                 if r.get('Parent') == n:
                     queue.append(r.get('Project Part',''))
+        # Persist
+        try:
+            from PyQt5.QtCore import QSettings
+            _ts = QSettings('LSI','ProjectApp')
+            _ts.setValue('TreeCollapsed', list(self._collapsed))
+        except Exception:
+            pass
         self.refresh()
 
     def _collapse_subtree(self, name):
@@ -1114,10 +1221,21 @@ class ProjectTreeView(QWidget):
             for r in self.model.rows:
                 if r.get('Parent') == n:
                     queue.append(r.get('Project Part',''))
+        try:
+            from PyQt5.QtCore import QSettings
+            _ts = QSettings('LSI','ProjectApp')
+            _ts.setValue('TreeCollapsed', list(self._collapsed))
+        except Exception:
+            pass
         self.refresh()
 
     def _emit_jump_to_gantt(self, name):
-        # Placeholder: could integrate with main window method if exposed
+        if hasattr(self, 'on_jump_to_gantt') and self.on_jump_to_gantt:
+            try:
+                self.on_jump_to_gantt(name)
+                return
+            except Exception:
+                pass
         try:
             print(f"[JumpToGantt] {name}")
         except Exception:
@@ -1140,22 +1258,24 @@ class ProjectTreeView(QWidget):
         v.addWidget(combo)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         v.addWidget(buttons)
-        buttons.accepted.connect(dlg.accept)
-        buttons.rejected.connect(dlg.reject)
-        if dlg.exec_() == QDialog.Accepted:
+        def apply():
             new_parent = combo.currentText()
             if new_parent == "<None>":
                 new_parent = None
-            # Update model
             for r in self.model.rows:
                 if r.get('Project Part') == target_name:
                     r['Parent'] = new_parent
                     break
             try:
-                self.model.save_to_db()
+                if hasattr(self.model, 'save_to_db'):
+                    self.model.save_to_db()
             except Exception as e:
                 print(f"Reparent save failed: {e}")
             self.refresh()
+            dlg.accept()
+        buttons.accepted.connect(apply)
+        buttons.rejected.connect(dlg.reject)
+        dlg.exec_()
 
     def _collect_descendants(self, name):
         out = set(); queue = [name]
@@ -1613,6 +1733,9 @@ class GanttChartView(QWidget):
         mt = float(s.value("Export/margin_top_mm", 8.0))
         mr = float(s.value("Export/margin_right_mm", 8.0))
         mb = float(s.value("Export/margin_bottom_mm", 8.0))
+        include_header = s.value("Export/include_header", True)
+        if isinstance(include_header, str):
+            include_header = include_header.lower() in ("1","true","yes","on")
         # Ask for target path with default filter based on preferred format
         init_name = f"{title.lower().replace(' ', '_')}.{ 'pdf' if pref_format=='PDF' else 'png' }"
         filters = "PDF Files (*.pdf);;PNG Files (*.png)" if pref_format=="PDF" else "PNG Files (*.png);;PDF Files (*.pdf)"
@@ -1669,7 +1792,7 @@ class GanttChartView(QWidget):
                 except Exception:
                     return None
                 return None
-            if header_is_svg and header_svg_renderer:
+            if include_header and header_is_svg and header_svg_renderer:
                 target_w = page_rect.width()
                 header_h = _svg_header_h(header_svg_renderer, target_w)
                 if header_h:
@@ -1681,7 +1804,7 @@ class GanttChartView(QWidget):
                     scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
                     painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
                     y_offset = scaled_header.height() + 10
-            elif header_pixmap and not header_pixmap.isNull():
+            elif include_header and header_pixmap and not header_pixmap.isNull():
                 header_w = page_rect.width()
                 scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
                 painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
@@ -1693,21 +1816,22 @@ class GanttChartView(QWidget):
             for col in range(cols):
                 if col > 0:
                     printer.newPage()
-                    # Repaint header on each page
-                    if header_is_svg and header_svg_renderer:
-                        target_w = page_rect.width()
-                        header_h = _svg_header_h(header_svg_renderer, target_w)
-                        if header_h:
-                            target_rect = QRectF(0, 0, target_w, header_h)
-                            header_svg_renderer.render(painter, target_rect)
+                    # Repaint header on each page if enabled
+                    if include_header:
+                        if header_is_svg and header_svg_renderer:
+                            target_w = page_rect.width()
+                            header_h = _svg_header_h(header_svg_renderer, target_w)
+                            if header_h:
+                                target_rect = QRectF(0, 0, target_w, header_h)
+                                header_svg_renderer.render(painter, target_rect)
+                            elif header_pixmap and not header_pixmap.isNull():
+                                header_w = page_rect.width()
+                                scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
+                                painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
                         elif header_pixmap and not header_pixmap.isNull():
                             header_w = page_rect.width()
                             scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
                             painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
-                    elif header_pixmap and not header_pixmap.isNull():
-                        header_w = page_rect.width()
-                        scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
-                        painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
                 painter.save()
                 painter.translate(0, y_offset)
                 painter.scale(scale, scale)
@@ -1732,7 +1856,7 @@ class GanttChartView(QWidget):
         scene.render(painter)
         painter.end()
         # Compose header + content into a single pixmap (header centered)
-        if header_is_svg and header_svg_renderer:
+        if include_header and header_is_svg and header_svg_renderer:
             target_w = content_pixmap.width()
             def _svg_header_h(renderer, target_w):
                 try:
@@ -1771,7 +1895,7 @@ class GanttChartView(QWidget):
                 combined.save(path, 'PNG')
             else:
                 content_pixmap.save(path, 'PNG')
-        elif header_pixmap and not header_pixmap.isNull():
+        elif include_header and header_pixmap and not header_pixmap.isNull():
             combined_width = max(header_pixmap.width(), content_pixmap.width())
             combined_height = header_pixmap.height() + content_pixmap.height()
             combined = QPixmap(combined_width, combined_height)
@@ -3873,6 +3997,23 @@ class MainWindow(QMainWindow):
             self.database_view.refresh_table()
         elif index == 5 and hasattr(self, 'progress_dashboard'):
             self.progress_dashboard.refresh()
+    def _on_jump_to_gantt_from_tree(self, part_name):
+        try:
+            # Switch to Gantt tab
+            try:
+                if self.sidebar.currentRow() != 1:
+                    self.sidebar.setCurrentRow(1)
+            except Exception:
+                pass
+            # Render & highlight
+            if hasattr(self, 'gantt_chart_view'):
+                self.gantt_chart_view.render_gantt(self.model)
+                if hasattr(self.gantt_chart_view, 'highlight_bar'):
+                    self.gantt_chart_view.highlight_bar(part_name)
+            if self.statusBar():
+                self.statusBar().showMessage(f"Jumped to '{part_name}' in Gantt", 2500)
+        except Exception as e:
+            print(f"Jump to gantt failed: {e}")
     def __init__(self, model):
         try:
             super().__init__()
@@ -4132,7 +4273,11 @@ class MainWindow(QMainWindow):
             ])
 
             # Stacked widget for views
-            self.project_tree_view = ProjectTreeView(self.model, on_part_selected=self.on_tree_part_selected)
+            self.project_tree_view = ProjectTreeView(
+                self.model,
+                on_part_selected=self.on_tree_part_selected,
+                on_jump_to_gantt=self._on_jump_to_gantt_from_tree
+            )
             self.gantt_chart_view = GanttChartView()
             self.calendar_view = CalendarView(self.model)
             self.timeline_view = TimelineView(self.model)
