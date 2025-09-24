@@ -1134,6 +1134,8 @@
           empty.className = 'empty';
           empty.textContent = 'No images found. Place images under the images/ folder.';
           grid.appendChild(empty);
+          // Even if empty, ensure hover bindings are reset
+          setTimeout(bindImageGridHover, 0);
           return;
         }
         const frag = document.createDocumentFragment();
@@ -1156,11 +1158,14 @@
           frag.appendChild(card);
         }
         grid.appendChild(frag);
+        // Bind hover after content is in the DOM
+        setTimeout(bindImageGridHover, 0);
       } catch (e) {
         const err = document.createElement('div');
         err.className = 'error';
   err.textContent = 'Error loading images: ' + (e && e.message ? e.message : e);
         grid.appendChild(err);
+        setTimeout(bindImageGridHover, 0);
       }
     }
 
@@ -1412,21 +1417,76 @@
         const svg = gantt && gantt.$svg;
         if (!svg || svg.dataset.hoverBound === '1') return;
         svg.dataset.hoverBound = '1';
+        // Fallback delegated listeners on the SVG root
         svg.addEventListener('mousemove', (e) => {
-          const wrap = e.target.closest('.bar-wrapper');
+          const wrap = e.target && e.target.closest ? e.target.closest('.bar-wrapper') : null;
           if (!wrap) { hideHoverPreview(); return; }
           const id = wrap.getAttribute('data-id');
-          const url = firstImageUrlForTask(id);
+          let url = id ? firstImageUrlForTask(id) : null;
+          if (!url) {
+            // Fallback by bar label text
+            const lbl = wrap.querySelector('.bar-label');
+            const name = lbl && lbl.textContent ? lbl.textContent : '';
+            const t = name && cachedTasks ? cachedTasks.find(x => x.name === name) : null;
+            url = t && t.images && t.images[0] ? t.images[0].url : null;
+          }
           if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
         });
         svg.addEventListener('mouseleave', hideHoverPreview);
         svg.addEventListener('click', (e) => {
-          const wrap = e.target.closest('.bar-wrapper');
+          const wrap = e.target && e.target.closest ? e.target.closest('.bar-wrapper') : null;
           if (!wrap) return;
           const id = wrap.getAttribute('data-id');
-          const t = cachedTasks && cachedTasks.find(tt => String(tt.id) === String(id));
+          let t = cachedTasks && id ? cachedTasks.find(tt => String(tt.id) === String(id)) : null;
+          if (!t) {
+            const lbl = wrap.querySelector('.bar-label');
+            const name = lbl && lbl.textContent ? lbl.textContent : '';
+            t = name && cachedTasks ? cachedTasks.find(x => x.name === name) : null;
+          }
           if (t) openDetailsForTask(t);
         });
+
+        // Direct bindings on each bar wrapper for robustness
+        function ensureGanttWrapperHoverBindings() {
+          const wrappers = svg.querySelectorAll('.bar-wrapper');
+          wrappers.forEach((w) => {
+            if (w.dataset.hoverBound === '1') return;
+            w.dataset.hoverBound = '1';
+            w.addEventListener('mouseenter', (e) => {
+              const id = w.getAttribute('data-id');
+              let url = id ? firstImageUrlForTask(id) : null;
+              if (!url) {
+                const lbl = w.querySelector('.bar-label');
+                const name = lbl && lbl.textContent ? lbl.textContent : '';
+                const t = name && cachedTasks ? cachedTasks.find(x => x.name === name) : null;
+                url = t && t.images && t.images[0] ? t.images[0].url : null;
+              }
+              if (url) showHoverPreview(url, e);
+            });
+            w.addEventListener('mousemove', (e) => moveHoverPreview(e));
+            w.addEventListener('mouseleave', hideHoverPreview);
+            w.addEventListener('click', () => {
+              const id = w.getAttribute('data-id');
+              let t = cachedTasks && id ? cachedTasks.find(x => String(x.id) === String(id)) : null;
+              if (!t) {
+                const lbl = w.querySelector('.bar-label');
+                const name = lbl && lbl.textContent ? lbl.textContent : '';
+                t = name && cachedTasks ? cachedTasks.find(x => x.name === name) : null;
+              }
+              if (t) openDetailsForTask(t);
+            });
+          });
+        }
+
+        // Initial pass
+        ensureGanttWrapperHoverBindings();
+        // Rebind on mutations (bars are frequently re-rendered)
+        try {
+          if (svg._hoverObserver) svg._hoverObserver.disconnect();
+          const mo = new MutationObserver(() => { ensureGanttWrapperHoverBindings(); });
+          mo.observe(svg, { childList: true, subtree: true });
+          svg._hoverObserver = mo;
+        } catch(_) {}
       } catch {}
     }
     const _origRenderGantt = renderGantt;
