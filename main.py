@@ -754,134 +754,239 @@ class ProgressDashboard(QWidget):
         self.summary_label.setText(text)
 
 class ProjectTreeView(QWidget):
+    """Horizontal left-to-right branching tree visualization (graphics based).
+    Replaces prior multi-column QTreeWidget with a schematic layout closer to the web app's
+    horizontally indented appearance, but rendered as a node graph for clarity.
+    """
     def __init__(self, model, on_part_selected=None):
         super().__init__()
         self.model = model
         self.on_part_selected = on_part_selected
+        self._name_to_row = {}
+        self._name_to_item = {}
+        self._hover_preview_enabled = True
         layout = QVBoxLayout()
-        header_row = QHBoxLayout()
-        header_row.addWidget(QLabel("Project Tree (Drag-and-Drop Enabled)"))
+        header = QHBoxLayout()
+        title = QLabel("Project Tree (Horizontal)")
+        title.setStyleSheet("font-weight:600; padding:2px 4px;")
+        header.addWidget(title)
         from PyQt5.QtWidgets import QPushButton
-        expand_btn = QPushButton("Expand All")
-        collapse_btn = QPushButton("Collapse All")
-        expand_btn.setToolTip("Expand all nodes")
-        collapse_btn.setToolTip("Collapse all nodes")
-        def do_expand():
-            self.tree.expandAll()
-        def do_collapse():
-            self.tree.collapseAll()
-        expand_btn.clicked.connect(do_expand)
-        collapse_btn.clicked.connect(do_collapse)
-        header_row.addStretch(1)
-        header_row.addWidget(expand_btn)
-        header_row.addWidget(collapse_btn)
-        layout.addLayout(header_row)
-        self.tree = QTreeWidget()
-        self.display_columns = ["Project Part", "Type"]
-        self.tree.setHeaderLabels(self.display_columns)
-        # Enable drag and drop
-        self.tree.setDragEnabled(True)
-        self.tree.setAcceptDrops(True)
-        self.tree.setDropIndicatorShown(True)
-        self.tree.setDefaultDropAction(Qt.MoveAction)
-        self.tree.setDragDropMode(QTreeWidget.InternalMove)
-        layout.addWidget(self.tree)
-
-        # Add image preview label
+        fit_btn = QPushButton("Fit")
+        refresh_btn = QPushButton("Refresh")
+        toggle_img_btn = QPushButton("Previews: On")
+        fit_btn.setToolTip("Fit entire tree in view")
+        refresh_btn.setToolTip("Rebuild layout from model")
+        toggle_img_btn.setToolTip("Toggle image hover previews")
+        def do_fit():
+            if hasattr(self, 'view'):
+                r = self.scene.itemsBoundingRect()
+                if not r.isNull():
+                    self.view.fitInView(r, Qt.KeepAspectRatio)
+        def do_refresh():
+            self.refresh()
+        def do_toggle_preview():
+            self._hover_preview_enabled = not self._hover_preview_enabled
+            toggle_img_btn.setText(f"Previews: {'On' if self._hover_preview_enabled else 'Off'}")
+        fit_btn.clicked.connect(do_fit)
+        refresh_btn.clicked.connect(do_refresh)
+        toggle_img_btn.clicked.connect(do_toggle_preview)
+        header.addStretch(1)
+        header.addWidget(fit_btn)
+        header.addWidget(refresh_btn)
+        header.addWidget(toggle_img_btn)
+        layout.addLayout(header)
+        # Graphics view for nodes
+        self.scene = QGraphicsScene()
+        self.view = ZoomableGraphicsView()
+        self.view.setScene(self.scene)
+        self.view.setRenderHints(self.view.renderHints())
+        layout.addWidget(self.view, 1)
+        # Preview label (shares style with others)
         self.preview_label = QLabel()
-        self.preview_label.setFixedHeight(200)
+        self.preview_label.setFixedHeight(140)
         self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setStyleSheet("border:1px solid #666; background:#222;")
         layout.addWidget(self.preview_label)
-
         self.setLayout(layout)
-        self.tree.itemSelectionChanged.connect(self.handle_selection)
-        self.tree.dropEvent = self.dropEvent  # Override dropEvent
-        self.tree.setMouseTracking(True)
-        self.tree.viewport().setMouseTracking(True)
-        self.tree.viewport().installEventFilter(self)
         self.refresh()
 
+    # -------- Data & Layout --------
+    def _build_hierarchy(self):
+        rows = getattr(self.model, 'rows', []) or []
+        self._name_to_row = {r.get('Project Part',''): r for r in rows}
+        children = {}
+        roots = []
+        for r in rows:
+            name = r.get('Project Part','')
+            parent = (r.get('Parent') or '').strip()
+            if parent and parent in self._name_to_row and parent != name:
+                children.setdefault(parent, []).append(name)
+            else:
+                roots.append(name)
+        return roots, children
+
+    def _compute_layout(self, roots, children):
+        # Tidy-ish layout: allocate vertical space proportional to leaf count
+        node_w, node_h = 180, 46
+        h_gap, v_gap = 80, 24
+        leaf_spacing = node_h + v_gap
+        positions = {}
+        def count_leaves(name, visited=None):
+            if visited is None: visited = set()
+            if name in visited: return 1
+            visited.add(name)
+            ch = children.get(name, [])
+            if not ch: return 1
+            return sum(count_leaves(c, visited.copy()) for c in ch)
+        y_cursor = 0
+        def place(name, depth, y_start):
+            ch = children.get(name, [])
+            if not ch:
+                y_center = y_start + node_h/2
+                positions[name] = (depth*(node_w+h_gap), y_center - node_h/2)
+                return y_center, y_start + leaf_spacing
+            # place children first
+            child_centers = []
+            cur_y = y_start
+            for c in sorted(ch, key=lambda s: s.lower()):
+                cc, cur_y = place(c, depth+1, cur_y)
+                child_centers.append(cc)
+            y_center = sum(child_centers)/len(child_centers)
+            positions[name] = (depth*(node_w+h_gap), y_center - node_h/2)
+            return y_center, cur_y
+        for r in sorted(roots, key=lambda s: s.lower()):
+            _c, y_cursor = place(r, 0, y_cursor)
+        return positions, (node_w, node_h)
+
+    # -------- Rendering --------
+    def refresh(self):
+        self.scene.clear()
+        self._name_to_item.clear()
+        roots, children = self._build_hierarchy()
+        if not roots:
+            self.scene.addText("(No data)")
+            return
+        positions, (node_w, node_h) = self._compute_layout(roots, children)
+        from PyQt5.QtGui import QPen, QColor, QBrush, QFont
+        # Draw connectors first
+        pen_conn = QPen(QColor(150,150,150))
+        pen_conn.setWidth(2)
+        for parent, chs in children.items():
+            if parent not in positions: continue
+            px, py = positions[parent]
+            for c in chs:
+                if c not in positions: continue
+                cx, cy = positions[c]
+                # Parent right middle to child left middle via elbow
+                p_mid = (px+node_w, py + node_h/2)
+                c_mid = (cx, cy + node_h/2)
+                mid_x = (p_mid[0] + c_mid[0]) / 2
+                self.scene.addLine(p_mid[0], p_mid[1], mid_x, p_mid[1], pen_conn)
+                self.scene.addLine(mid_x, p_mid[1], mid_x, c_mid[1], pen_conn)
+                self.scene.addLine(mid_x, c_mid[1], c_mid[0], c_mid[1], pen_conn)
+        # Draw nodes
+        font = self.font()
+        for name, (x, y) in positions.items():
+            row = self._name_to_row.get(name, {})
+            pc = 0
+            try:
+                pc = int(row.get('% Complete') or 0)
+            except Exception:
+                pc = 0
+            status = (row.get('Status') or '').strip()
+            base_color = QColor('#2f2f2f')
+            if status.lower() == 'done':
+                base_color = QColor('#235f23')
+            elif status.lower() in ('blocked','deferred'):
+                base_color = QColor('#5f2323')
+            elif status.lower() in ('in progress', 'at risk'):
+                base_color = QColor('#5f4a23')
+            rect_item = self.scene.addRect(x, y, node_w, node_h, QPen(QColor('#888')), QBrush(base_color))
+            rect_item.setData(0, name)
+            rect_item.setFlag(rect_item.ItemIsSelectable, True)
+            # Progress overlay
+            if pc > 0:
+                prog_w = int((pc/100)*node_w)
+                prog = self.scene.addRect(x, y+node_h-8, prog_w, 8, QPen(Qt.NoPen), QBrush(QColor('#FF8200')))
+                prog.setZValue(rect_item.zValue()+1)
+            # Text (wrap / elide simple)
+            txt = name
+            if len(txt) > 40:
+                txt = txt[:37] + '…'
+            text_item = self.scene.addText(txt)
+            f = QFont(font)
+            f.setPointSize(f.pointSize()-1)
+            f.setBold(True)
+            text_item.setFont(f)
+            text_item.setDefaultTextColor(QColor('white'))
+            br = text_item.boundingRect()
+            text_item.setPos(x + (node_w - br.width())/2, y + 6)
+            text_item.setZValue(rect_item.zValue()+2)
+            # Status / percent line
+            meta_line = f"{status or ''}  {pc}%".strip()
+            if meta_line:
+                meta_item = self.scene.addText(meta_line)
+                f2 = QFont(font); f2.setPointSize(f2.pointSize()-2)
+                meta_item.setFont(f2)
+                meta_item.setDefaultTextColor(QColor('#dddddd'))
+                mbr = meta_item.boundingRect()
+                meta_item.setPos(x + (node_w - mbr.width())/2, y + node_h - mbr.height() - 12)
+                meta_item.setZValue(rect_item.zValue()+2)
+            self._name_to_item[name] = rect_item
+        # Interaction
+        self.scene.installEventFilter(self)
+        # Autosize scene rect
+        r = self.scene.itemsBoundingRect()
+        self.scene.setSceneRect(r.adjusted(-40, -40, 40, 40))
+        # Initial fit
+        try:
+            self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+        except Exception:
+            pass
+
+    # -------- Event Handling --------
     def eventFilter(self, obj, event):
         from PyQt5.QtCore import QEvent
-        if obj == self.tree.viewport():
-            if event.type() == QEvent.MouseMove:
-                pos = event.pos()
-                item = self.tree.itemAt(pos)
-                if item:
-                    part_name = item.text(0)
-                    row = next((r for r in self.model.rows if r["Project Part"] == part_name), None)
-                    if row:
-                        img_path = row.get("Images", "")
-                        if img_path and str(img_path).strip():
-                            from PyQt5.QtGui import QPixmap
-                            img_path_full = resolve_resource_path(img_path)
-                            pixmap = QPixmap(img_path_full)
-                            if not pixmap.isNull():
-                                self.preview_label.setPixmap(pixmap.scaledToHeight(180, Qt.SmoothTransformation))
-                            else:
-                                self.preview_label.setText("[Image not found]")
-                        else:
-                            self.preview_label.clear()
-                    else:
-                        self.preview_label.clear()
-                else:
-                    self.preview_label.clear()
-            elif event.type() == QEvent.Leave:
+        if event.type() == QEvent.GraphicsSceneMousePress:
+            item = self.scene.itemAt(event.scenePos(), self.view.transform())
+            if item:
+                name = item.data(0)
+                if isinstance(name, str) and name:
+                    # selection + callback
+                    if self.on_part_selected:
+                        self.on_part_selected(name)
+                    # preview image
+                    if self._hover_preview_enabled:
+                        row = self._name_to_row.get(name)
+                        if row:
+                            self._show_image_for_row(row)
+        elif event.type() == QEvent.GraphicsSceneHoverMove:
+            if not self._hover_preview_enabled:
                 self.preview_label.clear()
+            else:
+                item = self.scene.itemAt(event.scenePos(), self.view.transform())
+                if item:
+                    name = item.data(0)
+                    if isinstance(name, str):
+                        row = self._name_to_row.get(name)
+                        if row:
+                            self._show_image_for_row(row)
+        elif event.type() in (QEvent.GraphicsSceneLeave,):
+            self.preview_label.clear()
         return super().eventFilter(obj, event)
 
-    def dropEvent(self, event):
-        # Call the default dropEvent to move the item visually
-        QTreeWidget.dropEvent(self.tree, event)
-        # After the move, update the model
-        self.update_model_after_drag()
-
-    def update_model_after_drag(self):
-        # Rebuild parent relationships in the model based on the new tree structure
-        def recurse(item, parent_name):
-            part_name = item.text(0)
-            for row in self.model.rows:
-                if row["Project Part"] == part_name:
-                    row["Parent"] = parent_name if parent_name else None
-            for i in range(item.childCount()):
-                recurse(item.child(i), part_name)
-        for i in range(self.tree.topLevelItemCount()):
-            recurse(self.tree.topLevelItem(i), None)
-        self.model.save_to_db()
-        self.refresh()
-
-    def handle_selection(self):
-        selected = self.tree.selectedItems()
-        if selected and self.on_part_selected:
-            part_name = selected[0].text(0)
-            self.on_part_selected(part_name)
-
-    def refresh(self):
-        self.tree.clear()
-        # Build a mapping from part name to row index
-        name_to_index = {r["Project Part"]: i for i, r in enumerate(self.model.rows)}
-        # Build a mapping from parent part name to list of child indices
-        parent_to_children = {}
-        for i, r in enumerate(self.model.rows):
-            parent = r.get("Parent", "") or ""
-            parent_to_children.setdefault(parent, []).append(i)
-
-        def add_items(parent_widget, parent_name, visited=None):
-            if visited is None:
-                visited = set()
-            for idx in parent_to_children.get(parent_name or "", []):
-                row = self.model.rows[idx]
-                part_name = row["Project Part"]
-                if part_name in visited:
-                    continue  # Prevent cycles
-                visited.add(part_name)
-                item = QTreeWidgetItem([row.get(col, "") for col in self.display_columns])
-                if parent_widget is None:
-                    self.tree.addTopLevelItem(item)
-                else:
-                    parent_widget.addChild(item)
-                add_items(item, part_name, visited.copy())
-        add_items(None, "")
+    def _show_image_for_row(self, row):
+        img_path = row.get('Images','')
+        if img_path and str(img_path).strip():
+            from PyQt5.QtGui import QPixmap
+            full = resolve_resource_path(img_path)
+            pm = QPixmap(full)
+            if not pm.isNull():
+                self.preview_label.setPixmap(pm.scaledToHeight(120, Qt.SmoothTransformation))
+                self.preview_label.setText("")
+                return
+        self.preview_label.setText("")
+        self.preview_label.clear()
 
 
 # Add a custom QGraphicsView subclass for zooming
@@ -1610,6 +1715,7 @@ class GanttChartView(QWidget):
         layout.addLayout(zoom_layout)
         layout.addWidget(self.preview_label)
         self.setLayout(layout)
+        self._did_initial_fit = False
 
         # Keyboard shortcuts
         try:
@@ -1620,6 +1726,24 @@ class GanttChartView(QWidget):
             QShortcut(QKeySequence("Ctrl+0"), self.view, activated=self.reset_zoom)
         except Exception:
             pass
+
+    def _maybe_initial_fit(self):
+        """Perform a one-time fit-to-view if no prior zoom preference was stored.
+        We infer absence of stored zoom by checking if current scale ~= 1 and flag not yet set."""
+        if self._did_initial_fit:
+            return
+        try:
+            scale_x = self.view.transform().m11()
+            if abs(scale_x - 1.0) < 0.001:
+                from PyQt5.QtCore import QTimer
+                def do_fit():
+                    r = self.scene.itemsBoundingRect()
+                    if not r.isNull():
+                        self.view.fitInView(r, Qt.KeepAspectRatio)
+                QTimer.singleShot(0, do_fit)
+            self._did_initial_fit = True
+        except Exception:
+            self._did_initial_fit = True
 
     def _populate_baselines(self):
         try:
@@ -2466,6 +2590,11 @@ class GanttChartView(QWidget):
         current_rect = self.view.sceneRect()
         if current_rect.width() < axis_x1 + 100:
             self.view.setSceneRect(0, 0, axis_x1 + 100, current_rect.height())
+        # One-time initial auto-fit (Option B) if user has not previously zoomed
+        try:
+            self._maybe_initial_fit()
+        except Exception:
+            pass
 
     # Click-to-lock highlight support
     def mousePressEvent(self, event):

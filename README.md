@@ -35,6 +35,7 @@ A desktop project planning & visualization tool built with PyQt5 + QGraphicsScen
 - SQLite persistence with immediate save on change
 - PyInstaller build support (spec file present)
 - Attachment linking per task with paperclip indicator & thumbnail preview fallback
+- Horizontal Project Tree visualization (mirrors web tree layout): left‑to‑right branching node graph with status + % overlays, progress bar strip, hover image preview toggle, and fit/refresh controls
 - Export Gantt or Timeline to PNG / PDF (scene render) with automatic horizontal PDF pagination and page header image
 - Search / jump-to-task field centers & highlights first matching bar
 - Filter panel (status, internal/external, responsible substring, critical-only, risk-only) with ancestor auto-include
