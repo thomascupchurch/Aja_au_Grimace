@@ -12,59 +12,14 @@
   <!-- Theme variables and dark/light overrides -->
   <style>
     :root {
-      /* App palette tokens */
-      --bg: #4B4B4B;           /* main background */
-      --bg2: #3f3f3f;          /* header/controlbar gradient end */
-      --panel: #585858;        /* cards/panels */
-      --border: #6a6a6a;       /* borders/dividers */
-      --text: #f5f5f5;         /* primary text */
-      --muted: #d1d5db;        /* secondary text */
-      --brand: #FF8200;        /* accent */
-      --input-bg: #fff;        /* inputs/buttons background */
-      --input-text: #222;      /* inputs/buttons text */
-      /* Gantt CSS variables (dark default) */
-      --g-header-background: #4B4B4B;
-      --g-row-color: #585858;
-      --g-row-border-color: #6a6a6a;
-      --g-text-dark: #111;             /* bar label text on orange bg */
-      --g-text-muted: #d1d5db;
-      --g-tick-color: transparent;     /* super-minimal */
-      --g-tick-color-thick: transparent;
-      --g-arrow-color: #d1d5db;
-      --g-progress-color: #9ca3af;
-      --g-expected-progress: #a7a7d6;
-      --g-today-highlight: #ffffff66;
-      --g-actions-background: #4B4B4B;
-      --g-popup-actions: #5b5b5b;
-      --g-weekend-highlight-color: #4B4B4B;
-      --g-bar-border: transparent;
+      /* App palette */
+      --bg: #4B4B4B; --bg2: #3f3f3f; --panel: #585858; --border: #6a6a6a; --text: #f5f5f5; --muted: #d1d5db; --brand: #FF8200; --input-bg: #fff; --input-text: #222;
+      /* Gantt variables (dark default) */
+      --g-header-background: #4B4B4B; --g-row-color: #585858; --g-row-border-color: #6a6a6a; --g-text-dark: #111; --g-text-muted: #d1d5db; --g-tick-color: transparent; --g-tick-color-thick: transparent; --g-arrow-color: #d1d5db; --g-progress-color: #9ca3af; --g-expected-progress: #a7a7d6; --g-today-highlight: #ffffff66; --g-actions-background: #4B4B4B; --g-popup-actions: #5b5b5b; --g-weekend-highlight-color: #4B4B4B; --g-bar-border: transparent;
     }
     body.theme-light {
-      /* Light theme palette overrides */
-      --bg: #f9fafb;
-      --bg2: #e5e7eb;
-      --panel: #ffffff;
-      --border: #d1d5db;
-      --text: #111827;
-      --muted: #374151;
-      --input-bg: #fff;
-      --input-text: #111827;
-      /* Gantt variables for light theme */
-      --g-header-background: #f3f4f6;
-      --g-row-color: #ffffff;
-      --g-row-border-color: #e5e7eb;
-      --g-text-dark: #111827;
-      --g-text-muted: #374151;
-      --g-tick-color: transparent; /* still minimal */
-      --g-tick-color-thick: transparent;
-      --g-arrow-color: #6b7280;
-      --g-progress-color: #2563eb;
-      --g-expected-progress: #93c5fd;
-      --g-today-highlight: #00000022;
-      --g-actions-background: #f3f4f6;
-      --g-popup-actions: #e5e7eb;
-      --g-weekend-highlight-color: #f3f4f6;
-      --g-bar-border: transparent;
+      --bg: #f9fafb; --bg2: #e5e7eb; --panel: #ffffff; --border: #d1d5db; --text: #111827; --muted: #374151; --input-bg: #fff; --input-text: #111827;
+      --g-header-background: #f3f4f6; --g-row-color: #ffffff; --g-row-border-color: #e5e7eb; --g-text-dark: #111827; --g-text-muted: #374151; --g-tick-color: transparent; --g-tick-color-thick: transparent; --g-arrow-color: #6b7280; --g-progress-color: #2563eb; --g-expected-progress: #93c5fd; --g-today-highlight: #00000022; --g-actions-background: #f3f4f6; --g-popup-actions: #e5e7eb; --g-weekend-highlight-color: #f3f4f6; --g-bar-border: transparent;
     }
   </style>
   <style>
@@ -83,16 +38,57 @@
   .controlbar-inner { padding: 6px 12px; display:flex; align-items:center; gap:8px; }
   body.gantt-fullscreen .controlbar { display:none; }
   .view { flex: 1; display:flex; flex-direction:column; min-height:0; position: relative; }
-  /* Ensure [hidden] actually hides view containers despite display:flex above */
-  .view[hidden] { display: none !important; }
+    /* Ensure [hidden] actually hides view containers despite display:flex above */
+    .view[hidden] { display: none !important; }
     #gantt { flex:1; min-height:0; overflow: hidden; border-top: 1px solid var(--border); display:flex; }
     .toolbar { display:flex; gap:8px; align-items:center; padding:8px 0; }
     .toolbar select, .toolbar button { padding:6px 10px; background:var(--input-bg); color:var(--input-text); border:1px solid #cfcfcf; border-radius:6px; }
     .toolbar label { color:var(--muted); }
     .info { margin: 8px 0; color:var(--muted); font-size: 12px; }
-    .empty { padding: 24px; color:var(--muted); text-align:center; }
-    .error { padding: 12px; color: #7f1d1d; background: color-mix(in oklab, #fecaca 35%, var(--bg) 65%); border:1px solid #fca5a5; margin:8px 0; border-radius:6px; }
-    #gantt > div { flex:1; min-height: 0; }
+    .empty { padding: 24px; color:#e5e7eb; text-align:center; }
+    .error { padding: 12px; color: #fee; background:#7f1d1d; border:1px solid #fca5a5; margin:8px 0; border-radius:6px; }
+    #gantt > div { flex:1; min-height:0; }
+    /* Reduce busyness: hide diagonal hatch for ignored dates */
+    .gantt .ignored-bar { display: none; }
+    /* Watermark footer */
+  .watermark { width: 100%; background: var(--bg); border-top: 1px solid var(--border); padding: 6px 12px; display:flex; justify-content:center; }
+  .watermark-text { color: var(--muted); font-size: 12px; opacity: 0.8; user-select: none; }
+  /* Gantt-only controls */
+  .toolbar .gantt-only { display: none; }
+  body.mode-gantt .toolbar .gantt-only { display: inline-flex; }
+  /* Fullscreen adjustments for Gantt */
+  body.gantt-fullscreen { overflow: hidden; }
+  body.gantt-fullscreen header, body.gantt-fullscreen .watermark { display:none; }
+  body.gantt-fullscreen main { padding: 8px 12px; }
+  /* Floating exit fullscreen button (visible only in Gantt fullscreen) */
+  .fs-exit { position: fixed; top: 12px; right: 14px; z-index: 99998; display: none; padding: 6px 10px; border-radius: 6px; border:1px solid var(--border); background: color-mix(in oklab, var(--bg2) 75%, #000 25%); color: var(--text); cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.35); }
+  body.gantt-fullscreen.mode-gantt .fs-exit { display: inline-flex; }
+
+  /* Mode-specific control visibility */
+  body.mode-gantt .toolbar #view-mode, body.mode-gantt .toolbar label:nth-of-type(2) { display:inline-block; }
+  body.mode-calendar .toolbar #view-mode, body.mode-calendar .toolbar label:nth-of-type(2),
+  body.mode-timeline .toolbar #view-mode, body.mode-timeline .toolbar label:nth-of-type(2),
+  body.mode-images .toolbar #view-mode, body.mode-images .toolbar label:nth-of-type(2) { display: none; }
+  /* Calendar styles */
+  .cal-toolbar { display:flex; gap:8px; align-items:center; padding:8px 0; }
+  .cal-toolbar button { padding:4px 8px; }
+  .cal-title { flex:1; text-align:center; font-weight:600; color:#e5e7eb; }
+  .calendar { display:grid; grid-template-columns: repeat(7, 1fr); gap:6px; }
+  .cal-head { display:grid; grid-template-columns: repeat(7, 1fr); gap:4px; margin-bottom:4px; grid-column: 1 / -1; }
+  .cal-head-cell { text-align:center; color:var(--muted); font-size:12px; }
+  .calendar .cal-cell { display:flex; flex-direction:column; border:1px solid var(--border); border-radius:6px; padding:6px; min-height:72px; gap:6px; background: color-mix(in oklab, var(--panel) 90%, transparent); }
+  .cal-cell.dim { opacity: 0.5; }
+  .cal-cell.today { outline:2px solid #ffffff66; }
+  .cal-daynum { font-weight:600; color:var(--text); }
+  .cal-badge { align-self:flex-start; background:var(--brand); color:#111; font-weight:600; font-size:12px; padding:2px 6px; border-radius:999px; }
+  .calendar-details { margin-top:12px; border-top:1px solid var(--border); padding-top:8px; }
+  .cal-details-title { color:var(--text); font-weight:600; margin-bottom:6px; }
+  .cal-list { list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:6px; }
+  .cal-list li { display:flex; align-items:center; gap:8px; background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:6px 8px; }
+  .cal-dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+  .cal-name { color:var(--text); font-weight:600; }
+  .cal-when { color:var(--muted); font-size:12px; margin-left:auto; }
+
   /* Reduce busyness: hide vertical grid (ticks), row separators, and hatch */
   .gantt .ignored-bar { display: none; }
   .gantt .tick, .gantt .tick.thick { stroke: transparent !important; }
@@ -102,16 +98,87 @@
   .gantt .grid .highlight, .gantt .grid .grid-highlight { fill: transparent !important; stroke: transparent !important; }
   .gantt .grid-background { fill: transparent !important; }
   .gantt-container { --g-weekend-highlight-color: transparent; --g-today-highlight: transparent; }
-    /* Watermark footer */
-    .watermark { width: 100%; background: var(--bg); border-top: 1px solid var(--border); padding: 6px 12px; display:flex; justify-content:center; }
-    .watermark-text { color: var(--muted); font-size: 12px; opacity: 0.8; user-select: none; }
-    /* Gantt-only controls */
-    .toolbar .gantt-only { display: none; }
-    body.mode-gantt .toolbar .gantt-only { display: inline-flex; }
-    /* Fullscreen adjustments */
-    body.gantt-fullscreen { overflow: hidden; }
-    body.gantt-fullscreen header, body.gantt-fullscreen .watermark { display:none; }
-    body.gantt-fullscreen main { padding: 8px 12px; }
+  .gantt .tick, .gantt .tick.thick { stroke: transparent !important; }
+  .gantt .row-line { stroke: transparent !important; }
+
+  /* Timeline styles */
+  #timeline { overflow:auto; border-top:1px solid var(--border); min-height:320px; }
+  .timeline-svg text { user-select:none; }
+
+  /* Tree styles */
+  #tree { border-top:1px solid var(--border); }
+  .tree-list { display:flex; flex-direction:column; gap:4px; padding:8px 0; }
+  .tree-row { display:flex; gap:8px; align-items:center; background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:6px 8px; }
+  .tree-toggle { width:24px; min-width:24px; height:24px; line-height:20px; text-align:center; border:1px solid #cfcfcf; border-radius:6px; background:var(--input-bg); color:var(--input-text); padding:0; }
+  .tree-toggle:disabled { opacity:0.5; }
+  .tree-name { color:var(--text); font-weight:600; }
+  .tree-when { color:var(--muted); font-size:12px; margin-left:auto; }
+  .tree-progress { color:#111; font-size:12px; font-weight:600; padding:2px 6px; border-radius:999px; margin-left:8px; }
+
+    /* Images gallery */
+  .images-toolbar { display:flex; gap:8px; align-items:center; padding:8px 0; }
+  .images-toolbar input { padding:6px 10px; border-radius:6px; border:1px solid #cfcfcf; background:var(--input-bg); color:var(--input-text); }
+  .images-grid { --min: 180px; display:grid; grid-template-columns: repeat(auto-fill, minmax(var(--min), 1fr)); gap:10px; border-top:1px solid var(--border); padding-top:10px; }
+  .img-card { background:var(--panel); border:1px solid var(--border); border-radius:8px; overflow:hidden; display:flex; flex-direction:column; cursor:pointer; }
+    .img-wrap { position:relative; padding-top:66%; background:#333; }
+    .img-wrap img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .img-name { padding:6px 8px; color:var(--text); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-top:1px solid var(--border); background: color-mix(in oklab, var(--panel) 80%, #000 20%); }
+    /* Lightbox */
+    .lightbox { position:fixed; inset:0; background:rgba(0,0,0,0.85); display:none; align-items:center; justify-content:center; z-index:9999; }
+    .lightbox.open { display:flex; }
+    .lightbox img { max-width:95vw; max-height:90vh; box-shadow:0 10px 30px rgba(0,0,0,0.6); border-radius:8px; }
+    .lightbox .close { position:absolute; top:14px; right:18px; color:#fff; background:#00000066; border:1px solid #ffffff55; border-radius:6px; padding:6px 10px; cursor:pointer; }
+    .lightbox .caption { position:absolute; bottom:12px; left:0; right:0; text-align:center; color:#e5e7eb; font-size:12px; }
+
+    /* Hover preview (floating image on hover) */
+    .hover-preview { position: fixed; pointer-events: none; z-index: 9998; display:none; }
+    .hover-preview.open { display:block; }
+  .hover-preview img { max-width: 360px; max-height: 240px; box-shadow: 0 10px 30px rgba(0,0,0,0.55); border-radius: 6px; border: 1px solid var(--border); background: color-mix(in oklab, var(--bg) 40%, #000 60%); }
+    /* Details drawer */
+  .details { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 92vw); background: color-mix(in oklab, var(--panel) 90%, transparent); border-left:1px solid var(--border); box-shadow: -10px 0 30px rgba(0,0,0,0.4); display:flex; flex-direction:column; z-index: 9997; }
+    .details[hidden] { display:none !important; }
+  .details-header { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border-bottom:1px solid var(--border); }
+  .details-title { font-weight:700; color:var(--text); }
+  #details-close { padding:6px 10px; background:var(--input-bg); color:var(--input-text); border:1px solid #cfcfcf; border-radius:6px; cursor:pointer; }
+  .details-body { overflow:auto; padding:10px 12px; color:var(--muted); font-size:13px; }
+    .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 10px; }
+  .kv .k { color:var(--muted); }
+  .kv .v { color:var(--text); word-break:break-word; }
+    /* Gantt popup readability (theme-aware) */
+    .gantt .popup-wrapper { background:#2f2f2f !important; color:var(--text) !important; border:1px solid var(--border); box-shadow: 0 6px 24px rgba(0,0,0,0.35); }
+    .gantt .popup-wrapper { font-size:14px !important; line-height:1.4; }
+    .gantt .popup-wrapper .title { color:var(--text) !important; font-size:16px !important; font-weight:700; margin-bottom:6px; }
+    .gantt .popup-wrapper .details-container { color:var(--muted) !important; }
+    .gantt .popup-wrapper .details-container div { margin:4px 0; }
+    .gantt .popup-wrapper .details-container strong { color:var(--text) !important; }
+    .gantt .popup-wrapper .pointer { border-top-color:#2f2f2f !important; }
+    /* Unscoped fallback in case popup attaches to body */
+  .popup-wrapper { background:#2f2f2f !important; color:var(--text) !important; border:1px solid var(--border); box-shadow: 0 6px 24px rgba(0,0,0,0.35); font-size:14px !important; line-height:1.4; }
+  .popup-wrapper .title { color:var(--text) !important; font-size:16px !important; font-weight:700; margin-bottom:6px; }
+  .popup-wrapper .details-container { color:var(--muted) !important; }
+    .popup-wrapper .details-container div { margin:4px 0; }
+  .popup-wrapper .details-container strong { color:var(--text) !important; }
+  .popup-wrapper .pointer { border-top-color:#2f2f2f !important; }
+    /* Export watermark overlay */
+    .export-wm {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      user-select: none;
+      font-weight: 900;
+      letter-spacing: 4px;
+      color: #ffffff;
+      opacity: 0.25;
+      transform: rotate(-28deg);
+      font-size: min(12vw, 120px);
+      text-shadow: 0 2px 6px rgba(0,0,0,0.35);
+    }
+    /* Floating toast */
+    .toast { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%) translateY(8px); background: color-mix(in oklab, var(--bg2) 80%, #000 20%); color:var(--text); border: 1px solid var(--border); padding: 8px 12px; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.35); opacity: 0; pointer-events: none; transition: opacity 160ms ease, transform 160ms ease; z-index: 99999; font-size: 13px; }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   </style>
 </head>
 <body>
@@ -129,7 +196,6 @@
         <option value="tree">Tree</option>
         <option value="images">Images</option>
       </select>
-      
       <label>View:</label>
       <select id="view-mode">
         <option value="Day">Day</option>
@@ -143,7 +209,7 @@
       <button id="today" class="gantt-only" title="Center on today">Today</button>
       <button id="fullscreen" class="gantt-only" title="Enter Fullscreen">⛶</button>
       <button id="theme-toggle" title="Toggle theme">Theme: Dark</button>
-  <button id="copy-link" title="Copy shareable link">Copy Link</button>
+      <button id="copy-link" title="Copy shareable link">Copy Link</button>
       <label style="margin-left:8px; display:inline-flex; align-items:center; gap:6px;">
         <input type="checkbox" id="export-watermark" /> Watermark
       </label>
@@ -188,12 +254,39 @@
       <div id="details-body" class="details-body"></div>
     </aside>
   </main>
-
   <footer class="watermark" aria-label="Watermark">
     <div class="watermark-text">{{ watermark }}</div>
   </footer>
 
   <!-- Prefer local vendored asset (.min.js or .umd.js); fall back to CDN; then to tiny local stub route -->
+  <script>
+    // Global error handlers to surface issues instead of silently failing
+    (function(){
+      function report(msg){
+        try {
+          var el = document.getElementById('status');
+          if (el) {
+            var t = String(msg || 'Unknown error');
+            el.textContent = t;
+          }
+        } catch(_){ /* noop */ }
+      }
+      window.addEventListener('error', function(e){
+        var m = (e && e.message) ? e.message : ((e && e.error && e.error.message) ? e.error.message : 'Script error');
+        report('Error: ' + m);
+      });
+      window.addEventListener('unhandledrejection', function(e){
+        var m = 'Promise rejection';
+        try {
+          if (e && e.reason) {
+            if (typeof e.reason === 'string') m = e.reason;
+            else if (e.reason && e.reason.message) m = e.reason.message;
+          }
+        } catch(_){ }
+        report('Error: ' + m);
+      });
+    })();
+  </script>
   <script>
     (function(){
       function inject(src, next){
@@ -236,34 +329,61 @@
   </script>
   <script>
     let gantt;
-    let cachedTasks = null; // cache parsed Date objects for re-render without refetching
+  let cachedTasks = null; // cache parsed Date objects for re-render without refetching
   let currentMode = 'gantt';
-    let calMonth = null; // Date at first of month for calendar
-    const body = document.body;
+  let calMonth = null; // calendar month anchor
+    let cachedImages = null; // cache image listing
     let ganttState = { view: 'Day', column_width: 40 };
-  let cachedImages = null; // cache image listing
-    // Theme load/apply
-    function getSavedTheme() {
-      const t = localStorage.getItem('theme');
-      return t === 'light' ? 'light' : 'dark';
+    // Cache a data-URL for the header so exports always include the logo reliably
+    let _headerDataUrl = null;
+    async function getHeaderDataUrl() {
+      if (_headerDataUrl) return _headerDataUrl;
+      try {
+        const res = await fetch('/static/header.svg', { cache: 'no-store' });
+        if (res.ok) {
+          const txt = await res.text();
+          // Inline as data URL to avoid any fetch timing during export
+          _headerDataUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(txt);
+          return _headerDataUrl;
+        }
+      } catch(_) {}
+      // Fallback: use PNG directly (browser will fetch at export time)
+      _headerDataUrl = '/static/header.png';
+      return _headerDataUrl;
     }
+    // Theme persistence
+    function getSavedTheme() { const t = localStorage.getItem('theme'); return t === 'light' ? 'light' : 'dark'; }
     function applyTheme(t) {
-      body.classList.toggle('theme-light', t === 'light');
-      const btn = document.getElementById('theme-toggle');
-      if (btn) btn.textContent = 'Theme: ' + (t === 'light' ? 'Light' : 'Dark');
-      // Re-render gantt to pick up CSS var changes (labels/popups)
+      document.body.classList.toggle('theme-light', t === 'light');
+      const btn = document.getElementById('theme-toggle'); if (btn) btn.textContent = 'Theme: ' + (t === 'light' ? 'Light' : 'Dark');
       if (currentMode === 'gantt' && cachedTasks && typeof renderGantt === 'function') {
         renderGantt(cachedTasks, { view: ganttState.view, column_width: ganttState.column_width });
       }
     }
     document.addEventListener('DOMContentLoaded', () => {
       applyTheme(getSavedTheme());
-      const tt = document.getElementById('theme-toggle');
-      if (tt) tt.addEventListener('click', () => {
-        const next = body.classList.contains('theme-light') ? 'dark' : 'light';
+      const tt = document.getElementById('theme-toggle'); if (tt) tt.addEventListener('click', () => {
+        const next = document.body.classList.contains('theme-light') ? 'dark' : 'light';
         localStorage.setItem('theme', next);
         applyTheme(next);
       });
+      // Apply URL state and trigger initial render (so content shows without manual Refresh)
+      try {
+        applyStateFromUrl();
+      } catch(_) { /* fallback below will still render */ }
+      try {
+        if (currentMode === 'images') { renderImages(); }
+        else { loadTasks(); }
+      } catch(_) { /* errors surfaced by existing error handlers */ }
+    });
+
+    // Handle browser back/forward: re-apply state and render immediately
+    window.addEventListener('popstate', () => {
+      try { applyStateFromUrl(); } catch(_) {}
+      try {
+        if (currentMode === 'images') { renderImages(); }
+        else { loadTasks(); }
+      } catch(_) {}
     });
     // Status flash helper
     let _statusTimer = null;
@@ -288,7 +408,7 @@
         _toastTimer = setTimeout(() => { el.classList.remove('show'); }, ms);
       }
     }
-    
+
     // Wait for frappe-gantt to be loaded (window.Gantt defined)
     async function waitForGantt(timeoutMs = 8000) {
       const start = Date.now();
@@ -297,6 +417,45 @@
         await new Promise(r => setTimeout(r, 50));
       }
       return true;
+    }
+
+    // URL state helpers (display/view/month)
+    function getStateParams() {
+      const display = currentMode;
+  const vmEl = document.querySelector('#view-mode');
+  const view = (vmEl && vmEl.value) ? vmEl.value : 'Day';
+      const cal = (display === 'calendar' && calMonth) ? calMonth.toISOString().slice(0,7) : null;
+      const sp = new URLSearchParams();
+      if (display) sp.set('display', display);
+      if (display === 'gantt' && view) sp.set('view', view);
+      if (cal) sp.set('cal', cal);
+      return sp;
+    }
+    function applyStateFromUrl() {
+      const sp = new URLSearchParams(location.search);
+      const display = sp.get('display');
+      const view = sp.get('view');
+      const cal = sp.get('cal');
+      if (display) {
+        const sel = document.getElementById('display-mode');
+        if (sel) sel.value = display;
+        currentMode = display;
+      }
+      if (view) {
+        const vm = document.getElementById('view-mode');
+        if (vm) vm.value = view;
+      }
+      if (cal) {
+        const d = new Date(`${cal}-01T00:00:00`);
+        if (!isNaN(d.getTime())) calMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+      }
+      // Toggle views to match display (will render once tasks are loaded)
+      setMode(currentMode);
+    }
+    function updateUrlFromState(replace=true) {
+      const sp = getStateParams();
+      const url = `${location.pathname}?${sp.toString()}`;
+      if (replace) history.replaceState(null, '', url); else history.pushState(null, '', url);
     }
 
     // Compute overall date range of tasks
@@ -357,8 +516,8 @@
       el.innerHTML = '';
       const container = document.createElement('div');
       el.appendChild(container);
-
-      const toolbarView = document.querySelector('#view-mode').value;
+  var vmElLocal = document.querySelector('#view-mode');
+  const toolbarView = (vmElLocal && vmElLocal.value) ? vmElLocal.value : 'Day';
       let cw;
       if (opts && typeof opts.column_width === 'number' && opts.column_width > 0) {
         cw = { view: opts.view || toolbarView, column_width: opts.column_width };
@@ -366,7 +525,7 @@
         cw = chooseFitSettings(container.clientWidth || el.clientWidth || 1024, parsed, opts.view || toolbarView);
       }
       // keep the select in sync with chosen view
-      document.querySelector('#view-mode').value = cw.view;
+      if (vmElLocal) vmElLocal.value = cw.view;
 
       // Helper to (re)apply progress colors and add label backgrounds
       const enhanceBars = () => {
@@ -396,12 +555,10 @@
               rect.setAttribute('pointer-events', 'none');
               const ie = (t.internal_external || '').toLowerCase();
               const stroke = ie === 'internal' ? '#ffffff' : (ie === 'external' ? '#000000' : 'none');
-              const strokeWidth = stroke === 'none' ? '0' : '2';
+              const strokeWidth = stroke === 'none' ? '0' : '1.25';
               rect.setAttribute('stroke', stroke);
               rect.setAttribute('stroke-width', strokeWidth);
               label.parentNode.insertBefore(rect, label);
-              // Ensure label text is readable over orange background
-              label.style.fill = '#111';
             } catch {}
           }
         }
@@ -426,7 +583,7 @@
             ['Type', task.type],
             ['Dependencies', task.dependencies]
           ];
-          function t(d) { try { return d?.toISOString?.().slice(0,10) || d; } catch { return d; } }
+          function t(d) { try { return (d && d.toISOString) ? d.toISOString().slice(0,10) : d; } catch (e) { return d; } }
           return `<div class="details-container">${fields.map(([k,v]) => `<div><strong>${k}:</strong> ${v||''}</div>`).join('')}</div>`;
         }
       };
@@ -434,12 +591,40 @@
         gopts.ignore = 'weekend';
       }
       gantt = new Gantt(container, parsed, gopts);
+      // Initial enhancement
       requestAnimationFrame(enhanceBars);
+      // Re-apply backgrounds on scroll (the library may reflow or redraw labels)
+      try {
+        const scroller = getGanttContainer();
+        if (scroller && scroller.dataset && scroller.dataset.enhanceBound !== '1') {
+          scroller.dataset.enhanceBound = '1';
+          let raf = 0;
+          scroller.addEventListener('scroll', () => {
+            if (raf) cancelAnimationFrame(raf);
+            raf = requestAnimationFrame(enhanceBars);
+          }, { passive: true });
+        }
+      } catch(_) {}
+      // Observe SVG mutations that may remove/recreate labels
+      try {
+        if (gantt && gantt.$svg) {
+          if (gantt.$svg._enhanceObserver) { gantt.$svg._enhanceObserver.disconnect(); }
+          const mo = new MutationObserver(() => { requestAnimationFrame(enhanceBars); });
+          mo.observe(gantt.$svg, { childList: true, subtree: true });
+          gantt.$svg._enhanceObserver = mo;
+        }
+      } catch(_) {}
+      // Also re-apply on window resize
+      try {
+        if (!window._enhanceResizeBound) {
+          window._enhanceResizeBound = true;
+          window.addEventListener('resize', () => requestAnimationFrame(enhanceBars));
+        }
+      } catch(_) {}
       // Record last used gantt state
       ganttState = { view: cw.view, column_width: cw.column_width };
 
-      // Post-render sanity check: if no bars drawn or all bars have ~0 width (possible with unsupported view
-      // like 'Year' in some builds), fall back and inform the user.
+      // Post-render sanity check: if no bars drawn or all bars ~0 width (unsupported view), fall back
       setTimeout(() => {
         try {
           const svg = gantt && gantt.$svg;
@@ -452,37 +637,16 @@
           if ((!wrappers || wrappers.length === 0) || zeroish) {
             if (cw.view === 'Year') {
               flashStatus('Year view not available in this build; falling back to Month.');
-              document.querySelector('#view-mode').value = 'Month';
+              var vmFix1 = document.querySelector('#view-mode'); if (vmFix1) vmFix1.value = 'Month';
               renderGantt(parsed, { view: 'Month', column_width: ganttState.column_width });
             } else if (cw.view === 'Month') {
               flashStatus('Month view failed to render; falling back to Week.');
-              document.querySelector('#view-mode').value = 'Week';
+              var vmFix2 = document.querySelector('#view-mode'); if (vmFix2) vmFix2.value = 'Week';
               renderGantt(parsed, { view: 'Week', column_width: ganttState.column_width });
             }
           }
         } catch {}
       }, 0);
-
-      // Re-apply enhancements on scroll/pan and DOM churn
-      const scrollBox = container.querySelector('.gantt-container') || el;
-      let scrollDebounce;
-      const triggerEnhance = () => {
-        if (!gantt) return;
-        requestAnimationFrame(enhanceBars);
-        clearTimeout(scrollDebounce);
-        scrollDebounce = setTimeout(() => requestAnimationFrame(enhanceBars), 60);
-      };
-      scrollBox.addEventListener('scroll', triggerEnhance, { passive: true });
-      el.addEventListener('scroll', triggerEnhance, { passive: true });
-      scrollBox.addEventListener('wheel', triggerEnhance, { passive: true });
-      el.addEventListener('wheel', triggerEnhance, { passive: true });
-      const mo = new MutationObserver(() => {
-        if (!gantt) return;
-        // Debounce to avoid loops
-        clearTimeout(scrollDebounce);
-        scrollDebounce = setTimeout(() => requestAnimationFrame(enhanceBars), 20);
-      });
-      try { mo.observe(gantt.$svg, { childList: true, subtree: true }); } catch {}
     }
 
     function getGanttContainer() {
@@ -493,14 +657,12 @@
     function centerGanttOnToday() {
       const sc = getGanttContainer();
       if (!sc) return;
-      // Try using the current-highlight marker
       const marker = sc.querySelector('.current-highlight');
       if (marker && marker.style && marker.style.left) {
         const x = parseFloat(marker.style.left) || 0;
         sc.scrollLeft = Math.max(0, x - sc.clientWidth / 2);
         return;
       }
-      // Fallback: approximate using date range
       if (!cachedTasks || cachedTasks.length === 0) return;
       const { min, max } = computeRange(cachedTasks);
       if (!min || !max) return;
@@ -520,64 +682,77 @@
       } catch (e) {
         console.warn('debug fetch failed', e);
       }
-
-      const res = await fetch('/api/tasks');
-      const tasks = await res.json();
-      document.querySelector('#status').textContent = `Tasks fetched: ${tasks?.length ?? 0}`;
-      const target = currentMode === 'calendar' ? document.getElementById('calendar') : (currentMode === 'timeline' ? document.getElementById('timeline') : document.getElementById('gantt'));
-      if (target) target.innerHTML = '';
-      if (!tasks || tasks.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'empty';
-        empty.textContent = 'No tasks to show. Verify your database path (PROJECT_DB_PATH or db_path.txt) and that project_parts has data.';
-        (target || document.body).appendChild(empty);
-        return;
-      }
-      // Convert to Date objects to avoid client-side parsing quirks
-      const parsed = tasks.map(t => ({
-        ...t,
-        start: new Date(t.start),
-        end: new Date(t.end)
-      }));
-      cachedTasks = parsed;
+      // Determine the current target pane early so we can show errors here
+      var target = currentMode === 'calendar' ? document.getElementById('calendar') : (currentMode === 'timeline' ? document.getElementById('timeline') : document.getElementById('gantt'));
       try {
-        // Render according to current mode
-        if (currentMode === 'gantt') {
-          const ok = await waitForGantt(8000);
-          if (!ok) throw new Error('Gantt library not loaded');
-          renderGantt(parsed);
-        } else if (currentMode === 'calendar') {
-          ensureCalMonth(parsed);
-          renderCalendar(parsed, calMonth);
-        } else if (currentMode === 'timeline') {
-          renderTimeline(parsed);
-        } else if (currentMode === 'tree') {
-          renderTree(parsed);
+        const res = await fetch('/api/tasks');
+        if (!res.ok) { throw new Error('Tasks API failed: ' + res.status + ' ' + res.statusText); }
+        var tasks = await res.json();
+  var stEl = document.querySelector('#status');
+  if (stEl) stEl.textContent = 'Tasks fetched: ' + (tasks && typeof tasks.length === 'number' ? tasks.length : 0);
+        if (target) target.innerHTML = '';
+        if (!tasks || tasks.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'empty';
+          empty.textContent = 'No tasks to show. Verify your database path (PROJECT_DB_PATH or db_path.txt) and that project_parts has data.';
+          (target || document.body).appendChild(empty);
+          return;
+        }
+        // Convert to Date objects to avoid client-side parsing quirks
+        const parsed = tasks.map(function(t){ return Object.assign({}, t, { start: new Date(t.start), end: new Date(t.end) }); });
+        cachedTasks = parsed;
+        try {
+          if (currentMode === 'gantt') {
+            const ok = await waitForGantt(8000);
+            if (!ok) throw new Error('Gantt library not loaded');
+            renderGantt(parsed);
+          } else if (currentMode === 'calendar') {
+            ensureCalMonth(parsed);
+            renderCalendar(parsed, calMonth);
+          } else if (currentMode === 'timeline') {
+            renderTimeline(parsed);
+          } else if (currentMode === 'tree') {
+            renderTree(parsed);
+          }
+        } catch (e) {
+          console.error('Render error', e);
+          const err = document.createElement('div');
+          err.className = 'error';
+          err.textContent = 'Error rendering: ' + (e && e.message ? e.message : e);
+          (target || document.body).appendChild(err);
+          // As a fallback, list first few tasks
+          const pre = document.createElement('pre');
+          try { pre.textContent = JSON.stringify(parsed.slice(0,5), null, 2); } catch(_) { pre.textContent = 'Preview unavailable'; }
+          (target || document.body).appendChild(pre);
         }
       } catch (e) {
-        console.error('Render error', e);
-        const err = document.createElement('div');
-        err.className = 'error';
-        err.textContent = `Error rendering: ${e?.message || e}`;
-        (target || document.body).appendChild(err);
-        // As a fallback, list first few tasks
-        const pre = document.createElement('pre');
-        pre.textContent = JSON.stringify(parsed.slice(0,5), null, 2);
-        (target || document.body).appendChild(pre);
+        console.error('Tasks load error', e);
+        if (target) target.innerHTML = '';
+        var err2 = document.createElement('div');
+        err2.className = 'error';
+        err2.textContent = 'Error loading tasks: ' + (e && e.message ? e.message : String(e));
+        (target || document.body).appendChild(err2);
+        flashStatus(err2.textContent);
       }
     }
 
-    document.querySelector('#view-mode').addEventListener('change', () => {
-      // Re-render with the chosen view, still fitting the width
-      if (cachedTasks) renderGantt(cachedTasks, { view: document.querySelector('#view-mode').value });
-    });
-    document.querySelector('#refresh').addEventListener('click', () => {
-      if (currentMode === 'images') {
-        renderImages(true);
-      } else {
-        loadTasks();
+    (function(){
+      var vm = document.querySelector('#view-mode');
+      if (vm) {
+        vm.addEventListener('change', function(){
+          if (cachedTasks) renderGantt(cachedTasks, { view: vm.value });
+          updateUrlFromState(true);
+        });
       }
-    });
+    })();
+    (function(){
+      var rf = document.querySelector('#refresh');
+      if (rf) rf.addEventListener('click', function(){
+        if (currentMode === 'images') { renderImages(true); } else { loadTasks(); }
+        updateUrlFromState(true);
+      });
+    })();
+
     // Advanced Gantt controls
     document.getElementById('zoom-in').addEventListener('click', () => {
       if (currentMode !== 'gantt' || !cachedTasks) return;
@@ -591,25 +766,33 @@
     });
     document.getElementById('fit').addEventListener('click', () => {
       if (currentMode !== 'gantt' || !cachedTasks) return;
-      renderGantt(cachedTasks, { view: document.querySelector('#view-mode').value });
+      var vmEl = document.querySelector('#view-mode');
+      renderGantt(cachedTasks, { view: (vmEl && vmEl.value) ? vmEl.value : 'Day' });
     });
     document.getElementById('today').addEventListener('click', () => {
       if (currentMode !== 'gantt') return;
       centerGanttOnToday();
     });
-    document.getElementById('fullscreen').addEventListener('click', () => {
+    function setGanttFullscreen(fs) {
       if (currentMode !== 'gantt') return;
-      const fs = !body.classList.contains('gantt-fullscreen');
-      body.classList.toggle('gantt-fullscreen', fs);
-      // Rerender to recompute fit and SVG sizing, then center on today
+      const body = document.body;
+      const now = !!fs;
+      body.classList.toggle('gantt-fullscreen', now);
       if (cachedTasks) {
-        renderGantt(cachedTasks, { view: document.querySelector('#view-mode').value });
+        const vmEl2 = document.querySelector('#view-mode');
+        renderGantt(cachedTasks, { view: (vmEl2 && vmEl2.value) ? vmEl2.value : 'Day' });
         setTimeout(centerGanttOnToday, 0);
       }
-      // Update button label
       const btn = document.getElementById('fullscreen');
-      btn.textContent = fs ? '⤢' : '⛶';
-      btn.title = fs ? 'Exit Fullscreen' : 'Enter Fullscreen';
+      if (btn) { btn.textContent = now ? '⤢' : '⛶'; btn.title = now ? 'Exit Fullscreen' : 'Enter Fullscreen'; }
+    }
+    document.getElementById('fullscreen').addEventListener('click', () => {
+      const body = document.body; const fsNext = !body.classList.contains('gantt-fullscreen'); setGanttFullscreen(fsNext);
+    });
+    // Floating exit button (visible only in fullscreen)
+    document.addEventListener('DOMContentLoaded', () => {
+      const ex = document.getElementById('fs-exit');
+      if (ex) ex.addEventListener('click', () => setGanttFullscreen(false));
     });
 
     // ---- Export current view (PNG) with optional diagonal watermark ----
@@ -629,7 +812,7 @@
         const viewNode = visibleViewNode();
         if (!viewNode) { flashStatus('Nothing to export'); return; }
 
-        // Build a temporary export container that includes the header logo + the current view
+        // Compose a temporary export container including the header logo
         const rect = viewNode.getBoundingClientRect();
         const exportWrap = document.createElement('div');
         exportWrap.style.position = 'fixed';
@@ -641,25 +824,27 @@
         exportWrap.style.display = 'flex';
         exportWrap.style.flexDirection = 'column';
 
-        // Header logo (clone of the rendered header img)
-        const headerImg = document.querySelector('header img');
-        if (headerImg) {
+        // Header bar with inline logo asset (data URL) to ensure persistence in exports
+        try {
           const headerBar = document.createElement('div');
           headerBar.style.display = 'grid';
           headerBar.style.placeItems = 'center';
           headerBar.style.padding = '6px 16px';
           headerBar.style.background = getComputedStyle(document.body).getPropertyValue('--bg') || '#4B4B4B';
           headerBar.style.borderBottom = '1px solid ' + (getComputedStyle(document.body).getPropertyValue('--border') || '#6a6a6a');
-          const imgClone = headerImg.cloneNode(true);
-          // Lock to its current rendered height for consistent export
-          const cs = getComputedStyle(headerImg);
-          imgClone.style.height = cs.height || '96px';
-          imgClone.style.filter = cs.filter || '';
-          headerBar.appendChild(imgClone);
+          const logo = new Image();
+          // Match on-screen height if available
+          const headerImg = document.querySelector('header img');
+          const cs = headerImg ? getComputedStyle(headerImg) : null;
+          logo.style.height = (cs && cs.height) ? cs.height : '96px';
+          logo.style.filter = (cs && cs.filter) ? cs.filter : '';
+          // Inline src
+          try { logo.src = await getHeaderDataUrl(); } catch(_) { logo.src = '/static/header.png'; }
+          logo.alt = 'Header';
+          headerBar.appendChild(logo);
           exportWrap.appendChild(headerBar);
-        }
+        } catch(_) {}
 
-        // Clone the visible view content
   const viewClone = viewNode.cloneNode(true);
   viewClone.style.flex = '1 1 auto';
   viewClone.style.width = '100%';
@@ -667,12 +852,11 @@
         exportWrap.appendChild(viewClone);
         document.body.appendChild(exportWrap);
 
-        // Watermark (applied to export container)
-        const withWM = !!document.getElementById('export-watermark')?.checked;
+  const wmInput = document.getElementById('export-watermark');
+  const withWM = !!(wmInput && wmInput.checked);
         let wmEl = null;
         if (withWM) { wmEl = addTemporaryWatermark(exportWrap, 'INTERNAL USE ONLY'); }
 
-        // Ensure dark-ish background during export; when exporting Gantt, filter out grid/tick/stripe nodes from SVG
         let filter = undefined;
         if (currentMode === 'gantt') {
           filter = (n) => {
@@ -699,7 +883,7 @@
         setTimeout(() => URL.revokeObjectURL(url), 4000);
         showToast('PNG exported');
       } catch (e) {
-        const msg = 'Export failed: ' + (e?.message || e);
+  const msg = 'Export failed: ' + (e && e.message ? e.message : e);
         flashStatus(msg);
         showToast(msg);
       }
@@ -709,32 +893,27 @@
     // Display mode switching
     function setMode(mode) {
       currentMode = mode;
-  body.classList.remove('mode-gantt','mode-calendar','mode-timeline','mode-tree','mode-images');
-      body.classList.add(`mode-${mode}`);
-      // Toggle view containers
+      document.body.classList.remove('mode-gantt','mode-calendar','mode-timeline','mode-tree','mode-images');
+      document.body.classList.add(`mode-${mode}`);
       document.getElementById('gantt-view').hidden = mode !== 'gantt';
       document.getElementById('calendar-view').hidden = mode !== 'calendar';
-  document.getElementById('timeline-view').hidden = mode !== 'timeline';
-  document.getElementById('tree-view').hidden = mode !== 'tree';
+      document.getElementById('timeline-view').hidden = mode !== 'timeline';
+      document.getElementById('tree-view').hidden = mode !== 'tree';
       document.getElementById('images-view').hidden = mode !== 'images';
-      // Render immediately
+      updateUrlFromState(true);
       if (mode === 'images') { renderImages(); return; }
-      // Other modes depend on tasks
       if (!cachedTasks) return;
       if (mode === 'gantt') {
         waitForGantt(8000).then(ok => { if (ok) renderGantt(cachedTasks); });
-      } else if (mode === 'calendar') {
-        ensureCalMonth(cachedTasks);
-        renderCalendar(cachedTasks, calMonth);
-      } else if (mode === 'timeline') {
-        renderTimeline(cachedTasks);
-      } else if (mode === 'tree') {
-        renderTree(cachedTasks);
       }
+      else if (mode === 'calendar') { ensureCalMonth(cachedTasks); renderCalendar(cachedTasks, calMonth); }
+      else if (mode === 'timeline') renderTimeline(cachedTasks);
+      else if (mode === 'tree') renderTree(cachedTasks);
     }
     document.getElementById('display-mode').addEventListener('change', (e) => setMode(e.target.value));
     document.getElementById('copy-link').addEventListener('click', async () => {
       try {
+        updateUrlFromState(true);
         const url = location.href;
         if (navigator.clipboard && navigator.clipboard.writeText) {
           await navigator.clipboard.writeText(url);
@@ -749,21 +928,6 @@
       }
     });
 
-    loadTasks();
-
-    // Fit on resize
-    let resizeTimer = null;
-    window.addEventListener('resize', () => {
-      if (!cachedTasks) return;
-      clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
-        if (currentMode === 'gantt') renderGantt(cachedTasks);
-        else if (currentMode === 'calendar') renderCalendar(cachedTasks, calMonth);
-        else if (currentMode === 'timeline') renderTimeline(cachedTasks);
-        else if (currentMode === 'tree') renderTree(cachedTasks);
-      }, 120);
-    });
-
     // ---- Calendar view implementation ----
     function ensureCalMonth(tasks) {
       if (calMonth) return;
@@ -776,135 +940,76 @@
       }
       calMonth = new Date(base.getFullYear(), base.getMonth(), 1);
     }
-
-    function monthName(d) {
-      return d.toLocaleString(undefined, { month: 'long', year: 'numeric' });
-    }
-
+    function monthName(d) { return d.toLocaleString(undefined, { month: 'long', year: 'numeric' }); }
     function dayKey(d) { return d.toISOString().slice(0,10); }
-
     function overlapsDay(t, day) {
       const start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0,0,0,0);
       const end = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23,59,59,999);
       return t.start <= end && t.end >= start;
     }
-
     function buildCalendarGrid(monthDate) {
       const first = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
       const start = new Date(first);
       start.setDate(start.getDate() - start.getDay()); // back to Sunday
       const cells = [];
-      for (let i=0; i<42; i++) {
-        const d = new Date(start);
-        d.setDate(start.getDate() + i);
-        cells.push(d);
-      }
+      for (let i=0; i<42; i++) { const d = new Date(start); d.setDate(start.getDate() + i); cells.push(d); }
       return cells;
     }
-
     function renderCalendar(tasks, monthDate) {
       const grid = document.getElementById('calendar');
       grid.innerHTML = '';
       const details = document.getElementById('calendar-details');
       const title = document.getElementById('cal-title');
       title.textContent = monthName(monthDate);
-
-      // header row for weekdays
       const weekdays = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-      const head = document.createElement('div');
-      head.className = 'cal-head';
-      for (const w of weekdays) {
-        const c = document.createElement('div');
-        c.className = 'cal-head-cell';
-        c.textContent = w;
-        head.appendChild(c);
-      }
+      const head = document.createElement('div'); head.className = 'cal-head';
+      for (const w of weekdays) { const c = document.createElement('div'); c.className = 'cal-head-cell'; c.textContent = w; head.appendChild(c); }
       grid.appendChild(head);
-
       const cells = buildCalendarGrid(monthDate);
       const todayKey = dayKey(new Date());
       const monthIdx = monthDate.getMonth();
       const frag = document.createDocumentFragment();
       for (const d of cells) {
-        const cell = document.createElement('div');
-        cell.className = 'cal-cell';
+        const cell = document.createElement('div'); cell.className = 'cal-cell';
         if (d.getMonth() !== monthIdx) cell.classList.add('dim');
-        const dk = dayKey(d);
-        if (dk === todayKey) cell.classList.add('today');
-        const dayNum = document.createElement('div');
-        dayNum.className = 'cal-daynum';
-        dayNum.textContent = String(d.getDate());
-        cell.appendChild(dayNum);
-
-        // count tasks overlapping the day
-        let count = 0;
-        const items = [];
-        for (const t of tasks) {
-          if (overlapsDay(t, d)) { count++; items.push(t); }
-        }
-        if (count > 0) {
-          const badge = document.createElement('div');
-          badge.className = 'cal-badge';
-          badge.textContent = String(count);
-          cell.appendChild(badge);
-        }
-        cell.addEventListener('click', () => {
-          renderCalDetails(d, items);
-        });
+        const dk = dayKey(d); if (dk === todayKey) cell.classList.add('today');
+        const dayNum = document.createElement('div'); dayNum.className = 'cal-daynum'; dayNum.textContent = String(d.getDate()); cell.appendChild(dayNum);
+        let count = 0; const items = [];
+        for (const t of tasks) { if (overlapsDay(t, d)) { count++; items.push(t); } }
+        if (count > 0) { const badge = document.createElement('div'); badge.className = 'cal-badge'; badge.textContent = String(count); cell.appendChild(badge); }
+        cell.addEventListener('click', () => { renderCalDetails(d, items); });
         frag.appendChild(cell);
       }
       grid.appendChild(frag);
-
-      // default details: today or first of month
       const base = (cells.find(d => dayKey(d) === todayKey) || new Date(monthDate));
       const baseItems = tasks.filter(t => overlapsDay(t, base));
       renderCalDetails(base, baseItems);
     }
-
     function renderCalDetails(day, items) {
       const details = document.getElementById('calendar-details');
       details.innerHTML = '';
-      const h = document.createElement('div');
-      h.className = 'cal-details-title';
+      const h = document.createElement('div'); h.className = 'cal-details-title';
       h.textContent = day.toLocaleDateString(undefined, { weekday:'long', month:'long', day:'numeric', year:'numeric' });
       details.appendChild(h);
-      if (!items || items.length === 0) {
-        const p = document.createElement('div');
-        p.className = 'empty';
-        p.textContent = 'No tasks on this day.';
-        details.appendChild(p);
-        return;
-      }
-      const list = document.createElement('ul');
-      list.className = 'cal-list';
+      if (!items || items.length === 0) { const p = document.createElement('div'); p.className = 'empty'; p.textContent = 'No tasks on this day.'; details.appendChild(p); return; }
+      const list = document.createElement('ul'); list.className = 'cal-list';
       for (const t of items) {
         const li = document.createElement('li');
-        const dot = document.createElement('span');
-        dot.className = 'cal-dot';
-        dot.style.background = t.color_progress || '#FF8200';
-        const name = document.createElement('span');
-        name.className = 'cal-name';
-        name.textContent = t.name;
-        const when = document.createElement('span');
-        when.className = 'cal-when';
-        const s = t.start.toISOString().slice(0,10);
-        const e = t.end.toISOString().slice(0,10);
+        if (t.id) li.dataset.id = String(t.id);
+        const dot = document.createElement('span'); dot.className = 'cal-dot'; dot.style.background = t.color_progress || '#FF8200';
+        const name = document.createElement('span'); name.className = 'cal-name'; name.textContent = t.name;
+        const when = document.createElement('span'); when.className = 'cal-when';
+        const s = t.start.toISOString().slice(0,10); const e = t.end.toISOString().slice(0,10);
         when.textContent = `${s} → ${e}`;
-        li.appendChild(dot);
-        li.appendChild(name);
-        li.appendChild(when);
+        li.appendChild(dot); li.appendChild(name); li.appendChild(when);
         list.appendChild(li);
       }
       details.appendChild(list);
     }
-
-    document.getElementById('cal-prev').addEventListener('click', () => {
-      if (!calMonth) return; calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()-1, 1);
-      if (cachedTasks) renderCalendar(cachedTasks, calMonth);
-    });
-    document.getElementById('cal-next').addEventListener('click', () => {
-      if (!calMonth) return; calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()+1, 1);
-      if (cachedTasks) renderCalendar(cachedTasks, calMonth);
+  document.addEventListener('DOMContentLoaded', () => {
+      const prev = document.getElementById('cal-prev'); const next = document.getElementById('cal-next');
+      if (prev) prev.addEventListener('click', () => { if (!calMonth) return; calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()-1, 1); if (cachedTasks) renderCalendar(cachedTasks, calMonth); });
+      if (next) next.addEventListener('click', () => { if (!calMonth) return; calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()+1, 1); if (cachedTasks) renderCalendar(cachedTasks, calMonth); });
     });
 
     // ---- Timeline view implementation ----
@@ -931,61 +1036,43 @@
       svg.setAttribute('height', String(height));
       svg.classList.add('timeline-svg');
 
-      // Month grid lines and labels
       let tick = new Date(start.getFullYear(), start.getMonth(), 1);
       while (tick <= end) {
         const x = xFor(tick);
         const line = document.createElementNS(svgNS, 'line');
-        line.setAttribute('x1', String(x));
-        line.setAttribute('y1', '0');
-        line.setAttribute('x2', String(x));
-        line.setAttribute('y2', String(height));
-        line.setAttribute('stroke', '#6a6a6a');
-        line.setAttribute('stroke-width', '1');
+        line.setAttribute('x1', String(x)); line.setAttribute('y1', '0');
+        line.setAttribute('x2', String(x)); line.setAttribute('y2', String(height));
+        line.setAttribute('stroke', '#6a6a6a'); line.setAttribute('stroke-width', '1');
         svg.appendChild(line);
-        const lbl = document.createElementNS(svgNS, 'text');
-        lbl.setAttribute('x', String(x + 4));
-        lbl.setAttribute('y', '14');
-        lbl.setAttribute('fill', '#e5e7eb');
-        lbl.setAttribute('font-size', '12');
+        const lbl = document.createElementNS(svgNS, 'text'); lbl.setAttribute('x', String(x + 4)); lbl.setAttribute('y', '14'); lbl.setAttribute('fill', '#e5e7eb'); lbl.setAttribute('font-size', '12');
         lbl.textContent = tick.toLocaleString(undefined, { month:'short', year:'numeric' });
         svg.appendChild(lbl);
         tick = new Date(tick.getFullYear(), tick.getMonth()+1, 1);
       }
 
-      // Today marker
       const today = new Date();
       const tx = xFor(new Date(today.getFullYear(), today.getMonth(), today.getDate()));
       const tline = document.createElementNS(svgNS, 'line');
-      tline.setAttribute('x1', String(tx));
-      tline.setAttribute('y1', '0');
-      tline.setAttribute('x2', String(tx));
-      tline.setAttribute('y2', String(height));
-      tline.setAttribute('stroke', '#ffffff66');
-      tline.setAttribute('stroke-width', '2');
+      tline.setAttribute('x1', String(tx)); tline.setAttribute('y1', '0');
+      tline.setAttribute('x2', String(tx)); tline.setAttribute('y2', String(height));
+      tline.setAttribute('stroke', '#ffffff66'); tline.setAttribute('stroke-width', '2');
       svg.appendChild(tline);
 
-      // Bars
       tasksSorted.forEach((t, i) => {
         const y = padding + i * rowH;
         const x1 = xFor(t.start);
         const x2 = xFor(t.end);
         const bw = Math.max(3, x2 - x1);
         const rect = document.createElementNS(svgNS, 'rect');
-        rect.setAttribute('x', String(x1));
-        rect.setAttribute('y', String(y));
-        rect.setAttribute('width', String(bw));
-        rect.setAttribute('height', '14');
-        rect.setAttribute('rx', '3');
+        rect.setAttribute('x', String(x1)); rect.setAttribute('y', String(y));
+        rect.setAttribute('width', String(bw)); rect.setAttribute('height', '14'); rect.setAttribute('rx', '3');
         rect.setAttribute('fill', t.color_progress || '#FF8200');
+        if (t.id) rect.setAttribute('data-id', String(t.id));
         svg.appendChild(rect);
         const label = document.createElementNS(svgNS, 'text');
-        label.setAttribute('x', String(x1 + 4));
-        label.setAttribute('y', String(y + 12));
-        label.setAttribute('fill', '#111');
-        label.setAttribute('font-size', '12');
-        label.textContent = t.name;
-        svg.appendChild(label);
+        label.setAttribute('x', String(x1 + 4)); label.setAttribute('y', String(y + 12));
+        label.setAttribute('fill', '#111'); label.setAttribute('font-size', '12');
+        label.textContent = t.name; svg.appendChild(label);
       });
 
       container.appendChild(svg);
@@ -996,72 +1083,36 @@
       const byId = new Map();
       const roots = [];
       tasks.forEach(t => { byId.set(t.id, { ...t, children: [] }); });
-      // Attach children to parents where possible; non-existent parents treated as roots
       byId.forEach(node => {
         const pid = node.parent_id;
-        if (pid && byId.has(pid) && pid !== node.id) {
-          byId.get(pid).children.push(node);
-        } else {
-          roots.push(node);
-        }
+        if (pid && byId.has(pid) && pid !== node.id) { byId.get(pid).children.push(node); }
+        else { roots.push(node); }
       });
       return roots;
     }
-
     function renderTree(tasks) {
       const container = document.getElementById('tree');
       container.innerHTML = '';
       const roots = buildTree(tasks);
-      // Simple list with indentation and expand/collapse
-      const list = document.createElement('div');
-      list.className = 'tree-list';
+      const list = document.createElement('div'); list.className = 'tree-list';
       container.appendChild(list);
-
       function row(node, depth=0) {
-        const r = document.createElement('div');
-        r.className = 'tree-row';
-        r.style.paddingLeft = `${depth*16 + 8}px`;
-        const toggle = document.createElement('button');
-        toggle.className = 'tree-toggle';
-        toggle.textContent = node.children && node.children.length ? '▾' : '•';
-        toggle.disabled = !(node.children && node.children.length);
-        const name = document.createElement('span');
-        name.className = 'tree-name';
-        name.textContent = node.name;
-        const when = document.createElement('span');
-        when.className = 'tree-when';
-        const s = new Date(node.start).toISOString().slice(0,10);
-        const e = new Date(node.end).toISOString().slice(0,10);
+        const r = document.createElement('div'); r.className = 'tree-row'; r.style.paddingLeft = `${depth*16 + 8}px`; if (node.id) r.dataset.id = String(node.id);
+        const toggle = document.createElement('button'); toggle.className = 'tree-toggle'; toggle.textContent = node.children && node.children.length ? '▾' : '•'; toggle.disabled = !(node.children && node.children.length);
+        const name = document.createElement('span'); name.className = 'tree-name'; name.textContent = node.name;
+        const when = document.createElement('span'); when.className = 'tree-when';
+        const s = new Date(node.start).toISOString().slice(0,10); const e = new Date(node.end).toISOString().slice(0,10);
         when.textContent = `${s} → ${e}`;
-        const prog = document.createElement('span');
-        prog.className = 'tree-progress';
-        prog.textContent = `${node.progress ?? 0}%`;
-        prog.style.background = node.color_progress || '#FF8200';
-        r.appendChild(toggle);
-        r.appendChild(name);
-        r.appendChild(when);
-        r.appendChild(prog);
-
-        let expanded = true;
-        const childWrap = document.createElement('div');
-        childWrap.className = 'tree-children';
-        r.appendChild(childWrap);
-        function rerenderChildren() {
-          childWrap.innerHTML = '';
-          if (!expanded) return;
-          (node.children||[]).forEach(c => childWrap.appendChild(row(c, depth+1)));
-        }
-        toggle.addEventListener('click', () => {
-          if (!node.children || !node.children.length) return;
-          expanded = !expanded;
-          toggle.textContent = expanded ? '▾' : '▸';
-          rerenderChildren();
-        });
-        rerenderChildren();
-        return r;
+  const prog = document.createElement('span'); prog.className = 'tree-progress'; prog.textContent = String((typeof node.progress === 'number' ? node.progress : (node.progress ? Number(node.progress) || 0 : 0))) + '%'; prog.style.background = node.color_progress || '#FF8200';
+        r.appendChild(toggle); r.appendChild(name); r.appendChild(when); r.appendChild(prog);
+        let expanded = true; const childWrap = document.createElement('div'); childWrap.className = 'tree-children'; r.appendChild(childWrap);
+        function rerenderChildren() { childWrap.innerHTML = ''; if (!expanded) return; (node.children||[]).forEach(c => childWrap.appendChild(row(c, depth+1))); }
+        toggle.addEventListener('click', () => { if (!node.children || !node.children.length) return; expanded = !expanded; toggle.textContent = expanded ? '▾' : '▸'; rerenderChildren(); });
+        rerenderChildren(); return r;
       }
       roots.forEach(n => list.appendChild(row(n, 0)));
     }
+
     // ---- Images view implementation ----
     async function fetchImages() {
       const res = await fetch('/api/images');
@@ -1108,7 +1159,7 @@
       } catch (e) {
         const err = document.createElement('div');
         err.className = 'error';
-        err.textContent = `Error loading images: ${e?.message || e}`;
+  err.textContent = 'Error loading images: ' + (e && e.message ? e.message : e);
         grid.appendChild(err);
       }
     }
@@ -1149,8 +1200,8 @@
       const vw = window.innerWidth || document.documentElement.clientWidth || 1024;
       const vh = window.innerHeight || document.documentElement.clientHeight || 768;
       const imgMaxW = 360, imgMaxH = 240;
-      let x = (evt?.clientX || 0) + pad;
-      let y = (evt?.clientY || 0) + pad;
+  let x = ((evt && evt.clientX) || 0) + pad;
+  let y = ((evt && evt.clientY) || 0) + pad;
       if (x + imgMaxW + 16 > vw) x = Math.max(8, vw - imgMaxW - 16);
       if (y + imgMaxH + 16 > vh) y = Math.max(8, vh - imgMaxH - 16);
       hoverRootEl.style.left = `${x}px`;
@@ -1189,13 +1240,93 @@
       grid.addEventListener('mouseleave', hideHoverPreview);
     }
 
+    // Calendar details hover + click to open details
+    function bindCalendarHover() {
+      const list = document.querySelector('#calendar-details .cal-list');
+      if (!list || list.dataset.hoverBound === '1') return;
+      list.dataset.hoverBound = '1';
+      list.addEventListener('mousemove', (e) => {
+        const li = e.target.closest('li');
+        if (!li) { hideHoverPreview(); return; }
+        const id = li.dataset.id;
+        const url = id ? firstImageUrlForTask(id) : null;
+        if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
+      });
+      list.addEventListener('mouseleave', hideHoverPreview);
+      list.addEventListener('click', (e) => {
+        const li = e.target.closest('li');
+        if (!li) return;
+        const id = li.dataset.id;
+        const t = cachedTasks && id && cachedTasks.find(x => String(x.id) === String(id));
+        if (t) openDetailsForTask(t);
+      });
+    }
+
+    // Timeline hover + click
+    function bindTimelineHover() {
+      const svg = document.querySelector('#timeline svg');
+      if (!svg || svg.dataset.hoverBound === '1') return;
+      svg.dataset.hoverBound = '1';
+      svg.addEventListener('mousemove', (e) => {
+        const rect = e.target.closest('rect');
+        if (!rect) { hideHoverPreview(); return; }
+        const id = rect.getAttribute('data-id');
+        let url = id ? firstImageUrlForTask(id) : null;
+        if (!url) {
+          const y = rect.getAttribute('y');
+          const label = Array.from(svg.querySelectorAll('text')).find(t => t.getAttribute('y') === String(Number(y) + 12));
+          const name = (label && label.textContent) ? label.textContent : '';
+          const t = cachedTasks && cachedTasks.find(x => x.name === name);
+          url = t && t.images && t.images[0] ? t.images[0].url : null;
+        }
+        if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
+      });
+      svg.addEventListener('mouseleave', hideHoverPreview);
+      svg.addEventListener('click', (e) => {
+        const rect = e.target.closest('rect');
+        if (!rect) return;
+        const id = rect.getAttribute('data-id');
+        let t = cachedTasks && id ? cachedTasks.find(x => String(x.id) === String(id)) : null;
+        if (!t) {
+          const y = rect.getAttribute('y');
+          const label = Array.from(svg.querySelectorAll('text')).find(tx => tx.getAttribute('y') === String(Number(y) + 12));
+          const name = (label && label.textContent) ? label.textContent : '';
+          t = cachedTasks && cachedTasks.find(x => x.name === name);
+        }
+        if (t) openDetailsForTask(t);
+      });
+    }
+
+    // Tree hover + click
+    function bindTreeHover() {
+      const list = document.querySelector('#tree');
+      if (!list || list.dataset.hoverBound === '1') return;
+      list.dataset.hoverBound = '1';
+      list.addEventListener('mousemove', (e) => {
+        const row = e.target.closest('.tree-row');
+        if (!row) { hideHoverPreview(); return; }
+        const id = row.dataset.id;
+        const url = id ? firstImageUrlForTask(id) : null;
+        if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
+      });
+      list.addEventListener('mouseleave', hideHoverPreview);
+      list.addEventListener('click', (e) => {
+        const row = e.target.closest('.tree-row');
+        if (!row) return;
+        const id = row.dataset.id;
+        const t = cachedTasks && id && cachedTasks.find(x => String(x.id) === String(id));
+        if (t) openDetailsForTask(t);
+      });
+    }
+
     // Helper to get first image URL for a task (from cachedTasks entries)
     function firstImageUrlForTask(taskId) {
       if (!cachedTasks) return null;
-      const t = cachedTasks.find(tt => tt.id === taskId);
+      const t = cachedTasks.find(tt => String(tt.id) === String(taskId));
       const img = t && Array.isArray(t.images) && t.images.length ? t.images[0] : null;
       return img ? img.url : null;
     }
+
     // ---- Details Drawer ----
     function openDetailsForTask(task) {
       if (!task) return;
@@ -1207,14 +1338,51 @@
       const raw = task.raw && typeof task.raw === 'object' ? task.raw : task;
       const kv = document.createElement('div');
       kv.className = 'kv';
+      function renderTextWithLinks(el, text) {
+        const urlRe = /(https?:\/\/[^\s]+)/g;
+        const lines = String(text).split('\n');
+        for (let li = 0; li < lines.length; li++) {
+          const line = lines[li];
+          let last = 0; let m;
+          while ((m = urlRe.exec(line)) !== null) {
+            const before = line.slice(last, m.index);
+            if (before) el.appendChild(document.createTextNode(before));
+            const a = document.createElement('a'); a.href = m[0]; a.textContent = m[0]; a.target = '_blank'; a.rel = 'noopener';
+            el.appendChild(a);
+            last = m.index + m[0].length;
+          }
+          const rest = line.slice(last);
+          if (rest) el.appendChild(document.createTextNode(rest));
+          if (li < lines.length - 1) el.appendChild(document.createElement('br'));
+        }
+      }
       Object.entries(raw).forEach(([k,v]) => {
         const ke = document.createElement('div'); ke.className='k'; ke.textContent = k;
         const ve = document.createElement('div'); ve.className='v';
-        let text = v;
-        if (v instanceof Date) text = v.toISOString().slice(0,10);
-        else if (v == null) text = '';
-        else text = String(v);
-        ve.textContent = text;
+        let text = v instanceof Date ? v.toISOString().slice(0,10) : (v == null ? '' : String(v));
+        if (text.length > 400 || (text.match(/\n/g)||[]).length > 6) {
+          const short = text.slice(0, 400) + '…';
+          const span = document.createElement('span');
+          renderTextWithLinks(span, short);
+          const more = document.createElement('button');
+          more.textContent = 'Show more';
+          more.style.marginLeft = '8px';
+          more.style.padding = '2px 6px';
+          more.style.borderRadius = '4px';
+          more.style.border = '1px solid #cfcfcf';
+          more.style.background = '#fff';
+          more.style.color = '#222';
+          let expanded = false;
+          more.addEventListener('click', () => {
+            expanded = !expanded;
+            span.innerHTML = '';
+            renderTextWithLinks(span, expanded ? text : short);
+            more.textContent = expanded ? 'Show less' : 'Show more';
+          });
+          ve.appendChild(span); ve.appendChild(more);
+        } else {
+          renderTextWithLinks(ve, text);
+        }
         kv.appendChild(ke); kv.appendChild(ve);
       });
       if (Array.isArray(task.images) && task.images.length) {
@@ -1235,10 +1403,10 @@
     document.addEventListener('DOMContentLoaded', () => {
       const x = document.getElementById('details-close');
       if (x) x.addEventListener('click', closeDetails);
-      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetails(); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDetails(); if (document.body.classList.contains('gantt-fullscreen')) setGanttFullscreen(false); } });
     });
 
-    // Gantt hover binding
+    // After Gantt render, bind hover over bars
     function bindGanttHover() {
       try {
         const svg = gantt && gantt.$svg;
@@ -1256,265 +1424,42 @@
           const wrap = e.target.closest('.bar-wrapper');
           if (!wrap) return;
           const id = wrap.getAttribute('data-id');
-          const t = cachedTasks && cachedTasks.find(tt => tt.id === id);
+          const t = cachedTasks && cachedTasks.find(tt => String(tt.id) === String(id));
           if (t) openDetailsForTask(t);
         });
       } catch {}
     }
-
-    // After Gantt render, bind hover over bars
     const _origRenderGantt = renderGantt;
     renderGantt = function(parsed, opts={}) {
       _origRenderGantt(parsed, opts);
       bindGanttHover();
     }
 
-    // Calendar details hover
-    function bindCalendarHover() {
-      const list = document.querySelector('#calendar-details .cal-list');
-      if (!list || list.dataset.hoverBound === '1') return;
-      list.dataset.hoverBound = '1';
-      list.addEventListener('mousemove', (e) => {
-        const li = e.target.closest('li');
-        if (!li) { hideHoverPreview(); return; }
-        const name = li.querySelector('.cal-name')?.textContent || '';
-        const t = cachedTasks && cachedTasks.find(x => x.name === name);
-        const url = t && t.images && t.images[0] ? t.images[0].url : null;
-        if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
-      });
-      list.addEventListener('mouseleave', hideHoverPreview);
-      list.addEventListener('click', (e) => {
-        const li = e.target.closest('li');
-        if (!li) return;
-        const name = li.querySelector('.cal-name')?.textContent || '';
-        const t = cachedTasks && cachedTasks.find(x => x.name === name);
-        if (t) openDetailsForTask(t);
-      });
-    }
+    // Post-render binders for new views
+    const _hostedRenderCalendar = renderCalendar;
+    renderCalendar = function(tasks, monthDate) { _hostedRenderCalendar(tasks, monthDate); setTimeout(bindCalendarHover, 0); };
+    const _hostedRenderTimeline = renderTimeline;
+    renderTimeline = function(tasks) { _hostedRenderTimeline(tasks); setTimeout(bindTimelineHover, 0); };
+    const _hostedRenderTree = renderTree;
+    renderTree = function(tasks) { _hostedRenderTree(tasks); setTimeout(bindTreeHover, 0); };
 
-    // Timeline hover
-    function bindTimelineHover() {
-      const svg = document.querySelector('#timeline svg');
-      if (!svg || svg.dataset.hoverBound === '1') return;
-      svg.dataset.hoverBound = '1';
-      svg.addEventListener('mousemove', (e) => {
-        const rect = e.target.closest('rect');
-        if (!rect) { hideHoverPreview(); return; }
-        // Find label sibling to map back to task name
-        const y = rect.getAttribute('y');
-        const label = Array.from(svg.querySelectorAll('text')).find(t => t.getAttribute('y') === String(Number(y) + 12));
-        const name = label?.textContent || '';
-        const t = cachedTasks && cachedTasks.find(x => x.name === name);
-        const url = t && t.images && t.images[0] ? t.images[0].url : null;
-        if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
-      });
-      svg.addEventListener('mouseleave', hideHoverPreview);
-      svg.addEventListener('click', (e) => {
-        const rect = e.target.closest('rect');
-        if (!rect) return;
-        const y = rect.getAttribute('y');
-        const label = Array.from(svg.querySelectorAll('text')).find(t => t.getAttribute('y') === String(Number(y) + 12));
-        const name = label?.textContent || '';
-        const t = cachedTasks && cachedTasks.find(x => x.name === name);
-        if (t) openDetailsForTask(t);
-      });
-    }
-
-    // Tree hover
-    function bindTreeHover() {
-      const list = document.querySelector('#tree');
-      if (!list || list.dataset.hoverBound === '1') return;
-      list.dataset.hoverBound = '1';
-      list.addEventListener('mousemove', (e) => {
-        const row = e.target.closest('.tree-row');
-        if (!row) { hideHoverPreview(); return; }
-        const name = row.querySelector('.tree-name')?.textContent || '';
-        const t = cachedTasks && cachedTasks.find(x => x.name === name);
-        const url = t && t.images && t.images[0] ? t.images[0].url : null;
-        if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
-      });
-      list.addEventListener('mouseleave', hideHoverPreview);
-      list.addEventListener('click', (e) => {
-        const row = e.target.closest('.tree-row');
-        if (!row) return;
-        const name = row.querySelector('.tree-name')?.textContent || '';
-        const t = cachedTasks && cachedTasks.find(x => x.name === name);
-        if (t) openDetailsForTask(t);
-      });
-    }
-
-    // Hook bindings after renders
-    const _origRenderCalendar = renderCalendar;
-    renderCalendar = function(tasks, monthDate) {
-      _origRenderCalendar(tasks, monthDate);
-      setTimeout(bindCalendarHover, 0);
-    };
-    const _origRenderTimeline = renderTimeline;
-    renderTimeline = function(tasks) {
-      _origRenderTimeline(tasks);
-      setTimeout(bindTimelineHover, 0);
-    };
-    const _origRenderTree = renderTree;
-    renderTree = function(tasks) {
-      _origRenderTree(tasks);
-      setTimeout(bindTreeHover, 0);
-    };
-
-    // Also bind image grid hover after rendering
-    const _origRenderImages = renderImages;
-    renderImages = async function(forceReload=false) {
-      await _origRenderImages(forceReload);
-      setTimeout(() => {
-        bindImageGridHover();
-        const grid = document.getElementById('images');
-        if (grid && !grid.dataset.detailsBound) {
-          grid.dataset.detailsBound = '1';
-          grid.addEventListener('contextmenu', (e) => {
-            const card = e.target.closest('.img-card');
-            if (!card) return;
-            e.preventDefault();
-            const src = card.querySelector('img')?.src || '';
-            const file = src.split('/').pop();
-            const t = cachedTasks && cachedTasks.find(x => Array.isArray(x.images) && x.images.some(im => im.name === file));
-            if (t) openDetailsForTask(t);
-          });
-        }
-      }, 0);
-    };
-
-    // Try to bind hovers in case initial render raced ahead
-    function rebindAllHovers() {
+    // Safety: try to bind on load if initial renders have completed
+    window.addEventListener('load', () => setTimeout(() => {
       if (currentMode === 'gantt') bindGanttHover();
-      if (currentMode === 'calendar') bindCalendarHover();
-      if (currentMode === 'timeline') bindTimelineHover();
-      if (currentMode === 'tree') bindTreeHover();
       if (currentMode === 'images') bindImageGridHover();
-    }
-    window.addEventListener('load', () => setTimeout(rebindAllHovers, 0));
+    }, 0));
   </script>
-  <style>
-    /* Mode-specific control visibility */
-    body.mode-gantt .toolbar #view-mode, body.mode-gantt .toolbar label:nth-of-type(2) { display: inline-block; }
-    body.mode-calendar .toolbar #view-mode, body.mode-calendar .toolbar label:nth-of-type(2),
-    body.mode-timeline .toolbar #view-mode, body.mode-timeline .toolbar label:nth-of-type(2),
-    body.mode-images .toolbar #view-mode, body.mode-images .toolbar label:nth-of-type(2) { display: none; }
-
-    /* Calendar styles */
-    .cal-toolbar { display:flex; gap:8px; align-items:center; padding:8px 0; }
-    .cal-toolbar button { padding:4px 8px; }
-    .cal-title { flex:1; text-align:center; font-weight:600; color:var(--muted); }
-    .calendar { display:block; }
-  .cal-head { display:grid; grid-template-columns: repeat(7, 1fr); gap:4px; margin-bottom:4px; grid-column: 1 / -1; }
-    .cal-head-cell { text-align:center; color:var(--muted); font-size:12px; }
-    .calendar .cal-cell { display:flex; flex-direction:column; border:1px solid var(--border); border-radius:6px; padding:6px; min-height:72px; gap:6px; background: color-mix(in oklab, var(--panel) 90%, transparent); }
-    .calendar { display:grid; grid-template-columns: repeat(7, 1fr); gap:6px; }
-    .cal-cell.dim { opacity: 0.5; }
-    .cal-cell.today { outline:2px solid #ffffff66; }
-    .cal-daynum { font-weight:600; color:var(--text); }
-    .cal-badge { align-self:flex-start; background:var(--brand); color:#111; font-weight:600; font-size:12px; padding:2px 6px; border-radius:999px; }
-    .calendar-details { margin-top:12px; border-top:1px solid var(--border); padding-top:8px; }
-    .cal-details-title { color:var(--text); font-weight:600; margin-bottom:6px; }
-    .cal-list { list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:6px; }
-    .cal-list li { display:flex; align-items:center; gap:8px; background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:6px 8px; }
-    .cal-dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
-    .cal-name { color:var(--text); font-weight:600; }
-    .cal-when { color:var(--muted); font-size:12px; margin-left:auto; }
-
-    /* Timeline styles */
-  #timeline { overflow:auto; border-top:1px solid var(--border); min-height:320px; }
-    .timeline-svg text { user-select:none; }
-
-    /* Tree styles */
-  #tree { border-top:1px solid var(--border); }
-    .tree-list { display:flex; flex-direction:column; gap:4px; padding:8px 0; }
-  .tree-row { display:flex; gap:8px; align-items:center; background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:6px 8px; }
-  .tree-toggle { width:24px; min-width:24px; height:24px; line-height:20px; text-align:center; border:1px solid #cfcfcf; border-radius:6px; background:var(--input-bg); color:var(--input-text); padding:0; }
-    .tree-toggle:disabled { opacity:0.5; }
-  .tree-name { color:var(--text); font-weight:600; }
-  .tree-when { color:var(--muted); font-size:12px; margin-left:auto; }
-    .tree-progress { color:#111; font-size:12px; font-weight:600; padding:2px 6px; border-radius:999px; margin-left:8px; }
-
-    /* Gantt popup readability (dark theme) */
-    .gantt .popup-wrapper { background:#2f2f2f !important; color:var(--text) !important; border:1px solid var(--border); box-shadow: 0 6px 24px rgba(0,0,0,0.35); }
-  .gantt .popup-wrapper { font-size:14px !important; line-height:1.4; }
-  .gantt .popup-wrapper .title { color:var(--text) !important; font-size:16px !important; font-weight:700; margin-bottom:6px; }
-  .gantt .popup-wrapper .details-container { color:var(--muted) !important; }
-  .gantt .popup-wrapper .details-container div { margin:4px 0; }
-    .gantt .popup-wrapper .details-container strong { color:var(--text) !important; }
-    .gantt .popup-wrapper .pointer { border-top-color:#2f2f2f !important; }
-
-    /* Unscoped fallback in case popup is appended to <body> instead of inside .gantt */
-  .popup-wrapper { background:#2f2f2f !important; color:var(--text) !important; border:1px solid var(--border); box-shadow: 0 6px 24px rgba(0,0,0,0.35); font-size:14px !important; line-height:1.4; }
-  .popup-wrapper .title { color:var(--text) !important; font-size:16px !important; font-weight:700; margin-bottom:6px; }
-  .popup-wrapper .details-container { color:var(--muted) !important; }
-    .popup-wrapper .details-container div { margin:4px 0; }
-  .popup-wrapper .details-container strong { color:var(--text) !important; }
-  .popup-wrapper .pointer { border-top-color:#2f2f2f !important; }
-
-    /* Images gallery */
-    .images-toolbar { display:flex; gap:8px; align-items:center; padding:8px 0; }
-  .images-toolbar input { padding:6px 10px; border-radius:6px; border:1px solid #cfcfcf; background:var(--input-bg); color:var(--input-text); }
-  .images-grid { --min: 180px; display:grid; grid-template-columns: repeat(auto-fill, minmax(var(--min), 1fr)); gap:10px; border-top:1px solid var(--border); padding-top:10px; }
-  .img-card { background:var(--panel); border:1px solid var(--border); border-radius:8px; overflow:hidden; display:flex; flex-direction:column; cursor:pointer; }
-    .img-wrap { position:relative; padding-top:66%; background:#333; }
-    .img-wrap img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
-  .img-name { padding:6px 8px; color:var(--text); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-top:1px solid var(--border); background: color-mix(in oklab, var(--panel) 80%, #000 20%); }
-    /* Lightbox */
-    .lightbox { position:fixed; inset:0; background:rgba(0,0,0,0.85); display:none; align-items:center; justify-content:center; z-index:9999; }
-    .lightbox.open { display:flex; }
-    .lightbox img { max-width:95vw; max-height:90vh; box-shadow:0 10px 30px rgba(0,0,0,0.6); border-radius:8px; }
-    .lightbox .close { position:absolute; top:14px; right:18px; color:#fff; background:#00000066; border:1px solid #ffffff55; border-radius:6px; padding:6px 10px; cursor:pointer; }
-    .lightbox .caption { position:absolute; bottom:12px; left:0; right:0; text-align:center; color:#e5e7eb; font-size:12px; }
-
-    /* Hover preview (floating image on hover) */
-    .hover-preview { position: fixed; pointer-events: none; z-index: 9998; display:none; }
-    .hover-preview.open { display:block; }
-  .hover-preview img { max-width: 360px; max-height: 240px; box-shadow: 0 10px 30px rgba(0,0,0,0.55); border-radius: 6px; border: 1px solid var(--border); background: color-mix(in oklab, var(--bg) 40%, #000 60%); }
-    /* Details drawer */
-  .details { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 92vw); background: color-mix(in oklab, var(--panel) 90%, transparent); border-left:1px solid var(--border); box-shadow: -10px 0 30px rgba(0,0,0,0.4); display:flex; flex-direction:column; z-index: 9997; }
-    .details[hidden] { display:none !important; }
-  .details-header { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border-bottom:1px solid var(--border); }
-  .details-title { font-weight:700; color:var(--text); }
-  #details-close { padding:6px 10px; background:var(--input-bg); color:var(--input-text); border:1px solid #cfcfcf; border-radius:6px; cursor:pointer; }
-  .details-body { overflow:auto; padding:10px 12px; color:var(--muted); font-size:13px; }
-    .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 10px; }
-  .kv .k { color:var(--muted); }
-  .kv .v { color:var(--text); word-break:break-word; }
-    /* Export watermark overlay */
-    .export-wm {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      pointer-events: none;
-      user-select: none;
-      font-weight: 900;
-      letter-spacing: 4px;
-      color: #ffffff;
-      opacity: 0.25;
-      transform: rotate(-28deg);
-      /* Make text large enough to span diagonally */
-      font-size: min(12vw, 120px);
-      text-shadow: 0 2px 6px rgba(0,0,0,0.35);
-    }
-    /* Floating toast */
-    .toast { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%) translateY(8px); background: color-mix(in oklab, var(--bg2) 80%, #000 20%); color:var(--text); border: 1px solid var(--border); padding: 8px 12px; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.35); opacity: 0; pointer-events: none; transition: opacity 160ms ease, transform 160ms ease; z-index: 99999; font-size: 13px; }
-    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-    /* Light theme specific element tweaks */
-    body.theme-light header img { filter: drop-shadow(0 1px 0 rgba(0,0,0,0.08)) drop-shadow(0 12px 18px rgba(0,0,0,0.25)); }
-    body.theme-light .lightbox { background: rgba(0,0,0,0.85); }
-  </style>
-
+  <!-- Hover preview root -->
+  <div id="hover-preview" class="hover-preview"><img alt=""/></div>
   <!-- Images lightbox root -->
   <div id="lightbox" class="lightbox" role="dialog" aria-modal="true" aria-label="Image viewer">
     <button class="close" id="lightbox-close" title="Close">Close</button>
     <img id="lightbox-img" alt="" />
     <div class="caption" id="lightbox-cap"></div>
   </div>
-  <!-- Hover preview root -->
-  <div id="hover-preview" class="hover-preview"><img alt=""/></div>
   <!-- Toast -->
   <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+  <!-- Exit Fullscreen Button (Gantt only, shown in fullscreen) -->
+  <button id="fs-exit" class="fs-exit" title="Exit Fullscreen">Exit Fullscreen</button>
 </body>
 </html>

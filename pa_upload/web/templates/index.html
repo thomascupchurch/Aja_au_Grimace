@@ -257,6 +257,34 @@
 
   <!-- Prefer local vendored asset (.min.js or .umd.js); fall back to CDN; then to tiny local stub route -->
   <script>
+    // Global error handlers to surface issues instead of silently failing
+    (function(){
+      function report(msg){
+        try {
+          var el = document.getElementById('status');
+          if (el) {
+            var t = String(msg || 'Unknown error');
+            el.textContent = t;
+          }
+        } catch(_){ /* noop */ }
+      }
+      window.addEventListener('error', function(e){
+        var m = (e && e.message) ? e.message : ((e && e.error && e.error.message) ? e.error.message : 'Script error');
+        report('Error: ' + m);
+      });
+      window.addEventListener('unhandledrejection', function(e){
+        var m = 'Promise rejection';
+        try {
+          if (e && e.reason) {
+            if (typeof e.reason === 'string') m = e.reason;
+            else if (e.reason && e.reason.message) m = e.reason.message;
+          }
+        } catch(_){ }
+        report('Error: ' + m);
+      });
+    })();
+  </script>
+  <script>
     (function(){
       function inject(src, next){
         var s=document.createElement('script');
@@ -357,7 +385,8 @@
     // URL state helpers (display/view/month)
     function getStateParams() {
       const display = currentMode;
-      const view = document.querySelector('#view-mode')?.value || 'Day';
+  const vmEl = document.querySelector('#view-mode');
+  const view = (vmEl && vmEl.value) ? vmEl.value : 'Day';
       const cal = (display === 'calendar' && calMonth) ? calMonth.toISOString().slice(0,7) : null;
       const sp = new URLSearchParams();
       if (display) sp.set('display', display);
@@ -450,8 +479,8 @@
       el.innerHTML = '';
       const container = document.createElement('div');
       el.appendChild(container);
-
-      const toolbarView = document.querySelector('#view-mode').value;
+      var vmElLocal = document.querySelector('#view-mode');
+      const toolbarView = (vmElLocal && vmElLocal.value) ? vmElLocal.value : 'Day';
       let cw;
       if (opts && typeof opts.column_width === 'number' && opts.column_width > 0) {
         cw = { view: opts.view || toolbarView, column_width: opts.column_width };
@@ -459,7 +488,7 @@
         cw = chooseFitSettings(container.clientWidth || el.clientWidth || 1024, parsed, opts.view || toolbarView);
       }
       // keep the select in sync with chosen view
-      document.querySelector('#view-mode').value = cw.view;
+      if (vmElLocal) vmElLocal.value = cw.view;
 
       // Helper to (re)apply progress colors and add label backgrounds
       const enhanceBars = () => {
@@ -517,7 +546,7 @@
             ['Type', task.type],
             ['Dependencies', task.dependencies]
           ];
-          function t(d) { try { return d?.toISOString?.().slice(0,10) || d; } catch { return d; } }
+          function t(d) { try { return (d && d.toISOString) ? d.toISOString().slice(0,10) : d; } catch (e) { return d; } }
           return `<div class="details-container">${fields.map(([k,v]) => `<div><strong>${k}:</strong> ${v||''}</div>`).join('')}</div>`;
         }
       };
@@ -542,11 +571,11 @@
           if ((!wrappers || wrappers.length === 0) || zeroish) {
             if (cw.view === 'Year') {
               flashStatus('Year view not available in this build; falling back to Month.');
-              document.querySelector('#view-mode').value = 'Month';
+              var vmFix1 = document.querySelector('#view-mode'); if (vmFix1) vmFix1.value = 'Month';
               renderGantt(parsed, { view: 'Month', column_width: ganttState.column_width });
             } else if (cw.view === 'Month') {
               flashStatus('Month view failed to render; falling back to Week.');
-              document.querySelector('#view-mode').value = 'Week';
+              var vmFix2 = document.querySelector('#view-mode'); if (vmFix2) vmFix2.value = 'Week';
               renderGantt(parsed, { view: 'Week', column_width: ganttState.column_width });
             }
           }
@@ -587,61 +616,76 @@
       } catch (e) {
         console.warn('debug fetch failed', e);
       }
-
-      const res = await fetch('/api/tasks');
-      const tasks = await res.json();
-      document.querySelector('#status').textContent = `Tasks fetched: ${tasks?.length ?? 0}`;
-      const target = currentMode === 'calendar' ? document.getElementById('calendar') : (currentMode === 'timeline' ? document.getElementById('timeline') : document.getElementById('gantt'));
-      if (target) target.innerHTML = '';
-      if (!tasks || tasks.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'empty';
-        empty.textContent = 'No tasks to show. Verify your database path (PROJECT_DB_PATH or db_path.txt) and that project_parts has data.';
-        (target || document.body).appendChild(empty);
-        return;
-      }
-      // Convert to Date objects to avoid client-side parsing quirks
-      const parsed = tasks.map(t => ({
-        ...t,
-        start: new Date(t.start),
-        end: new Date(t.end)
-      }));
-      cachedTasks = parsed;
+      // Determine the current target pane early so we can show errors here
+      var target = currentMode === 'calendar' ? document.getElementById('calendar') : (currentMode === 'timeline' ? document.getElementById('timeline') : document.getElementById('gantt'));
       try {
-        if (currentMode === 'gantt') {
-          const ok = await waitForGantt(8000);
-          if (!ok) throw new Error('Gantt library not loaded');
-          renderGantt(parsed);
-        } else if (currentMode === 'calendar') {
-          ensureCalMonth(parsed);
-          renderCalendar(parsed, calMonth);
-        } else if (currentMode === 'timeline') {
-          renderTimeline(parsed);
-        } else if (currentMode === 'tree') {
-          renderTree(parsed);
+        const res = await fetch('/api/tasks');
+        if (!res.ok) { throw new Error('Tasks API failed: ' + res.status + ' ' + res.statusText); }
+        var tasks = await res.json();
+  var stEl = document.querySelector('#status');
+  if (stEl) stEl.textContent = 'Tasks fetched: ' + (tasks && typeof tasks.length === 'number' ? tasks.length : 0);
+        if (target) target.innerHTML = '';
+        if (!tasks || tasks.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'empty';
+          empty.textContent = 'No tasks to show. Verify your database path (PROJECT_DB_PATH or db_path.txt) and that project_parts has data.';
+          (target || document.body).appendChild(empty);
+          return;
+        }
+        // Convert to Date objects to avoid client-side parsing quirks
+        const parsed = tasks.map(function(t){ return Object.assign({}, t, { start: new Date(t.start), end: new Date(t.end) }); });
+        cachedTasks = parsed;
+        try {
+          if (currentMode === 'gantt') {
+            const ok = await waitForGantt(8000);
+            if (!ok) throw new Error('Gantt library not loaded');
+            renderGantt(parsed);
+          } else if (currentMode === 'calendar') {
+            ensureCalMonth(parsed);
+            renderCalendar(parsed, calMonth);
+          } else if (currentMode === 'timeline') {
+            renderTimeline(parsed);
+          } else if (currentMode === 'tree') {
+            renderTree(parsed);
+          }
+        } catch (e) {
+          console.error('Render error', e);
+          const err = document.createElement('div');
+          err.className = 'error';
+          err.textContent = 'Error rendering: ' + (e && e.message ? e.message : e);
+          (target || document.body).appendChild(err);
+          // As a fallback, list first few tasks
+          const pre = document.createElement('pre');
+          try { pre.textContent = JSON.stringify(parsed.slice(0,5), null, 2); } catch(_) { pre.textContent = 'Preview unavailable'; }
+          (target || document.body).appendChild(pre);
         }
       } catch (e) {
-        console.error('Render error', e);
-        const err = document.createElement('div');
-        err.className = 'error';
-        err.textContent = `Error rendering: ${e?.message || e}`;
-        (target || document.body).appendChild(err);
-        // As a fallback, list first few tasks
-        const pre = document.createElement('pre');
-        pre.textContent = JSON.stringify(parsed.slice(0,5), null, 2);
-        (target || document.body).appendChild(pre);
+        console.error('Tasks load error', e);
+        if (target) target.innerHTML = '';
+        var err2 = document.createElement('div');
+        err2.className = 'error';
+        err2.textContent = 'Error loading tasks: ' + (e && e.message ? e.message : String(e));
+        (target || document.body).appendChild(err2);
+        flashStatus(err2.textContent);
       }
     }
 
-    document.querySelector('#view-mode').addEventListener('change', () => {
-      // Re-render with the chosen view, still fitting the width
-      if (cachedTasks) renderGantt(cachedTasks, { view: document.querySelector('#view-mode').value });
-      updateUrlFromState(true);
-    });
-    document.querySelector('#refresh').addEventListener('click', () => {
-      if (currentMode === 'images') { renderImages(true); } else { loadTasks(); }
-      updateUrlFromState(true);
-    });
+    (function(){
+      var vm = document.querySelector('#view-mode');
+      if (vm) {
+        vm.addEventListener('change', function(){
+          if (cachedTasks) renderGantt(cachedTasks, { view: vm.value });
+          updateUrlFromState(true);
+        });
+      }
+    })();
+    (function(){
+      var rf = document.querySelector('#refresh');
+      if (rf) rf.addEventListener('click', function(){
+        if (currentMode === 'images') { renderImages(true); } else { loadTasks(); }
+        updateUrlFromState(true);
+      });
+    })();
 
     // Advanced Gantt controls
     document.getElementById('zoom-in').addEventListener('click', () => {
@@ -656,7 +700,8 @@
     });
     document.getElementById('fit').addEventListener('click', () => {
       if (currentMode !== 'gantt' || !cachedTasks) return;
-      renderGantt(cachedTasks, { view: document.querySelector('#view-mode').value });
+      var vmEl = document.querySelector('#view-mode');
+      renderGantt(cachedTasks, { view: (vmEl && vmEl.value) ? vmEl.value : 'Day' });
     });
     document.getElementById('today').addEventListener('click', () => {
       if (currentMode !== 'gantt') return;
@@ -668,7 +713,8 @@
       const fs = !body.classList.contains('gantt-fullscreen');
       body.classList.toggle('gantt-fullscreen', fs);
       if (cachedTasks) {
-        renderGantt(cachedTasks, { view: document.querySelector('#view-mode').value });
+        var vmEl2 = document.querySelector('#view-mode');
+        renderGantt(cachedTasks, { view: (vmEl2 && vmEl2.value) ? vmEl2.value : 'Day' });
         setTimeout(centerGanttOnToday, 0);
       }
       const btn = document.getElementById('fullscreen');
@@ -728,7 +774,8 @@
         exportWrap.appendChild(viewClone);
         document.body.appendChild(exportWrap);
 
-        const withWM = !!document.getElementById('export-watermark')?.checked;
+  const wmInput = document.getElementById('export-watermark');
+  const withWM = !!(wmInput && wmInput.checked);
         let wmEl = null;
         if (withWM) { wmEl = addTemporaryWatermark(exportWrap, 'INTERNAL USE ONLY'); }
 
@@ -758,7 +805,7 @@
         setTimeout(() => URL.revokeObjectURL(url), 4000);
         showToast('PNG exported');
       } catch (e) {
-        const msg = 'Export failed: ' + (e?.message || e);
+  const msg = 'Export failed: ' + (e && e.message ? e.message : e);
         flashStatus(msg);
         showToast(msg);
       }
@@ -978,7 +1025,7 @@
         const when = document.createElement('span'); when.className = 'tree-when';
         const s = new Date(node.start).toISOString().slice(0,10); const e = new Date(node.end).toISOString().slice(0,10);
         when.textContent = `${s} → ${e}`;
-        const prog = document.createElement('span'); prog.className = 'tree-progress'; prog.textContent = `${node.progress ?? 0}%`; prog.style.background = node.color_progress || '#FF8200';
+  const prog = document.createElement('span'); prog.className = 'tree-progress'; prog.textContent = String((typeof node.progress === 'number' ? node.progress : (node.progress ? Number(node.progress) || 0 : 0))) + '%'; prog.style.background = node.color_progress || '#FF8200';
         r.appendChild(toggle); r.appendChild(name); r.appendChild(when); r.appendChild(prog);
         let expanded = true; const childWrap = document.createElement('div'); childWrap.className = 'tree-children'; r.appendChild(childWrap);
         function rerenderChildren() { childWrap.innerHTML = ''; if (!expanded) return; (node.children||[]).forEach(c => childWrap.appendChild(row(c, depth+1))); }
@@ -1034,7 +1081,7 @@
       } catch (e) {
         const err = document.createElement('div');
         err.className = 'error';
-        err.textContent = `Error loading images: ${e?.message || e}`;
+  err.textContent = 'Error loading images: ' + (e && e.message ? e.message : e);
         grid.appendChild(err);
       }
     }
@@ -1075,8 +1122,8 @@
       const vw = window.innerWidth || document.documentElement.clientWidth || 1024;
       const vh = window.innerHeight || document.documentElement.clientHeight || 768;
       const imgMaxW = 360, imgMaxH = 240;
-      let x = (evt?.clientX || 0) + pad;
-      let y = (evt?.clientY || 0) + pad;
+  let x = ((evt && evt.clientX) || 0) + pad;
+  let y = ((evt && evt.clientY) || 0) + pad;
       if (x + imgMaxW + 16 > vw) x = Math.max(8, vw - imgMaxW - 16);
       if (y + imgMaxH + 16 > vh) y = Math.max(8, vh - imgMaxH - 16);
       hoverRootEl.style.left = `${x}px`;
@@ -1146,7 +1193,14 @@
         const rect = e.target.closest('rect');
         if (!rect) { hideHoverPreview(); return; }
         const id = rect.getAttribute('data-id');
-        const url = id ? firstImageUrlForTask(id) : null;
+        let url = id ? firstImageUrlForTask(id) : null;
+        if (!url) {
+          const y = rect.getAttribute('y');
+          const label = Array.from(svg.querySelectorAll('text')).find(t => t.getAttribute('y') === String(Number(y) + 12));
+          const name = (label && label.textContent) ? label.textContent : '';
+          const t = cachedTasks && cachedTasks.find(x => x.name === name);
+          url = t && t.images && t.images[0] ? t.images[0].url : null;
+        }
         if (url) { showHoverPreview(url, e); moveHoverPreview(e); } else { hideHoverPreview(); }
       });
       svg.addEventListener('mouseleave', hideHoverPreview);
@@ -1154,7 +1208,13 @@
         const rect = e.target.closest('rect');
         if (!rect) return;
         const id = rect.getAttribute('data-id');
-        const t = cachedTasks && id && cachedTasks.find(x => String(x.id) === String(id));
+        let t = cachedTasks && id ? cachedTasks.find(x => String(x.id) === String(id)) : null;
+        if (!t) {
+          const y = rect.getAttribute('y');
+          const label = Array.from(svg.querySelectorAll('text')).find(tx => tx.getAttribute('y') === String(Number(y) + 12));
+          const name = (label && label.textContent) ? label.textContent : '';
+          t = cachedTasks && cachedTasks.find(x => x.name === name);
+        }
         if (t) openDetailsForTask(t);
       });
     }
@@ -1201,7 +1261,7 @@
     // Helper to get first image URL for a task (from cachedTasks entries)
     function firstImageUrlForTask(taskId) {
       if (!cachedTasks) return null;
-      const t = cachedTasks.find(tt => tt.id === taskId);
+      const t = cachedTasks.find(tt => String(tt.id) === String(taskId));
       const img = t && Array.isArray(t.images) && t.images.length ? t.images[0] : null;
       return img ? img.url : null;
     }
@@ -1303,7 +1363,7 @@
           const wrap = e.target.closest('.bar-wrapper');
           if (!wrap) return;
           const id = wrap.getAttribute('data-id');
-          const t = cachedTasks && cachedTasks.find(tt => tt.id === id);
+          const t = cachedTasks && cachedTasks.find(tt => String(tt.id) === String(id));
           if (t) openDetailsForTask(t);
         });
       } catch {}
@@ -1344,7 +1404,8 @@
             const card = e.target.closest('.img-card');
             if (!card) return;
             e.preventDefault();
-            const src = card.querySelector('img')?.src || '';
+            const imgEl = card.querySelector('img');
+            const src = (imgEl && imgEl.src) ? imgEl.src : '';
             const file = src.split('/').pop();
             const t = cachedTasks && cachedTasks.find(x => Array.isArray(x.images) && x.images.some(im => im.name === file));
             if (t) openDetailsForTask(t);

@@ -3660,43 +3660,12 @@ class MainWindow(QMainWindow):
                 header_widget.setStyleSheet("margin:0px; padding:0px; border:0px;")
             except Exception:
                 pass
-            # Center column: logo on top, inline menu bar below
+            # Center column: logo only (remove inline menu bar under the logo)
             try:
-                from PyQt5.QtWidgets import QMenuBar
                 center_col = QVBoxLayout()
                 center_col.setContentsMargins(0, 0, 0, 0)
                 center_col.setSpacing(0)
                 center_col.addWidget(header_widget, alignment=Qt.AlignCenter)
-                self.inline_menu = QMenuBar()
-                # Platform-specific compact styling
-                import sys
-                if sys.platform.startswith('win') or sys.platform.startswith('linux'):
-                    self.inline_menu.setStyleSheet(
-                        "QMenuBar { margin:0px; padding:0px 6px; spacing:0px; background-color:#4B4B4B; color:#FF8200; }"
-                        "QMenuBar::item { margin:0px; padding:2px 8px; background:transparent; }"
-                        "QMenuBar::item:selected { background:#333333; }"
-                        "QMenu { margin:0px; padding:2px 0px; background-color:#333333; color:#FF8200; }"
-                        "QMenu::item { padding:4px 16px; }"
-                        "QMenu::separator { height:1px; background:#555; margin:2px 0; }"
-                    )
-                    self.inline_menu.setFixedHeight(22)
-                elif sys.platform == 'darwin':
-                    # Compact style mainly affects popup menus
-                    self.inline_menu.setStyleSheet(
-                        "QMenuBar { margin:0px; padding:0px 6px; spacing:0px; background-color:#4B4B4B; color:#FF8200; }"
-                        "QMenuBar::item { margin:0px; padding:2px 8px; background:transparent; }"
-                        "QMenuBar::item:selected { background:#333333; }"
-                        "QMenu { margin:0px; padding:2px 0px; background-color:#333333; color:#FF8200; }"
-                        "QMenu::item { padding:4px 16px; }"
-                        "QMenu::separator { height:1px; background:#555; margin:2px 0; }"
-                    )
-                    self.inline_menu.setFixedHeight(22)
-                tools_menu_inline = self.inline_menu.addMenu("Tools")
-                act_open = tools_menu_inline.addAction("Open Data Folder")
-                act_open.triggered.connect(self.open_data_folder)
-                act_holidays = tools_menu_inline.addAction("Manage Holidays…")
-                act_holidays.triggered.connect(self._open_holidays_manager)
-                center_col.addWidget(self.inline_menu, alignment=Qt.AlignCenter)
                 header_layout.addLayout(center_col)
             except Exception:
                 # Fallback to just adding the header widget centered
@@ -3709,12 +3678,11 @@ class MainWindow(QMainWindow):
             controls_layout.setSpacing(6)
             controls_layout.addStretch(1)
 
-            # Search / Jump field (affects Gantt view)
+            # Search field (affects Gantt view)
             from PyQt5.QtWidgets import QLineEdit, QPushButton
             self.search_input = QLineEdit()
             self.search_input.setPlaceholderText("Jump to part (substring)...")
             self.search_input.setFixedWidth(260)
-            jump_btn = QPushButton("Jump")
             def do_jump():
                 text = self.search_input.text().strip()
                 if not text:
@@ -3732,13 +3700,10 @@ class MainWindow(QMainWindow):
                     if self.sidebar.currentRow() != 1:
                         self.sidebar.setCurrentRow(1)
                     self.gantt_chart_view.highlight_bar(match_name)
-            jump_btn.clicked.connect(do_jump)
             self.search_input.returnPressed.connect(do_jump)
             controls_layout.addWidget(self.search_input)
-            controls_layout.addWidget(jump_btn)
-
-            # Reload after sync button
-            reload_btn = QPushButton("Reload")
+            
+            # Define reload action logic to use in Tools menu
             def do_reload():
                 try:
                     # Re-load from disk to pick up synced changes
@@ -3753,137 +3718,90 @@ class MainWindow(QMainWindow):
                         self._update_db_status()
                     except Exception:
                         pass
-            reload_btn.clicked.connect(do_reload)
-            controls_layout.addWidget(reload_btn)
 
-            # Holidays button (so we can hide menu bar and still access this)
-            holidays_btn = QPushButton("Holidays…")
-            holidays_btn.clicked.connect(self._open_holidays_manager)
-            controls_layout.addWidget(holidays_btn)
-
-            # --- Filter Panel Dock (collapsible) ---
-            from PyQt5.QtWidgets import QDockWidget, QWidget as _QW, QVBoxLayout as _QVBox, QLabel as _QL, QCheckBox, QGroupBox, QHBoxLayout as _QHBox, QLineEdit as _QLE, QPushButton as _QPB
-            from PyQt5.QtCore import QSettings
-            self.filter_dock = QDockWidget("Filters", self)
-            self.filter_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
-            filt_container = _QW()
-            vbox = _QVBox(filt_container)
-            vbox.setContentsMargins(8,8,8,8)
-            vbox.setSpacing(6)
-            # Status checkboxes
-            status_group = QGroupBox("Status")
-            sg_layout = _QVBox()
-            self.chk_status = {}
-            for st in ["Planned","In Progress","Blocked","Done"]:
-                cb = QCheckBox(st)
-                self.chk_status[st] = cb
-                sg_layout.addWidget(cb)
-            status_group.setLayout(sg_layout)
-            vbox.addWidget(status_group)
-            # Internal/External
-            ie_group = QGroupBox("Internal / External")
-            ie_layout = _QVBox()
-            self.chk_internal = QCheckBox("Internal")
-            self.chk_external = QCheckBox("External")
-            ie_layout.addWidget(self.chk_internal)
-            ie_layout.addWidget(self.chk_external)
-            ie_group.setLayout(ie_layout)
-            vbox.addWidget(ie_group)
-            # Responsible substring
-            resp_group = QGroupBox("Responsible Contains")
-            rg_layout = _QVBox()
-            self.resp_input = _QLE()
-            self.resp_input.setPlaceholderText("Name substring...")
-            rg_layout.addWidget(self.resp_input)
-            resp_group.setLayout(rg_layout)
-            vbox.addWidget(resp_group)
-            # Critical & Risk toggles
-            flags_group = QGroupBox("Special")
-            fl_layout = _QVBox()
-            self.chk_critical_only = QCheckBox("Critical Path Only")
-            self.chk_risk_only = QCheckBox("Risk (Overdue / At-Risk) Only")
-            fl_layout.addWidget(self.chk_critical_only)
-            fl_layout.addWidget(self.chk_risk_only)
-            flags_group.setLayout(fl_layout)
-            vbox.addWidget(flags_group)
-            # Active summary label
-            self.filter_summary = _QL("No filters active")
-            self.filter_summary.setStyleSheet("color:#ccc; font-size:11px")
-            vbox.addWidget(self.filter_summary)
-            # Buttons
-            btn_row = _QHBox()
-            apply_btn = _QPB("Apply")
-            reset_btn = _QPB("Reset")
-            btn_row.addWidget(apply_btn)
-            btn_row.addWidget(reset_btn)
-            vbox.addLayout(btn_row)
-            vbox.addStretch(1)
-            filt_container.setLayout(vbox)
-            self.filter_dock.setWidget(filt_container)
-            self.addDockWidget(Qt.RightDockWidgetArea, self.filter_dock)
-
-            # Debounce timer for responsible input
-            from PyQt5.QtCore import QTimer as _QTimer
-            self._resp_timer = _QTimer(self)
-            self._resp_timer.setInterval(500)
-            self._resp_timer.setSingleShot(True)
-            def resp_changed():
-                self._resp_timer.start()
-            self.resp_input.textChanged.connect(resp_changed)
-            def apply_filters():
-                statuses = [s for s, cb in self.chk_status.items() if cb.isChecked()]
-                ie = []
-                if self.chk_internal.isChecked():
-                    ie.append("Internal")
-                if self.chk_external.isChecked():
-                    ie.append("External")
-                resp = self.resp_input.text().strip()
-                crit = self.chk_critical_only.isChecked()
-                risk = self.chk_risk_only.isChecked()
-                if hasattr(self, 'gantt_chart_view'):
-                    self.gantt_chart_view.set_filters(
-                        statuses=statuses if statuses else None,
-                        internal_external=ie if ie else None,
-                        responsible_substr=resp if resp else None,
-                        critical_only=crit,
-                        risk_only=risk
-                    )
-                # Update summary
-                parts = []
-                if statuses: parts.append(f"Status={len(statuses)}")
-                if ie: parts.append(f"IE={','.join(ie)}")
-                if resp: parts.append(f"Resp~{resp}")
-                if crit: parts.append("Critical")
-                if risk: parts.append("Risk")
-                self.filter_summary.setText(" | ".join(parts) if parts else "No filters active")
-                # Persist after each apply for immediate save
-                try:
-                    self.save_filter_settings()
-                except Exception:
-                    pass
-            # expose for external calls
-            self._apply_filters = apply_filters
-            def timer_apply():
-                apply_filters()
-            self._resp_timer.timeout.connect(timer_apply)
-            apply_btn.clicked.connect(apply_filters)
-            def reset_filters():
-                for cb in self.chk_status.values(): cb.setChecked(False)
-                self.chk_internal.setChecked(False)
-                self.chk_external.setChecked(False)
-                self.resp_input.clear()
-                self.chk_critical_only.setChecked(False)
-                self.chk_risk_only.setChecked(False)
-                apply_filters()
-            reset_btn.clicked.connect(reset_filters)
-            # Initialize filter storage in gantt view if available
-            if hasattr(self, 'gantt_chart_view') and hasattr(self.gantt_chart_view, '_init_filters'):
-                self.gantt_chart_view._init_filters()
-            # Load persisted filter settings
+            # Tools menu button (moved here from under the header)
             try:
-                self.load_filter_settings()
+                from PyQt5.QtWidgets import QToolButton, QMenu, QAction, QInputDialog
+                tools_btn = QToolButton()
+                tools_btn.setText("Tools")
+                tools_btn.setToolTip("App tools and utilities")
+                tools_btn.setPopupMode(QToolButton.InstantPopup)
+                tmenu = QMenu(self)
+                # Actions
+                act_jump = tmenu.addAction("Jump to Part")
+                act_jump.triggered.connect(do_jump)
+                tmenu.addSeparator()
+                act_reload = tmenu.addAction("Reload Data")
+                act_reload.triggered.connect(do_reload)
+                tmenu.addSeparator()
+                act_open_folder = tmenu.addAction("Open Data Folder")
+                act_open_folder.triggered.connect(self.open_data_folder)
+                act_manage_holidays = tmenu.addAction("Manage Holidays…")
+                act_manage_holidays.triggered.connect(self._open_holidays_manager)
+
+                # --- Filters submenu (consolidated from right-side dock) ---
+                self._init_filter_state()
+                filters_menu = QMenu("Filters", self)
+                # Status submenu
+                status_menu = QMenu("Status", self)
+                self._filter_actions = {"status": {}, "ie": {}, "flags": {}, "summary": None}
+                for st in ["Planned", "In Progress", "Blocked", "Done"]:
+                    a = QAction(st, self)
+                    a.setCheckable(True)
+                    a.toggled.connect(lambda checked, s=st: self._on_filter_status_toggled(s, checked))
+                    status_menu.addAction(a)
+                    self._filter_actions["status"][st] = a
+                filters_menu.addMenu(status_menu)
+                # Internal/External submenu
+                ie_menu = QMenu("Internal / External", self)
+                a_int = QAction("Internal", self); a_int.setCheckable(True)
+                a_int.toggled.connect(lambda checked: self._on_filter_ie_toggled("Internal", checked))
+                ie_menu.addAction(a_int); self._filter_actions["ie"]["Internal"] = a_int
+                a_ext = QAction("External", self); a_ext.setCheckable(True)
+                a_ext.toggled.connect(lambda checked: self._on_filter_ie_toggled("External", checked))
+                ie_menu.addAction(a_ext); self._filter_actions["ie"]["External"] = a_ext
+                filters_menu.addMenu(ie_menu)
+                # Responsible contains (opens prompt)
+                def set_responsible_substr():
+                    cur = self._filter_state.get("responsible_substr") or ""
+                    text, ok = QInputDialog.getText(self, "Responsible Contains", "Substring:", text=cur)
+                    if ok:
+                        self._filter_state["responsible_substr"] = text.strip() or None
+                        self._update_filter_summary()
+                        try:
+                            self._apply_filters()
+                        except Exception:
+                            pass
+                filters_menu.addAction("Responsible Contains…", set_responsible_substr)
+                # Flags
+                a_crit = QAction("Critical Path Only", self); a_crit.setCheckable(True)
+                a_crit.toggled.connect(lambda checked: self._on_filter_flag_toggled("critical_only", checked))
+                filters_menu.addAction(a_crit); self._filter_actions["flags"]["critical_only"] = a_crit
+                a_risk = QAction("Risk (Overdue / At-Risk) Only", self); a_risk.setCheckable(True)
+                a_risk.toggled.connect(lambda checked: self._on_filter_flag_toggled("risk_only", checked))
+                filters_menu.addAction(a_risk); self._filter_actions["flags"]["risk_only"] = a_risk
+                filters_menu.addSeparator()
+                # Summary (disabled)
+                sum_act = QAction("No filters active", self)
+                sum_act.setEnabled(False)
+                filters_menu.addAction(sum_act)
+                self._filter_actions["summary"] = sum_act
+                filters_menu.addSeparator()
+                # Apply / Reset
+                filters_menu.addAction("Apply Filters", lambda: self._apply_filters())
+                filters_menu.addAction("Reset Filters", lambda: self._reset_filters())
+
+                # Attach Filters submenu and put menu on the button
+                tmenu.addMenu(filters_menu)
+                tools_btn.setMenu(tmenu)
+                controls_layout.addWidget(tools_btn)
+
+                # Sync menu with current (loaded) settings later in init
             except Exception:
                 pass
+
+            # Initialize filter storage in gantt view if available
+            # (Filters UI is now in Tools → Filters; no right-side dock)
 
             # Sidebar for view selection (create and add to layout first)
             self.sidebar = QListWidget()
@@ -3970,6 +3888,18 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+            # Finalize Filters: initialize gantt filter storage, load persisted settings, sync menu checks, and apply
+            try:
+                if hasattr(self, 'gantt_chart_view') and hasattr(self.gantt_chart_view, '_init_filters'):
+                    self.gantt_chart_view._init_filters()
+                # Load settings into state and sync menu checks
+                self.load_filter_settings()
+                self._sync_tools_filter_checks_from_state()
+                # Apply once after construction
+                self._apply_filters()
+            except Exception:
+                pass
+
             # Now that all views are constructed, connect sidebar signals and set current row
             self.sidebar.currentRowChanged.connect(self.display_view)
             self.sidebar.setCurrentRow(4)  # Start on Database view for editing (Dashboard is index 5)
@@ -4028,30 +3958,124 @@ class MainWindow(QMainWindow):
         # No automatic view switching. Optionally, highlight in Gantt if already there.
         if self.sidebar.currentRow() == 1 and hasattr(self.gantt_chart_view, 'highlight_bar'):
             self.gantt_chart_view.highlight_bar(part_name)
+    # ---------------- Filters (menu-based) ----------------
+    def _init_filter_state(self):
+        # Initialize minimal state store for filters used by the menu
+        self._filter_state = {
+            "statuses": set(),               # e.g., {"Planned", "Done"}
+            "ie": set(),                     # {"Internal","External"}
+            "responsible_substr": None,      # lowercased substring or None
+            "critical_only": False,
+            "risk_only": False,
+        }
+    def _on_filter_status_toggled(self, status, checked):
+        if checked:
+            self._filter_state["statuses"].add(status)
+        else:
+            self._filter_state["statuses"].discard(status)
+        self._update_filter_summary()
+    def _on_filter_ie_toggled(self, which, checked):
+        if checked:
+            self._filter_state["ie"].add(which)
+        else:
+            self._filter_state["ie"].discard(which)
+        self._update_filter_summary()
+    def _on_filter_flag_toggled(self, flag, checked):
+        self._filter_state[flag] = bool(checked)
+        self._update_filter_summary()
+    def _update_filter_summary(self):
+        try:
+            parts = []
+            st = self._filter_state.get("statuses") or set()
+            ie = self._filter_state.get("ie") or set()
+            resp = self._filter_state.get("responsible_substr") or ""
+            if st: parts.append(f"Status={len(st)}")
+            if ie: parts.append("IE=" + ",".join(sorted(ie)))
+            if resp: parts.append(f"Resp~{resp}")
+            if self._filter_state.get("critical_only"): parts.append("Critical")
+            if self._filter_state.get("risk_only"): parts.append("Risk")
+            text = " | ".join(parts) if parts else "No filters active"
+            act = getattr(self, "_filter_actions", {}).get("summary")
+            if act:
+                act.setText(text)
+        except Exception:
+            pass
+    def _sync_tools_filter_checks_from_state(self):
+        try:
+            acts = getattr(self, "_filter_actions", {})
+            for st, a in acts.get("status", {}).items():
+                a.blockSignals(True); a.setChecked(st in self._filter_state["statuses"]); a.blockSignals(False)
+            for ie, a in acts.get("ie", {}).items():
+                a.blockSignals(True); a.setChecked(ie in self._filter_state["ie"]); a.blockSignals(False)
+            for flag, a in acts.get("flags", {}).items():
+                a.blockSignals(True); a.setChecked(bool(self._filter_state.get(flag))); a.blockSignals(False)
+            self._update_filter_summary()
+        except Exception:
+            pass
+    def _apply_filters(self):
+        try:
+            statuses = sorted(self._filter_state["statuses"]) or None
+            ie = sorted(self._filter_state["ie"]) or None
+            resp = self._filter_state.get("responsible_substr") or None
+            crit = bool(self._filter_state.get("critical_only"))
+            risk = bool(self._filter_state.get("risk_only"))
+            if hasattr(self, 'gantt_chart_view'):
+                self.gantt_chart_view.set_filters(
+                    statuses=statuses,
+                    internal_external=ie,
+                    responsible_substr=resp,
+                    critical_only=crit,
+                    risk_only=risk
+                )
+            # Persist after applying
+            self.save_filter_settings()
+            self._update_filter_summary()
+        except Exception:
+            pass
+    def _reset_filters(self):
+        try:
+            self._filter_state["statuses"].clear()
+            self._filter_state["ie"].clear()
+            self._filter_state["responsible_substr"] = None
+            self._filter_state["critical_only"] = False
+            self._filter_state["risk_only"] = False
+            self._sync_tools_filter_checks_from_state()
+            self._apply_filters()
+        except Exception:
+            pass
     # ---------------- Filter Settings Persistence ----------------
     def load_filter_settings(self):
         from PyQt5.QtCore import QSettings, QTimer
         s = QSettings("LSI", "ProjectPlanner")
-        # Status
-        for st, cb in self.chk_status.items():
-            cb.setChecked(s.value(f"filters/status/{st}", False, type=bool))
-        self.chk_internal.setChecked(s.value("filters/internal", False, type=bool))
-        self.chk_external.setChecked(s.value("filters/external", False, type=bool))
-        self.resp_input.setText(s.value("filters/responsible_substr", "", type=str))
-        self.chk_critical_only.setChecked(s.value("filters/critical_only", False, type=bool))
-        self.chk_risk_only.setChecked(s.value("filters/risk_only", False, type=bool))
+        # Statuses
+        st_sel = set()
+        for st in ["Planned", "In Progress", "Blocked", "Done"]:
+            if s.value(f"filters/status/{st}", False, type=bool):
+                st_sel.add(st)
+        self._filter_state["statuses"] = st_sel
+        # IE
+        ie_sel = set()
+        if s.value("filters/internal", False, type=bool):
+            ie_sel.add("Internal")
+        if s.value("filters/external", False, type=bool):
+            ie_sel.add("External")
+        self._filter_state["ie"] = ie_sel
+        # Others
+        self._filter_state["responsible_substr"] = (s.value("filters/responsible_substr", "", type=str) or "").strip() or None
+        self._filter_state["critical_only"] = s.value("filters/critical_only", False, type=bool)
+        self._filter_state["risk_only"] = s.value("filters/risk_only", False, type=bool)
         # Apply after UI settles
-        QTimer.singleShot(100, lambda: getattr(self, '_apply_filters', lambda: None)())
+        QTimer.singleShot(50, lambda: self._apply_filters())
     def save_filter_settings(self):
         from PyQt5.QtCore import QSettings
         s = QSettings("LSI", "ProjectPlanner")
-        for st, cb in self.chk_status.items():
-            s.setValue(f"filters/status/{st}", cb.isChecked())
-        s.setValue("filters/internal", self.chk_internal.isChecked())
-        s.setValue("filters/external", self.chk_external.isChecked())
-        s.setValue("filters/responsible_substr", self.resp_input.text())
-        s.setValue("filters/critical_only", self.chk_critical_only.isChecked())
-        s.setValue("filters/risk_only", self.chk_risk_only.isChecked())
+        for st in ["Planned", "In Progress", "Blocked", "Done"]:
+            s.setValue(f"filters/status/{st}", st in self._filter_state["statuses"])
+        s.setValue("filters/internal", "Internal" in self._filter_state["ie"])
+        s.setValue("filters/external", "External" in self._filter_state["ie"])
+        s.setValue("filters/responsible_substr", self._filter_state.get("responsible_substr") or "")
+        s.setValue("filters/critical_only", bool(self._filter_state.get("critical_only")))
+        s.setValue("filters/risk_only", bool(self._filter_state.get("risk_only")))
     def closeEvent(self, event):
         try:
             self.save_filter_settings()
