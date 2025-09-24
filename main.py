@@ -1491,29 +1491,28 @@ class GanttChartView(QWidget):
         print("GanttChartView: __init__ called")
         super().__init__()
         layout = QVBoxLayout()
-        layout.addWidget(QLabel("Gantt Chart (Read-Only)"))
+        toolbar = QHBoxLayout()
+        title_lbl = QLabel("Gantt Chart")
+        title_lbl.setStyleSheet("font-weight:600; padding:2px 4px;")
+        toolbar.addWidget(title_lbl)
         self.view = ZoomableGraphicsView()
         self.scene = QGraphicsScene()
         self.view.setScene(self.scene)
         self.view.setSettingsKey("GanttZoom")
         layout.addWidget(self.view)
 
-        # Initialize filtering state
         self._init_filters()
 
-        # Image preview area
         self.preview_label = QLabel()
-        self.preview_label.setFixedHeight(200)
+        self.preview_label.setFixedHeight(140)
         self.preview_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.preview_label)
+        self.preview_label.setStyleSheet("border:1px solid #666; background:#222;")
 
-        # Export button
-        export_btn = QPushButton("Export Gantt Chart")
+        # Export / Settings / Refresh
+        export_btn = QPushButton("Export")
+        export_btn.setToolTip("Export Gantt Chart")
         export_btn.clicked.connect(self.export_gantt_chart)
-        layout.addWidget(export_btn)
-
-        # Export Settings button
-        settings_btn = QPushButton("Export Settings…")
+        settings_btn = QPushButton("Settings…")
         def open_settings():
             try:
                 dlg = ExportSettingsDialog(self)
@@ -1521,32 +1520,28 @@ class GanttChartView(QWidget):
             except Exception as e:
                 print(f"Open Export Settings failed: {e}")
         settings_btn.clicked.connect(open_settings)
-        layout.addWidget(settings_btn)
-
-        # Refresh button
-        refresh_btn = QPushButton("Refresh Gantt Chart")
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setToolTip("Refresh Gantt Chart")
         refresh_btn.clicked.connect(self.refresh_gantt)
-        layout.addWidget(refresh_btn)
-        
-        # Hierarchy connectors toggle (feature 1)
-        from PyQt5.QtWidgets import QCheckBox
-        self.hierarchy_checkbox = QCheckBox("Show Hierarchy Lines")
+        toolbar.addWidget(export_btn)
+        toolbar.addWidget(settings_btn)
+        toolbar.addWidget(refresh_btn)
+
+        from PyQt5.QtWidgets import QCheckBox, QComboBox
+        self.hierarchy_checkbox = QCheckBox("Hierarchy")
         self.hierarchy_checkbox.setChecked(True)
         self.hierarchy_checkbox.stateChanged.connect(lambda _s: self.refresh_gantt())
-        layout.addWidget(self.hierarchy_checkbox)
+        toolbar.addWidget(self.hierarchy_checkbox)
 
-        # Legend inclusion flag (feature 5)
         self.include_legend = True
 
-        # Critical path toggle (new feature) default off
-        self.critical_path_checkbox = QCheckBox("Show Critical Path")
+        self.critical_path_checkbox = QCheckBox("Critical Path")
         self.critical_path_checkbox.setChecked(False)
         self.critical_path_checkbox.stateChanged.connect(lambda _s: self.refresh_gantt())
-        layout.addWidget(self.critical_path_checkbox)
+        toolbar.addWidget(self.critical_path_checkbox)
 
         # Baseline controls
         baseline_row = QHBoxLayout()
-        from PyQt5.QtWidgets import QComboBox
         self.baseline_combo = QComboBox()
         self.baseline_combo.addItem("None")
         self.baseline_combo.setToolTip("Overlay a saved baseline snapshot")
@@ -1562,7 +1557,6 @@ class GanttChartView(QWidget):
                     if hasattr(self, 'model') and self.model:
                         self.model.save_baseline(name)
                         self._populate_baselines()
-                        # auto-select the newly saved baseline for overlay
                         idx = self.baseline_combo.findText(name)
                         if idx >= 0:
                             self.baseline_combo.setCurrentIndex(idx)
@@ -1573,7 +1567,8 @@ class GanttChartView(QWidget):
         baseline_row.addWidget(QLabel("Baseline:"))
         baseline_row.addWidget(self.baseline_combo)
         baseline_row.addWidget(save_baseline_btn)
-        layout.addLayout(baseline_row)
+        toolbar.addLayout(baseline_row)
+        layout.addLayout(toolbar)
 
         # Zoom controls
         zoom_layout = QHBoxLayout()
@@ -1583,8 +1578,8 @@ class GanttChartView(QWidget):
         zoom_in_btn.clicked.connect(self.view.zoomIn)
         zoom_out_btn.clicked.connect(self.view.zoomOut)
         zoom_reset_btn.clicked.connect(self.reset_zoom)
-        fit_all_btn = QPushButton("Fit to View")
-        fit_sel_btn = QPushButton("Fit Selection")
+        fit_all_btn = QPushButton("Fit All")
+        fit_sel_btn = QPushButton("Fit Sel")
         def _fit_all():
             r = self.scene.itemsBoundingRect()
             if not r.isNull():
@@ -1600,7 +1595,6 @@ class GanttChartView(QWidget):
                 if not rect.isNull():
                     self.view.fitInView(rect, Qt.KeepAspectRatio)
                     return
-            # fallback to locked/highlighted bar
             name = getattr(self, '_locked_label', None)
             if name and name in getattr(self, '_name_to_rect', {}):
                 rect = self._name_to_rect[name].sceneBoundingRect()
@@ -1614,8 +1608,9 @@ class GanttChartView(QWidget):
         zoom_layout.addWidget(fit_all_btn)
         zoom_layout.addWidget(fit_sel_btn)
         layout.addLayout(zoom_layout)
-
+        layout.addWidget(self.preview_label)
         self.setLayout(layout)
+
         # Keyboard shortcuts
         try:
             from PyQt5.QtWidgets import QShortcut

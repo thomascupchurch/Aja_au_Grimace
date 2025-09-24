@@ -81,6 +81,8 @@
   .cal-cell.today { outline:2px solid #ffffff66; }
   .cal-daynum { font-weight:600; color:var(--text); }
   .cal-badge { align-self:flex-start; background:var(--brand); color:#111; font-weight:600; font-size:12px; padding:2px 6px; border-radius:999px; }
+  .cal-img-badge { align-self:flex-start; background:#111; color:var(--brand); font-weight:600; font-size:11px; padding:2px 6px; border-radius:999px; display:inline-flex; align-items:center; gap:4px; }
+  .cal-img-badge svg { width:12px; height:12px; fill:var(--brand); }
   .calendar-details { margin-top:12px; border-top:1px solid var(--border); padding-top:8px; }
   .cal-details-title { color:var(--text); font-weight:600; margin-bottom:6px; }
   .cal-list { list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:6px; }
@@ -237,6 +239,7 @@
         <button id="cal-prev" title="Previous Month">◀</button>
         <div id="cal-title" class="cal-title"></div>
         <button id="cal-next" title="Next Month">▶</button>
+        <button id="cal-preview-toggle" title="Toggle calendar day image hover previews">Previews: On</button>
       </div>
       <div id="calendar" class="calendar"></div>
       <div id="calendar-details" class="calendar-details"></div>
@@ -1062,6 +1065,10 @@
 
     // Display mode switching
     function setMode(mode) {
+      // Cleanup calendar hover timers if leaving calendar
+      if (currentMode === 'calendar' && mode !== 'calendar') {
+        try { cleanupCalendarHover(); } catch(_) {}
+      }
       currentMode = mode;
       document.body.classList.remove('mode-gantt','mode-calendar','mode-timeline','mode-tree','mode-images');
       document.body.classList.add(`mode-${mode}`);
@@ -1126,6 +1133,8 @@
       return cells;
     }
     function renderCalendar(tasks, monthDate) {
+      // Cleanup previous hover handlers & timers before re-render to avoid leaks
+      try { cleanupCalendarHover(); } catch(_) {}
       const grid = document.getElementById('calendar');
       grid.innerHTML = '';
       const details = document.getElementById('calendar-details');
@@ -1139,6 +1148,7 @@
       const todayKey = dayKey(new Date());
       const monthIdx = monthDate.getMonth();
       const frag = document.createDocumentFragment();
+      const calPreviewOn = (localStorage.getItem('calPreview') !== '0');
       for (const d of cells) {
         const cell = document.createElement('div'); cell.className = 'cal-cell';
         if (d.getMonth() !== monthIdx) cell.classList.add('dim');
@@ -1147,12 +1157,32 @@
         let count = 0; const items = [];
         for (const t of tasks) { if (overlapsDay(t, d)) { count++; items.push(t); } }
         if (count > 0) { const badge = document.createElement('div'); badge.className = 'cal-badge'; badge.textContent = String(count); cell.appendChild(badge); }
-        // Assign first available task image (for hover preview) if any
+        // Assign first available task image (for hover preview) if any (respect user preference)
         try {
-          const withImg = items.find(it => Array.isArray(it.images) && it.images.length && it.images[0].url);
-            if (withImg && withImg.images[0] && withImg.images[0].url) {
-              cell.dataset.img = withImg.images[0].url;
+          if (calPreviewOn) {
+            const imageUrls = [];
+            for (const it of items) {
+              if (Array.isArray(it.images)) {
+                it.images.forEach(im => { if (im && im.url) imageUrls.push(im.url); });
+              }
             }
+            if (imageUrls.length) {
+              // De-dupe while preserving order
+              const seen = new Set();
+              const deduped = [];
+              for (const u of imageUrls) { if (!seen.has(u)) { seen.add(u); deduped.push(u); } }
+              cell.dataset.img = deduped[0];
+              if (deduped.length > 1) cell.dataset.imgList = JSON.stringify(deduped);
+              // Image count badge (camera icon + count) if more than one image
+              const imgBadge = document.createElement('div'); imgBadge.className = 'cal-img-badge';
+              const countSpan = document.createElement('span'); countSpan.textContent = String(deduped.length);
+              // Simple camera SVG inline to avoid external dependency
+              const cam = document.createElementNS('http://www.w3.org/2000/svg','svg'); cam.setAttribute('viewBox','0 0 24 24');
+              const path = document.createElementNS('http://www.w3.org/2000/svg','path'); path.setAttribute('d','M12 9a3 3 0 100 6 3 3 0 000-6zm-3.2-3l.6-1.2A2 2 0 0111.3 4h1.4a2 2 0 011.9 1.1l.6 1.2H18a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2h2.8z'); cam.appendChild(path);
+              imgBadge.appendChild(cam); imgBadge.appendChild(countSpan);
+              cell.appendChild(imgBadge);
+            }
+          }
         } catch(_) {}
         cell.addEventListener('click', () => { renderCalDetails(d, items); });
         frag.appendChild(cell);
@@ -1161,8 +1191,14 @@
       const base = (cells.find(d => dayKey(d) === todayKey) || new Date(monthDate));
       const baseItems = tasks.filter(t => overlapsDay(t, base));
       renderCalDetails(base, baseItems);
-      // Bind hover for calendar grid cells (once)
-      bindCalendarGridHover();
+      // Bind hover only if previews enabled
+      if (calPreviewOn) bindCalendarGridHover();
+    }
+    function cleanupCalendarHover(){
+      const grid = document.getElementById('calendar');
+      if (!grid) return;
+      // Remove dataset flag so new bind can occur; intervals stored in WeakMap are GC'd when cells removed
+      delete grid.dataset.cellHoverBound;
     }
     function renderCalDetails(day, items) {
       const details = document.getElementById('calendar-details');
@@ -1189,6 +1225,15 @@
       const prev = document.getElementById('cal-prev'); const next = document.getElementById('cal-next');
       if (prev) prev.addEventListener('click', () => { if (!calMonth) return; calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()-1, 1); if (cachedTasks) renderCalendar(cachedTasks, calMonth); });
       if (next) next.addEventListener('click', () => { if (!calMonth) return; calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()+1, 1); if (cachedTasks) renderCalendar(cachedTasks, calMonth); });
+      const calPrevBtn = document.getElementById('cal-preview-toggle');
+      function updateCalPrevBtn(){ const on = (localStorage.getItem('calPreview') !== '0'); if (calPrevBtn) calPrevBtn.textContent = 'Previews: ' + (on ? 'On' : 'Off'); }
+      updateCalPrevBtn();
+      if (calPrevBtn) calPrevBtn.addEventListener('click', () => {
+        const cur = (localStorage.getItem('calPreview') !== '0');
+        localStorage.setItem('calPreview', cur ? '0' : '1');
+        updateCalPrevBtn();
+        if (currentMode === 'calendar' && cachedTasks && calMonth) renderCalendar(cachedTasks, calMonth);
+      });
     });
 
     // ---- Timeline view implementation ----
@@ -1467,12 +1512,40 @@
       const grid = document.getElementById('calendar');
       if (!grid || grid.dataset.cellHoverBound === '1') return;
       grid.dataset.cellHoverBound = '1';
+      const cycleTimers = new WeakMap();
+      function stopCycle(cell) {
+        const h = cycleTimers.get(cell);
+        if (h) { clearInterval(h.id); cycleTimers.delete(cell); }
+      }
+      grid.addEventListener('mouseenter', (e) => {
+        const cell = e.target.closest('.cal-cell');
+        if (!cell) return;
+        const listAttr = cell.dataset.imgList;
+        let arr = null;
+        if (listAttr) { try { arr = JSON.parse(listAttr); if (!Array.isArray(arr) || !arr.length) arr=null; } catch(_) { arr=null; } }
+        let url = cell.dataset.img;
+        if (!url && arr && arr.length) url = arr[0];
+        if (!url) return;
+        showHoverPreview(url, e);
+        if (arr && arr.length > 1) {
+          let idx = 0;
+          const intervalId = setInterval(() => {
+            idx = (idx + 1) % arr.length;
+            hoverImgEl && (hoverImgEl.src = arr[idx]);
+          }, 1200);
+          cycleTimers.set(cell, { id: intervalId });
+        }
+      }, true);
       grid.addEventListener('mousemove', (e) => {
         const cell = e.target.closest('.cal-cell');
-        if (!cell || !cell.dataset.img) { hideHoverPreview(); return; }
-        showHoverPreview(cell.dataset.img, e); moveHoverPreview(e);
+        if (!cell || !cell.dataset) { hideHoverPreview(); return; }
+        moveHoverPreview(e);
       });
-      grid.addEventListener('mouseleave', hideHoverPreview);
+      grid.addEventListener('mouseleave', (e) => {
+        const cell = e.target.closest('.cal-cell');
+        if (cell) stopCycle(cell);
+        hideHoverPreview();
+      });
     }
 
     // Timeline hover + click
