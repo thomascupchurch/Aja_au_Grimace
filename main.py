@@ -781,13 +781,17 @@ class ProjectTreeView(QWidget):
         title = QLabel("Project Tree (Horizontal)")
         title.setStyleSheet("font-weight:600; padding:2px 4px;")
         header.addWidget(title)
-        from PyQt5.QtWidgets import QPushButton
+        from PyQt5.QtWidgets import QPushButton, QCheckBox
         fit_btn = QPushButton("Fit")
         refresh_btn = QPushButton("Refresh")
         toggle_img_btn = QPushButton("Previews: On")
+        export_btn = QPushButton("Export")
+        settings_btn = QPushButton("Settings…")
         fit_btn.setToolTip("Fit entire tree in view")
         refresh_btn.setToolTip("Rebuild layout from model")
         toggle_img_btn.setToolTip("Toggle image hover previews")
+        export_btn.setToolTip("Export Project Tree")
+        settings_btn.setToolTip("Open export settings dialog")
         def do_fit():
             if hasattr(self, 'view'):
                 r = self.scene.itemsBoundingRect()
@@ -801,10 +805,39 @@ class ProjectTreeView(QWidget):
         fit_btn.clicked.connect(do_fit)
         refresh_btn.clicked.connect(do_refresh)
         toggle_img_btn.clicked.connect(do_toggle_preview)
+        export_btn.clicked.connect(lambda: self._export_tree())
+        def open_settings():
+            try:
+                dlg = ExportSettingsDialog(self)
+                dlg.exec_()
+            except Exception as e:
+                print(f"Tree export settings failed: {e}")
+        settings_btn.clicked.connect(open_settings)
         header.addStretch(1)
         header.addWidget(fit_btn)
         header.addWidget(refresh_btn)
         header.addWidget(toggle_img_btn)
+        header.addWidget(export_btn)
+        header.addWidget(settings_btn)
+        # Panel visibility toggles
+        self.preview_panel_cb = QCheckBox("Preview")
+        self.minimap_panel_cb = QCheckBox("Minimap")
+        from PyQt5.QtCore import QSettings
+        try:
+            _ps = QSettings('LSI','ProjectApp')
+            pv = _ps.value('TreeShowPreviewPanel', 'true')
+            mm = _ps.value('TreeShowMinimap', 'true')
+            def _b(v):
+                if isinstance(v, bool): return v
+                if isinstance(v, str): return v.lower() in ('1','true','yes','on')
+                return True
+            self.preview_panel_cb.setChecked(_b(pv))
+            self.minimap_panel_cb.setChecked(_b(mm))
+        except Exception:
+            self.preview_panel_cb.setChecked(True)
+            self.minimap_panel_cb.setChecked(True)
+        header.addWidget(self.preview_panel_cb)
+        header.addWidget(self.minimap_panel_cb)
         layout.addLayout(header)
         # Graphics view for nodes
         self.scene = QGraphicsScene()
@@ -849,6 +882,38 @@ class ProjectTreeView(QWidget):
         self._mini_view.setRenderHints(self._mini_view.renderHints())
         mini_layout.addWidget(self._mini_view)
         layout.addWidget(self._mini_frame)
+        # Apply initial visibility
+        try:
+            self.preview_label.setVisible(self.preview_panel_cb.isChecked())
+            self._mini_frame.setVisible(self.minimap_panel_cb.isChecked())
+        except Exception:
+            pass
+        def _persist_panels():
+            try:
+                from PyQt5.QtCore import QSettings
+                _ps = QSettings('LSI','ProjectApp')
+                _ps.setValue('TreeShowPreviewPanel', self.preview_panel_cb.isChecked())
+                _ps.setValue('TreeShowMinimap', self.minimap_panel_cb.isChecked())
+            except Exception:
+                pass
+        def _apply_panel_visibility():
+            show_prev = self.preview_panel_cb.isChecked()
+            show_map = self.minimap_panel_cb.isChecked()
+            # Simple visibility
+            self.preview_label.setVisible(show_prev)
+            self._mini_frame.setVisible(show_map)
+            # Collapse space when hidden
+            if show_prev:
+                self.preview_label.setMaximumHeight(16777215)
+            else:
+                self.preview_label.setMaximumHeight(0)
+            if show_map:
+                self._mini_frame.setMaximumHeight(16777215)
+            else:
+                self._mini_frame.setMaximumHeight(0)
+        _apply_panel_visibility()
+        self.preview_panel_cb.stateChanged.connect(lambda _s: (_apply_panel_visibility(), _persist_panels()))
+        self.minimap_panel_cb.stateChanged.connect(lambda _s: (_apply_panel_visibility(), _persist_panels()))
         self.refresh()
         # Connect viewport + interactions for minimap live updates
         try:
@@ -880,7 +945,13 @@ class ProjectTreeView(QWidget):
                     center_target = QPointF(scene_pt.x()/scale_factor, scene_pt.y()/scale_factor)
                     vr = self.view.mapToScene(self.view.viewport().rect()).boundingRect()
                     new_rect = QRectF(center_target.x() - vr.width()/2, center_target.y() - vr.height()/2, vr.width(), vr.height())
-                    self.view.fitInView(new_rect, Qt.KeepAspectRatio)
+                    try:
+                        if hasattr(self.view, 'smoothFocusRect'):
+                            self.view.smoothFocusRect(new_rect)
+                        else:
+                            self.view.fitInView(new_rect, Qt.KeepAspectRatio)
+                    except Exception:
+                        self.view.fitInView(new_rect, Qt.KeepAspectRatio)
                     self._update_minimap()
                 orig_press(ev)
             from PyQt5.QtCore import QPointF
@@ -1091,7 +1162,14 @@ class ProjectTreeView(QWidget):
                     try:
                         r = item.sceneBoundingRect()
                         if not r.isNull():
-                            self.view.fitInView(r.adjusted(-80,-60,80,60), Qt.KeepAspectRatio)
+                            rect_focus = r.adjusted(-80,-60,80,60)
+                            try:
+                                if hasattr(self.view, 'smoothFocusRect'):
+                                    self.view.smoothFocusRect(rect_focus)
+                                else:
+                                    self.view.fitInView(rect_focus, Qt.KeepAspectRatio)
+                            except Exception:
+                                self.view.fitInView(rect_focus, Qt.KeepAspectRatio)
                     except Exception:
                         pass
                     # preview image
@@ -1300,6 +1378,122 @@ class ProjectTreeView(QWidget):
                 return
         self.preview_label.setText("")
         self.preview_label.clear()
+    # Export tree scene wrapper
+    def _export_tree(self):
+        try:
+            self._export_scene_with_header(self.scene, title='Project Tree')
+        except Exception as e:
+            print(f'Tree export failed: {e}')
+    # Simple reuse: delegate to Gantt export implementation style if available else fallback
+    def _export_scene_with_header(self, scene, title='Export'):
+        # Minimal reuse by instantiating a temporary GanttChartView exporter if complexity grows; for now simple call to existing logic
+        from PyQt5.QtCore import QSettings
+        from PyQt5.QtGui import QPainter, QPixmap
+        from PyQt5.QtWidgets import QFileDialog, QApplication
+        import os
+        s = QSettings('LSI','ProjectPlanner')
+        pref_format = s.value('Export/format','PNG')
+        ml = float(s.value('Export/margin_left_mm',8.0)); mt = float(s.value('Export/margin_top_mm',8.0)); mr = float(s.value('Export/margin_right_mm',8.0)); mb = float(s.value('Export/margin_bottom_mm',8.0))
+        include_header = s.value('Export/include_header', True)
+        if isinstance(include_header, str): include_header = include_header.lower() in ('1','true','yes','on')
+        init_name = f"{title.lower().replace(' ','_')}.{ 'pdf' if pref_format=='PDF' else 'png'}"
+        filters = 'PDF Files (*.pdf);;PNG Files (*.png)' if pref_format=='PDF' else 'PNG Files (*.png);;PDF Files (*.pdf)'
+        path, chosen = QFileDialog.getSaveFileName(self, f'Export {title}', init_name, filters)
+        if not path: return
+        rect = scene.sceneRect().toRect()
+        if rect.isEmpty():
+            print('Scene empty; abort export.')
+            return
+        is_pdf = path.lower().endswith('.pdf') or (chosen and 'PDF' in chosen and not path.lower().endswith('.png'))
+        if is_pdf and not path.lower().endswith('.pdf'): path += '.pdf'
+        if (not is_pdf) and not path.lower().endswith('.png'): path += '.png'
+        header_path = resolve_resource_path('header.png')
+        header_pixmap = QPixmap(header_path) if os.path.exists(header_path) else None
+        svg_path = resolve_resource_path('header.svg')
+        header_is_svg=False; header_svg_renderer=None
+        try:
+            if os.path.exists(svg_path):
+                from PyQt5.QtSvg import QSvgRenderer
+                r = QSvgRenderer(svg_path)
+                if r.isValid():
+                    header_is_svg=True; header_svg_renderer=r
+        except Exception: pass
+        if is_pdf:
+            from PyQt5.QtPrintSupport import QPrinter
+            from PyQt5.QtCore import QMarginsF, QRectF
+            from math import ceil
+            printer = QPrinter(QPrinter.HighResolution)
+            printer.setOutputFileName(path)
+            printer.setOutputFormat(QPrinter.PdfFormat)
+            # Use page size/orientation from settings
+            page_size = s.value('Export/page_size','A4'); orientation = s.value('Export/orientation','Portrait')
+            size_map={'A4':QPrinter.A4,'Letter':QPrinter.Letter,'Legal':QPrinter.Legal,'Tabloid':QPrinter.Tabloid}
+            printer.setPaperSize(size_map.get(page_size, QPrinter.A4))
+            printer.setOrientation(QPrinter.Portrait if orientation=='Portrait' else QPrinter.Landscape)
+            try: printer.setPageMargins(QMarginsF(ml,mt,mr,mb))
+            except Exception: pass
+            painter = QPainter(printer)
+            page_rect = printer.pageRect(); y_offset=0
+            def _svg_h(renderer, tw):
+                try:
+                    ds=renderer.defaultSize(); w,h=ds.width(), ds.height();
+                    if w<=0 or h<=0: vb=renderer.viewBoxF(); w,h=vb.width(), vb.height();
+                    if w>0 and h>0 and tw>0: return int(round(h*(tw/w)))
+                except Exception: return None
+                return None
+            if include_header:
+                if header_is_svg and header_svg_renderer:
+                    tw=page_rect.width(); hh=_svg_h(header_svg_renderer, tw)
+                    if hh:
+                        header_svg_renderer.render(painter, QRectF(0,0,tw,hh)); y_offset=hh+10
+                    elif header_pixmap and not header_pixmap.isNull():
+                        sh=header_pixmap.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); y_offset=sh.height()+10
+                elif header_pixmap and not header_pixmap.isNull():
+                    sh=header_pixmap.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); y_offset=sh.height()+10
+            avail_h=max(1,page_rect.height()-y_offset); scale=avail_h/rect.height(); from math import ceil
+            scaled_total_w=max(1.0, rect.width()*scale); cols=max(1,int(ceil(scaled_total_w/page_rect.width())))
+            for col in range(cols):
+                if col>0:
+                    printer.newPage()
+                    if include_header:
+                        if header_is_svg and header_svg_renderer:
+                            tw=page_rect.width(); hh=_svg_h(header_svg_renderer, tw)
+                            if hh: header_svg_renderer.render(painter, QRectF(0,0,tw,hh))
+                            elif header_pixmap and not header_pixmap.isNull():
+                                sh=header_pixmap.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh)
+                        elif header_pixmap and not header_pixmap.isNull():
+                            sh=header_pixmap.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh)
+                painter.save(); painter.translate(0,y_offset); painter.scale(scale,scale)
+                source_x=(col*page_rect.width())/scale
+                scene.render(painter, target=QRectF(0,0,page_rect.width(), rect.height()*scale), source=QRectF(source_x,0,page_rect.width()/scale, rect.height()))
+                painter.restore()
+            painter.end(); print(f'Exported PDF -> {path}'); return
+        # PNG branch
+        screen = QApplication.primaryScreen(); dpi = screen.logicalDotsPerInch() if screen else 96.0
+        def mm_to_px(mm): return int(round((mm/25.4)*dpi))
+        pad_l,pad_t,pad_r,pad_b=[mm_to_px(v) for v in (ml,mt,mr,mb)]
+        content_pix = QPixmap(rect.width()+pad_l+pad_r, rect.height()+pad_t+pad_b); content_pix.fill()
+        painter = QPainter(content_pix); painter.translate(pad_l,pad_t); scene.render(painter); painter.end()
+        if not include_header:
+            content_pix.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
+        # Combine with header (pref SVG)
+        if header_is_svg and header_svg_renderer:
+            def _svg_h(renderer, tw):
+                try:
+                    ds=renderer.defaultSize(); w,h=ds.width(), ds.height();
+                    if w<=0 or h<=0: vb=renderer.viewBoxF(); w,h=vb.width(), vb.height();
+                    if w>0 and h>0 and tw>0: return int(round(h*(tw/w)))
+                except Exception: return None
+                return None
+            tw = content_pix.width(); hh=_svg_h(header_svg_renderer, tw)
+            if hh:
+                combo = QPixmap(tw, hh+content_pix.height()); combo.fill(); painter=QPainter(combo)
+                from PyQt5.QtCore import QRectF
+                header_svg_renderer.render(painter, QRectF(0,0,tw,hh)); painter.drawPixmap(0,hh,content_pix); painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
+        if header_pixmap and not header_pixmap.isNull():
+            cw = max(header_pixmap.width(), content_pix.width()); combo = QPixmap(cw, header_pixmap.height()+content_pix.height()); combo.fill()
+            painter = QPainter(combo); hx=(cw-header_pixmap.width())//2; painter.drawPixmap(hx,0, header_pixmap); painter.drawPixmap(0, header_pixmap.height(), content_pix); painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
+        content_pix.save(path,'PNG'); print(f'Exported PNG -> {path}')
 
 
 # Add a custom QGraphicsView subclass for zooming
