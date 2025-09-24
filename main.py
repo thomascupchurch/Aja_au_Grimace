@@ -68,6 +68,78 @@ def save_holiday_dates(dates):
     except Exception:
         pass
 
+# --- Export Settings Dialog (format/page size/orientation/margins) ---
+class ExportSettingsDialog(QDialog):
+    """Persistent export settings used by PNG/PDF exports.
+    Stored under QSettings("LSI", "ProjectPlanner") with keys:
+      Export/format -> 'PNG' | 'PDF'
+      Export/page_size -> 'A4' | 'Letter' | 'Legal' | 'Tabloid'
+      Export/orientation -> 'Portrait' | 'Landscape'
+      Export/margin_left_mm, Export/margin_top_mm, Export/margin_right_mm, Export/margin_bottom_mm (float mm)
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from PyQt5.QtWidgets import QFormLayout, QComboBox, QDialogButtonBox
+        from PyQt5.QtWidgets import QDoubleSpinBox
+        from PyQt5.QtCore import QSettings
+        self.setWindowTitle("Export Settings")
+        self.resize(380, 220)
+        self.form = QFormLayout(self)
+        self.format_combo = QComboBox(); self.format_combo.addItems(["PNG", "PDF"]) 
+        self.size_combo = QComboBox(); self.size_combo.addItems(["A4", "Letter", "Legal", "Tabloid"]) 
+        self.orientation_combo = QComboBox(); self.orientation_combo.addItems(["Portrait", "Landscape"]) 
+        def mkspin():
+            sb = QDoubleSpinBox(); sb.setRange(0.0, 50.0); sb.setDecimals(1); sb.setSingleStep(0.5); sb.setSuffix(" mm"); return sb
+        self.margin_left = mkspin(); self.margin_top = mkspin(); self.margin_right = mkspin(); self.margin_bottom = mkspin()
+        self.form.addRow("Format", self.format_combo)
+        self.form.addRow("Page Size (PDF)", self.size_combo)
+        self.form.addRow("Orientation (PDF)", self.orientation_combo)
+        self.form.addRow("Left Margin", self.margin_left)
+        self.form.addRow("Top Margin", self.margin_top)
+        self.form.addRow("Right Margin", self.margin_right)
+        self.form.addRow("Bottom Margin", self.margin_bottom)
+        # Buttons
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        self.form.addRow(self.buttons)
+        # Load settings
+        s = QSettings("LSI", "ProjectPlanner")
+        fmt = s.value("Export/format", "PNG")
+        ps = s.value("Export/page_size", "A4")
+        orient = s.value("Export/orientation", "Portrait")
+        ml = float(s.value("Export/margin_left_mm", 8.0))
+        mt = float(s.value("Export/margin_top_mm", 8.0))
+        mr = float(s.value("Export/margin_right_mm", 8.0))
+        mb = float(s.value("Export/margin_bottom_mm", 8.0))
+        self.format_combo.setCurrentText(fmt if fmt in ("PNG","PDF") else "PNG")
+        if ps not in ("A4","Letter","Legal","Tabloid"): ps = "A4"
+        self.size_combo.setCurrentText(ps)
+        if orient not in ("Portrait","Landscape"): orient = "Portrait"
+        self.orientation_combo.setCurrentText(orient)
+        self.margin_left.setValue(ml); self.margin_top.setValue(mt); self.margin_right.setValue(mr); self.margin_bottom.setValue(mb)
+        # Disable PDF-only fields when PNG selected
+        def update_pdf_only():
+            is_pdf = (self.format_combo.currentText() == "PDF")
+            self.size_combo.setEnabled(is_pdf)
+            self.orientation_combo.setEnabled(is_pdf)
+        self.format_combo.currentTextChanged.connect(lambda _: update_pdf_only())
+        update_pdf_only()
+    def accept(self):
+        try:
+            from PyQt5.QtCore import QSettings
+            s = QSettings("LSI", "ProjectPlanner")
+            s.setValue("Export/format", self.format_combo.currentText())
+            s.setValue("Export/page_size", self.size_combo.currentText())
+            s.setValue("Export/orientation", self.orientation_combo.currentText())
+            s.setValue("Export/margin_left_mm", float(self.margin_left.value()))
+            s.setValue("Export/margin_top_mm", float(self.margin_top.value()))
+            s.setValue("Export/margin_right_mm", float(self.margin_right.value()))
+            s.setValue("Export/margin_bottom_mm", float(self.margin_bottom.value()))
+        except Exception:
+            pass
+        return super().accept()
+
 class ImageCellWidget(QWidget):
     def __init__(self, parent, row, col, model, on_data_changed=None):
         super().__init__(parent)
@@ -1219,6 +1291,7 @@ class GanttChartView(QWidget):
     def _export_scene_with_header(self, scene, title="Export"):
         from PyQt5.QtGui import QPainter
         import os
+        from PyQt5.QtCore import QSettings
         # Prefer SVG header from repo root; fallback to PNG
         svg_path = resolve_resource_path("header.svg")
         header_is_svg = False
@@ -1233,15 +1306,31 @@ class GanttChartView(QWidget):
         except Exception:
             header_is_svg = False
             header_svg_renderer = None
-        # Ask for target format (PNG or PDF)
-        path, _ = QFileDialog.getSaveFileName(self, f"Export {title}", f"{title.lower().replace(' ', '_')}.png", "PNG Files (*.png);;PDF Files (*.pdf)")
+        # Read persisted export settings
+        s = QSettings("LSI", "ProjectPlanner")
+        pref_format = s.value("Export/format", "PNG")
+        page_size = s.value("Export/page_size", "A4")
+        orientation = s.value("Export/orientation", "Portrait")
+        ml = float(s.value("Export/margin_left_mm", 8.0))
+        mt = float(s.value("Export/margin_top_mm", 8.0))
+        mr = float(s.value("Export/margin_right_mm", 8.0))
+        mb = float(s.value("Export/margin_bottom_mm", 8.0))
+        # Ask for target path with default filter based on preferred format
+        init_name = f"{title.lower().replace(' ', '_')}.{ 'pdf' if pref_format=='PDF' else 'png' }"
+        filters = "PDF Files (*.pdf);;PNG Files (*.png)" if pref_format=="PDF" else "PNG Files (*.png);;PDF Files (*.pdf)"
+        path, chosen = QFileDialog.getSaveFileName(self, f"Export {title}", init_name, filters)
         if not path:
             return
         rect = scene.sceneRect().toRect()
         if rect.isEmpty():
             print("Scene is empty; nothing to export.")
             return
-        is_pdf = path.lower().endswith('.pdf')
+        # Respect chosen filter if extension missing/mismatch
+        is_pdf = path.lower().endswith('.pdf') or (chosen and 'PDF' in chosen and not path.lower().endswith('.png'))
+        if is_pdf and not path.lower().endswith('.pdf'):
+            path += '.pdf'
+        if (not is_pdf) and not path.lower().endswith('.png'):
+            path += '.png'
         header_path = resolve_resource_path("header.png")
         header_pixmap = QPixmap(header_path) if os.path.exists(header_path) else None
         if is_pdf:
@@ -1252,16 +1341,40 @@ class GanttChartView(QWidget):
             printer = QPrinter(QPrinter.HighResolution)
             printer.setOutputFileName(path)
             printer.setOutputFormat(QPrinter.PdfFormat)
+            # Page size mapping
+            size_map = {
+                'A4': QPrinter.A4,
+                'Letter': QPrinter.Letter,
+                'Legal': QPrinter.Legal,
+                'Tabloid': QPrinter.Tabloid,
+            }
+            printer.setPaperSize(size_map.get(page_size, QPrinter.A4))
+            printer.setOrientation(QPrinter.Portrait if orientation == 'Portrait' else QPrinter.Landscape)
             painter = QPainter(printer)
+            # Apply margins (mm)
+            from PyQt5.QtCore import QMarginsF
+            try:
+                m = QMarginsF(ml, mt, mr, mb)
+                printer.setPageMargins(m)
+            except Exception:
+                pass
             page_rect = printer.pageRect()
             y_offset = 0
             # Draw header (SVG preferred)
+            def _svg_header_h(renderer, target_w):
+                try:
+                    ds = renderer.defaultSize(); w, h = ds.width(), ds.height()
+                    if w <= 0 or h <= 0:
+                        vb = renderer.viewBoxF(); w, h = vb.width(), vb.height()
+                    if w > 0 and h > 0 and target_w > 0:
+                        return int(round(h * (target_w / w)))
+                except Exception:
+                    return None
+                return None
             if header_is_svg and header_svg_renderer:
-                ds = header_svg_renderer.defaultSize()
                 target_w = page_rect.width()
-                # Guard against zero size SVGs
-                if ds.width() > 0 and ds.height() > 0:
-                    header_h = int(round(ds.height() * (target_w / ds.width())))
+                header_h = _svg_header_h(header_svg_renderer, target_w)
+                if header_h:
                     target_rect = QRectF(0, 0, target_w, header_h)
                     header_svg_renderer.render(painter, target_rect)
                     y_offset = header_h + 10
@@ -1284,10 +1397,9 @@ class GanttChartView(QWidget):
                     printer.newPage()
                     # Repaint header on each page
                     if header_is_svg and header_svg_renderer:
-                        ds = header_svg_renderer.defaultSize()
                         target_w = page_rect.width()
-                        if ds.width() > 0 and ds.height() > 0:
-                            header_h = int(round(ds.height() * (target_w / ds.width())))
+                        header_h = _svg_header_h(header_svg_renderer, target_w)
+                        if header_h:
                             target_rect = QRectF(0, 0, target_w, header_h)
                             header_svg_renderer.render(painter, target_rect)
                         elif header_pixmap and not header_pixmap.isNull():
@@ -1309,17 +1421,33 @@ class GanttChartView(QWidget):
             print(f"Exported PDF -> {path}")
             return
         # Raster export (PNG)
-        content_pixmap = QPixmap(rect.size())
+        # Create content pixmap with margins (convert mm to px using screen DPI)
+        screen = QApplication.primaryScreen()
+        dpi = screen.logicalDotsPerInch() if screen else 96.0
+        def mm_to_px(mm):
+            return int(round((mm / 25.4) * dpi))
+        pad_l, pad_t, pad_r, pad_b = mm_to_px(ml), mm_to_px(mt), mm_to_px(mr), mm_to_px(mb)
+        content_pixmap = QPixmap(rect.width() + pad_l + pad_r, rect.height() + pad_t + pad_b)
         content_pixmap.fill()
         painter = QPainter(content_pixmap)
+        painter.translate(pad_l, pad_t)
         scene.render(painter)
         painter.end()
         # Compose header + content into a single pixmap (header centered)
         if header_is_svg and header_svg_renderer:
-            ds = header_svg_renderer.defaultSize()
             target_w = content_pixmap.width()
-            if ds.width() > 0 and ds.height() > 0 and target_w > 0:
-                header_h = int(round(ds.height() * (target_w / ds.width())))
+            def _svg_header_h(renderer, target_w):
+                try:
+                    ds = renderer.defaultSize(); w, h = ds.width(), ds.height()
+                    if w <= 0 or h <= 0:
+                        vb = renderer.viewBoxF(); w, h = vb.width(), vb.height()
+                    if w > 0 and h > 0 and target_w > 0:
+                        return int(round(h * (target_w / w)))
+                except Exception:
+                    return None
+                return None
+            header_h = _svg_header_h(header_svg_renderer, target_w)
+            if header_h:
                 combined_width = max(target_w, content_pixmap.width())
                 combined_height = header_h + content_pixmap.height()
                 combined = QPixmap(combined_width, combined_height)
@@ -1383,6 +1511,17 @@ class GanttChartView(QWidget):
         export_btn = QPushButton("Export Gantt Chart")
         export_btn.clicked.connect(self.export_gantt_chart)
         layout.addWidget(export_btn)
+
+        # Export Settings button
+        settings_btn = QPushButton("Export Settings…")
+        def open_settings():
+            try:
+                dlg = ExportSettingsDialog(self)
+                dlg.exec_()
+            except Exception as e:
+                print(f"Open Export Settings failed: {e}")
+        settings_btn.clicked.connect(open_settings)
+        layout.addWidget(settings_btn)
 
         # Refresh button
         refresh_btn = QPushButton("Refresh Gantt Chart")
@@ -3456,23 +3595,119 @@ class MainWindow(QMainWindow):
 
             self.model = model
 
-            # Header with centered header.png image
+            # Header with centered header.svg preferred (PNG fallback)
             header_layout = QHBoxLayout()
+            # Eliminate extra margins/spacing around the header row
+            header_layout.setContentsMargins(0, 0, 0, 0)
+            header_layout.setSpacing(0)
             header_layout.addStretch(1)
-            header_label = QLabel()
-            import sys
-            if getattr(sys, 'frozen', False):
-                header_path = os.path.join(os.path.dirname(sys.executable), "header.png")
-            else:
-                header_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "header.png")
-            if os.path.exists(header_path):
-                header_pixmap = QPixmap(header_path)
-                # Double the previous height: 64 -> 128
-                header_label.setPixmap(header_pixmap.scaledToHeight(128, Qt.SmoothTransformation))
-            else:
-                header_label.setText("[header.png not found]")
-            header_layout.addWidget(header_label, alignment=Qt.AlignCenter)
+            header_widget = None
+            # Keep references for dynamic resize
+            self._header_widget = None
+            self._header_is_svg = False
+            self._header_svg_renderer = None
+            self._header_png_pixmap = None
+            self._header_aspect = None  # width / height (unused after trim logic, retained for fallback)
+            self._header_label = None  # QLabel used to display trimmed pixmap
+            try:
+                svg_path = resolve_resource_path("header.svg")
+                png_path = resolve_resource_path("header.png")
+                used_svg = False
+                if svg_path and os.path.exists(svg_path):
+                    try:
+                        from PyQt5.QtSvg import QSvgRenderer  # type: ignore
+                        renderer = QSvgRenderer(svg_path)
+                        if renderer.isValid():
+                            # Use a QLabel + pixmap rendered from SVG and trimmed of transparent margins
+                            lbl = QLabel()
+                            try:
+                                lbl.setStyleSheet("background: transparent; margin:0; padding:0; border:0;")
+                                lbl.setAttribute(Qt.WA_TranslucentBackground, True)
+                            except Exception:
+                                pass
+                            header_widget = lbl
+                            used_svg = True
+                            # Save for dynamic resizing
+                            self._header_widget = lbl
+                            self._header_label = lbl
+                            self._header_is_svg = True
+                            self._header_svg_renderer = renderer
+                    except Exception:
+                        used_svg = False
+                if not used_svg:
+                    lbl = QLabel()
+                    if png_path and os.path.exists(png_path):
+                        pm = QPixmap(png_path)
+                        # Store pixmap; dynamic resize will render trimmed version
+                        self._header_png_pixmap = pm
+                    else:
+                        lbl.setText("[header.svg/.png not found]")
+                    header_widget = lbl
+                    # Save for dynamic resizing
+                    self._header_widget = lbl
+                    self._header_label = lbl
+                    self._header_is_svg = False
+                    self._header_aspect = (pm.width()/pm.height()) if 'pm' in locals() and pm and not pm.isNull() and pm.height() > 0 else 4.0
+            except Exception:
+                # Final fallback
+                lbl = QLabel("[header load error]")
+                header_widget = lbl
+                self._header_widget = lbl
+                self._header_is_svg = False
+                self._header_aspect = 4.0
+            # Ensure the header widget itself has no padding/margins/border
+            try:
+                header_widget.setStyleSheet("margin:0px; padding:0px; border:0px;")
+            except Exception:
+                pass
+            # Center column: logo on top, inline menu bar below
+            try:
+                from PyQt5.QtWidgets import QMenuBar
+                center_col = QVBoxLayout()
+                center_col.setContentsMargins(0, 0, 0, 0)
+                center_col.setSpacing(0)
+                center_col.addWidget(header_widget, alignment=Qt.AlignCenter)
+                self.inline_menu = QMenuBar()
+                # Platform-specific compact styling
+                import sys
+                if sys.platform.startswith('win') or sys.platform.startswith('linux'):
+                    self.inline_menu.setStyleSheet(
+                        "QMenuBar { margin:0px; padding:0px 6px; spacing:0px; background-color:#4B4B4B; color:#FF8200; }"
+                        "QMenuBar::item { margin:0px; padding:2px 8px; background:transparent; }"
+                        "QMenuBar::item:selected { background:#333333; }"
+                        "QMenu { margin:0px; padding:2px 0px; background-color:#333333; color:#FF8200; }"
+                        "QMenu::item { padding:4px 16px; }"
+                        "QMenu::separator { height:1px; background:#555; margin:2px 0; }"
+                    )
+                    self.inline_menu.setFixedHeight(22)
+                elif sys.platform == 'darwin':
+                    # Compact style mainly affects popup menus
+                    self.inline_menu.setStyleSheet(
+                        "QMenuBar { margin:0px; padding:0px 6px; spacing:0px; background-color:#4B4B4B; color:#FF8200; }"
+                        "QMenuBar::item { margin:0px; padding:2px 8px; background:transparent; }"
+                        "QMenuBar::item:selected { background:#333333; }"
+                        "QMenu { margin:0px; padding:2px 0px; background-color:#333333; color:#FF8200; }"
+                        "QMenu::item { padding:4px 16px; }"
+                        "QMenu::separator { height:1px; background:#555; margin:2px 0; }"
+                    )
+                    self.inline_menu.setFixedHeight(22)
+                tools_menu_inline = self.inline_menu.addMenu("Tools")
+                act_open = tools_menu_inline.addAction("Open Data Folder")
+                act_open.triggered.connect(self.open_data_folder)
+                act_holidays = tools_menu_inline.addAction("Manage Holidays…")
+                act_holidays.triggered.connect(self._open_holidays_manager)
+                center_col.addWidget(self.inline_menu, alignment=Qt.AlignCenter)
+                header_layout.addLayout(center_col)
+            except Exception:
+                # Fallback to just adding the header widget centered
+                header_layout.addWidget(header_widget, alignment=Qt.AlignCenter)
             header_layout.addStretch(1)
+
+            # Controls row (separate from header row so the logo stays perfectly centered)
+            controls_layout = QHBoxLayout()
+            controls_layout.setContentsMargins(0, 0, 0, 0)
+            controls_layout.setSpacing(6)
+            controls_layout.addStretch(1)
 
             # Search / Jump field (affects Gantt view)
             from PyQt5.QtWidgets import QLineEdit, QPushButton
@@ -3499,8 +3734,8 @@ class MainWindow(QMainWindow):
                     self.gantt_chart_view.highlight_bar(match_name)
             jump_btn.clicked.connect(do_jump)
             self.search_input.returnPressed.connect(do_jump)
-            header_layout.addWidget(self.search_input)
-            header_layout.addWidget(jump_btn)
+            controls_layout.addWidget(self.search_input)
+            controls_layout.addWidget(jump_btn)
 
             # Reload after sync button
             reload_btn = QPushButton("Reload")
@@ -3519,7 +3754,12 @@ class MainWindow(QMainWindow):
                     except Exception:
                         pass
             reload_btn.clicked.connect(do_reload)
-            header_layout.addWidget(reload_btn)
+            controls_layout.addWidget(reload_btn)
+
+            # Holidays button (so we can hide menu bar and still access this)
+            holidays_btn = QPushButton("Holidays…")
+            holidays_btn.clicked.connect(self._open_holidays_manager)
+            controls_layout.addWidget(holidays_btn)
 
             # --- Filter Panel Dock (collapsible) ---
             from PyQt5.QtWidgets import QDockWidget, QWidget as _QW, QVBoxLayout as _QVBox, QLabel as _QL, QCheckBox, QGroupBox, QHBoxLayout as _QHBox, QLineEdit as _QLE, QPushButton as _QPB
@@ -3674,8 +3914,15 @@ class MainWindow(QMainWindow):
 
             # Layout
             main_layout = QVBoxLayout()
+            # Eliminate extra margins/spacing in the main layout as well
+            main_layout.setContentsMargins(0, 0, 0, 0)
+            main_layout.setSpacing(0)
             main_layout.addLayout(header_layout)
+            # Add controls row under the centered logo/menu
+            main_layout.addLayout(controls_layout)
             content_layout = QHBoxLayout()
+            content_layout.setContentsMargins(0, 0, 0, 0)
+            content_layout.setSpacing(0)
             content_layout.addWidget(self.sidebar)
             content_layout.addWidget(self.views, 1)
             main_layout.addLayout(content_layout)
@@ -3689,6 +3936,12 @@ class MainWindow(QMainWindow):
             container = QWidget()
             container.setLayout(main_layout)
             self.setCentralWidget(container)
+
+            # Initial header sizing based on current window size
+            try:
+                self._resize_header()
+            except Exception:
+                pass
 
             # Status bar with DB info + quick action
             from PyQt5.QtWidgets import QStatusBar, QPushButton as _QBtn
@@ -3706,12 +3959,16 @@ class MainWindow(QMainWindow):
             sb.addPermanentWidget(self.open_folder_btn, 0)
             self._update_db_status()
 
-            # Basic Tools menu
+            # Basic Tools menu (keep hidden to avoid extra top padding – use inline menu below the logo)
             mb = self.menuBar(); tools_menu = mb.addMenu("Tools")
             act = tools_menu.addAction("Open Data Folder")
             act.triggered.connect(self.open_data_folder)
             act2 = tools_menu.addAction("Manage Holidays…")
             act2.triggered.connect(self._open_holidays_manager)
+            try:
+                mb.setVisible(False)
+            except Exception:
+                pass
 
             # Now that all views are constructed, connect sidebar signals and set current row
             self.sidebar.currentRowChanged.connect(self.display_view)
@@ -3801,6 +4058,183 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         super().closeEvent(event)
+
+    # --- Dynamic header resize to fit window and eliminate cushion ---
+    def _resize_header(self):
+        try:
+            if not getattr(self, '_header_widget', None):
+                return
+            # Allow the logo to use nearly full window width
+            max_w = max(1, int(self.width() * 0.98))
+            # Make the logo taller without distorting: use a larger fraction of window height (cap kept reasonable)
+            target_h = max(128, min(int(self.height() * 0.22), 360))
+            # Helper: trim transparent borders
+            def trim_transparent(pixmap: QPixmap) -> QPixmap:
+                try:
+                    if pixmap.isNull():
+                        return pixmap
+                    from PyQt5.QtGui import QImage
+                    img = pixmap.toImage().convertToFormat(QImage.Format_ARGB32_Premultiplied)
+                    w, h = img.width(), img.height()
+                    left, right, top, bottom = 0, w - 1, 0, h - 1
+                    # scan top
+                    found = False
+                    for y in range(h):
+                        for x in range(w):
+                            if img.pixelColor(x, y).alpha() > 0:
+                                top = y; found = True; break
+                        if found: break
+                    # scan bottom
+                    found = False
+                    for y in range(h - 1, -1, -1):
+                        for x in range(w):
+                            if img.pixelColor(x, y).alpha() > 0:
+                                bottom = y; found = True; break
+                        if found: break
+                    # scan left
+                    found = False
+                    for x in range(w):
+                        for y in range(h):
+                            if img.pixelColor(x, y).alpha() > 0:
+                                left = x; found = True; break
+                        if found: break
+                    # scan right
+                    found = False
+                    for x in range(w - 1, -1, -1):
+                        for y in range(h):
+                            if img.pixelColor(x, y).alpha() > 0:
+                                right = x; found = True; break
+                        if found: break
+                    if right >= left and bottom >= top:
+                        from PyQt5.QtCore import QRect
+                        cropped = img.copy(QRect(left, top, right - left + 1, bottom - top + 1))
+                        pm2 = QPixmap.fromImage(cropped)
+                        return pm2
+                except Exception:
+                    pass
+                return pixmap
+            # Helper: trim uniform color margins (e.g., solid white padding) with tolerance, without touching content
+            def trim_uniform_color(pixmap: QPixmap, tol: int = 10) -> QPixmap:
+                try:
+                    if pixmap.isNull():
+                        return pixmap
+                    from PyQt5.QtGui import QImage
+                    img = pixmap.toImage().convertToFormat(QImage.Format_ARGB32_Premultiplied)
+                    w, h = img.width(), img.height()
+                    if w <= 2 or h <= 2:
+                        return pixmap
+                    # Determine background color from corners (require near-equality across corners)
+                    c00 = img.pixelColor(0, 0)
+                    c10 = img.pixelColor(w - 1, 0)
+                    c01 = img.pixelColor(0, h - 1)
+                    c11 = img.pixelColor(w - 1, h - 1)
+                    cols = [c00, c10, c01, c11]
+                    def close(a, b):
+                        return abs(a.red() - b.red()) <= tol and abs(a.green() - b.green()) <= tol and abs(a.blue() - b.blue()) <= tol and abs(a.alpha() - b.alpha()) <= tol
+                    if not (close(c00, c10) and close(c00, c01) and close(c00, c11)):
+                        return pixmap  # not a uniform border color
+                    bg = c00
+                    def is_bg(col):
+                        return abs(col.red() - bg.red()) <= tol and abs(col.green() - bg.green()) <= tol and abs(col.blue() - bg.blue()) <= tol and abs(col.alpha() - bg.alpha()) <= tol
+                    # Scan top
+                    top = 0
+                    for y in range(h):
+                        if any(not is_bg(img.pixelColor(x, y)) for x in range(w)):
+                            top = y
+                            break
+                    # Scan bottom
+                    bottom = h - 1
+                    for y in range(h - 1, -1, -1):
+                        if any(not is_bg(img.pixelColor(x, y)) for x in range(w)):
+                            bottom = y
+                            break
+                    # Scan left
+                    left = 0
+                    for x in range(w):
+                        if any(not is_bg(img.pixelColor(x, y)) for y in range(h)):
+                            left = x
+                            break
+                    # Scan right
+                    right = w - 1
+                    for x in range(w - 1, -1, -1):
+                        if any(not is_bg(img.pixelColor(x, y)) for y in range(h)):
+                            right = x
+                            break
+                    # Keep a tiny guard margin of 1px to avoid clipping anti-aliased edges
+                    left = max(0, left - 1)
+                    top = max(0, top - 1)
+                    right = min(w - 1, right + 1)
+                    bottom = min(h - 1, bottom + 1)
+                    if right > left and bottom > top:
+                        from PyQt5.QtCore import QRect
+                        cropped = img.copy(QRect(left, top, right - left + 1, bottom - top + 1))
+                        return QPixmap.fromImage(cropped)
+                except Exception:
+                    return pixmap
+                return pixmap
+            if self._header_is_svg:
+                # Render SVG to a pixmap at target height, trim transparent, then optionally crop percent
+                try:
+                    from PyQt5.QtGui import QPainter
+                    r = self._header_svg_renderer
+                    ds = r.defaultSize(); w, h = ds.width(), ds.height()
+                    if w <= 0 or h <= 0:
+                        vb = r.viewBoxF(); w, h = vb.width(), vb.height()
+                    if w <= 0 or h <= 0:
+                        w, h = 800, 200
+                    scale = target_h / float(h)
+                    render_w = max(1, int(round(w * scale)))
+                    render_h = max(1, int(round(h * scale)))
+                    pm = QPixmap(render_w, render_h)
+                    pm.fill(Qt.transparent)
+                    p = QPainter(pm)
+                    r.render(p)
+                    p.end()
+                    # Trim transparent borders; if minimal effect, try uniform color border trim (e.g., solid white)
+                    pm_trim = trim_transparent(pm)
+                    if pm_trim.width() >= pm.width() * 0.98 and pm_trim.height() >= pm.height() * 0.98:
+                        pm_trim = trim_uniform_color(pm_trim, 10)
+                    # Enforce width cap
+                    if pm_trim.width() > max_w:
+                        pm_trim = pm_trim.scaled(max_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    if getattr(self, '_header_label', None):
+                        try:
+                            from PyQt5.QtWidgets import QSizePolicy
+                            self._header_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                            self._header_label.setAlignment(Qt.AlignCenter)
+                        except Exception:
+                            pass
+                        self._header_label.setPixmap(pm_trim)
+                        self._header_label.setFixedHeight(target_h)
+                except Exception:
+                    # Fallback: just set height of widget
+                    self._header_widget.setFixedHeight(target_h)
+            else:
+                # For PNG fallback, trim/crop and scale
+                pm = getattr(self, '_header_png_pixmap', None)
+                if pm and not pm.isNull():
+                    pm2 = trim_transparent(pm)
+                    if pm2.width() >= pm.width() * 0.98 and pm2.height() >= pm.height() * 0.98:
+                        pm2 = trim_uniform_color(pm2, 10)
+                    pm2 = pm2.scaled(max_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    if getattr(self, '_header_label', None):
+                        try:
+                            from PyQt5.QtWidgets import QSizePolicy
+                            self._header_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                            self._header_label.setAlignment(Qt.AlignCenter)
+                        except Exception:
+                            pass
+                        self._header_label.setPixmap(pm2)
+                        self._header_label.setFixedHeight(target_h)
+        except Exception:
+            pass
+
+    def resizeEvent(self, event):
+        try:
+            self._resize_header()
+        except Exception:
+            pass
+        return super().resizeEvent(event)
 
 # ------------------------------------------------------------
 # Application Entry Point (was missing; caused immediate exit)
