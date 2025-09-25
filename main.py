@@ -818,10 +818,18 @@ class ProjectTreeView(QWidget):
             try:
                 if hasattr(self, 'view') and hasattr(self.view, 'resetZoom'):
                     self.view.resetZoom()
-                # Fit the entire scene after resetting
-                r = self.scene.itemsBoundingRect()
-                if not r.isNull():
-                    self.view.fitInView(r.adjusted(-40,-40,40,40), Qt.KeepAspectRatio)
+                # Fit to deterministic default rectangle (captured on first refresh)
+                target_rect = getattr(self, '_initial_view_rect', None)
+                if target_rect is None or target_rect.isNull():
+                    # fallback to current scene rect with padding
+                    r = self.scene.sceneRect()
+                    if not r.isNull():
+                        target_rect = r
+                if target_rect is not None and not target_rect.isNull():
+                    self.view.fitInView(target_rect, Qt.KeepAspectRatio)
+                    # Persist the resulting zoom factor after fit
+                    if hasattr(self.view, '_persist_zoom'):
+                        self.view._persist_zoom()
             except Exception:
                 pass
         reset_btn.clicked.connect(do_reset)
@@ -1133,7 +1141,14 @@ class ProjectTreeView(QWidget):
         self.scene.installEventFilter(self)
         # Autosize scene rect
         r = self.scene.itemsBoundingRect()
-        self.scene.setSceneRect(r.adjusted(-40, -40, 40, 40))
+        padded = r.adjusted(-40, -40, 40, 40)
+        self.scene.setSceneRect(padded)
+        # Capture deterministic initial view rectangle once
+        try:
+            if getattr(self, '_initial_view_rect', None) is None or getattr(self._initial_view_rect, 'isNull', lambda: False)():
+                self._initial_view_rect = padded
+        except Exception:
+            pass
         # Initial fit
         try:
             self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
