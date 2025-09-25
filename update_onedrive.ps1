@@ -101,7 +101,7 @@ $exclude = @(
   'dist*','build*','.venv*','__pycache__*','*.pyc','*.pyo','.git*','release_*.zip','*.sha256','*.spec' # include main.spec via list below
 )
 $include = @(
-  'main.py','README.md','requirements.txt','header.png','main.spec','quickstart.ps1','run_from_onedrive.ps1','deploy_onedrive.ps1','update_onedrive.ps1','shared_template*','web*','images*'
+  'main.py','README.md','requirements.txt','header.png','header.svg','main.spec','quickstart.ps1','run_app.ps1','run_from_onedrive.ps1','deploy_onedrive.ps1','update_onedrive.ps1','shared_template*','web*','images*'
 )
 
 if ($Mode -eq 'source') {
@@ -124,6 +124,9 @@ if ($Mode -eq 'source') {
     if (Test-Path $destApp) { Remove-Item -Recurse -Force $destApp }
     Copy-Item (Join-Path $srcRoot 'dist\main') $OneDriveAppPath -Recurse -Force
   }
+  # Also copy launcher if present
+  $launcher = Join-Path $srcRoot 'run_app.ps1'
+  if (Test-Path $launcher) { Copy-Item $launcher $OneDriveAppPath -Force }
   # Restore db_path.txt
   if ($dbPathVal) { Set-Content -Path $dbPathFile -Value $dbPathVal -Encoding UTF8 }
   Write-Host "[done]" -ForegroundColor Green

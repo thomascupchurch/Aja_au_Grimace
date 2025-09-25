@@ -445,7 +445,9 @@ class ProjectDataModel:
             return
         with self._connect() as conn:
             c = conn.cursor()
-            c.execute(f"SELECT {', '.join([f'\"{col}\"' for col in self.COLUMNS])} FROM project_parts")
+            # Build quoted column list without nested f-strings/backslashes (macOS Python parser-safe)
+            cols_quoted = ", ".join(['"{}"'.format(col) for col in self.COLUMNS])
+            c.execute(f"SELECT {cols_quoted} FROM project_parts")
             for row in c.fetchall():
                 row_dict = {col: val for col, val in zip(self.COLUMNS, row)}
                 # Default missing progress fields (older rows) if any are absent or None
@@ -530,7 +532,8 @@ class ProjectDataModel:
             for row in self.rows:
                 values = [row.get(col, "") for col in self.COLUMNS]
                 placeholders = ", ".join(["?" for _ in self.COLUMNS])
-                c.execute(f"INSERT INTO project_parts ({', '.join([f'\"{col}\"' for col in self.COLUMNS])}) VALUES ({placeholders})", values)
+                columns_sql = ", ".join(['"{}"'.format(col) for col in self.COLUMNS])
+                c.execute(f"INSERT INTO project_parts ({columns_sql}) VALUES ({placeholders})", values)
             conn.commit()
 
     def create_table(self):
@@ -1654,7 +1657,8 @@ class ProjectTreeView(QWidget):
                 r = QSvgRenderer(svg_path)
                 if r.isValid():
                     header_is_svg=True; header_svg_renderer=r
-        except Exception: pass
+        except Exception:
+            pass
         if is_pdf:
             from PyQt5.QtPrintSupport import QPrinter
             from PyQt5.QtCore import QMarginsF, QRectF
@@ -1671,20 +1675,22 @@ class ProjectTreeView(QWidget):
             except Exception: pass
             painter = QPainter(printer)
             page_rect = printer.pageRect(); y_offset=0
-            def _svg_h(renderer, tw):
+            def _svg_h(renderer, tw, default_ratio=0.12, min_h=40):
                 try:
-                    ds=renderer.defaultSize(); w,h=ds.width(), ds.height();
-                    if w<=0 or h<=0: vb=renderer.viewBoxF(); w,h=vb.width(), vb.height();
-                    if w>0 and h>0 and tw>0: return int(round(h*(tw/w)))
-                except Exception: return None
-                return None
+                    ds=renderer.defaultSize(); w,h=ds.width(), ds.height()
+                    if w<=0 or h<=0:
+                        vb=renderer.viewBoxF(); w,h=vb.width(), vb.height()
+                    if w>0 and h>0 and tw>0:
+                        return int(round(h*(tw/float(w))))
+                except Exception:
+                    pass
+                # Fallback: reasonable banner height as a fraction of page width
+                return max(min_h, int(round(tw*default_ratio))) if tw>0 else None
             if include_header:
                 if header_is_svg and header_svg_renderer:
                     tw=page_rect.width(); hh=_svg_h(header_svg_renderer, tw)
                     if hh:
                         header_svg_renderer.render(painter, QRectF(0,0,tw,hh)); y_offset=hh+10
-                    elif header_pixmap and not header_pixmap.isNull():
-                        sh=header_pixmap.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); y_offset=sh.height()+10
                 elif header_pixmap and not header_pixmap.isNull():
                     sh=header_pixmap.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); y_offset=sh.height()+10
             avail_h=max(1,page_rect.height()-y_offset); scale=avail_h/rect.height(); from math import ceil
@@ -1696,8 +1702,6 @@ class ProjectTreeView(QWidget):
                         if header_is_svg and header_svg_renderer:
                             tw=page_rect.width(); hh=_svg_h(header_svg_renderer, tw)
                             if hh: header_svg_renderer.render(painter, QRectF(0,0,tw,hh))
-                            elif header_pixmap and not header_pixmap.isNull():
-                                sh=header_pixmap.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh)
                         elif header_pixmap and not header_pixmap.isNull():
                             sh=header_pixmap.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh)
                 painter.save(); painter.translate(0,y_offset); painter.scale(scale,scale)
@@ -1715,18 +1719,20 @@ class ProjectTreeView(QWidget):
             content_pix.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
         # Combine with header (pref SVG)
         if header_is_svg and header_svg_renderer:
-            def _svg_h(renderer, tw):
+            def _svg_h(renderer, tw, default_ratio=0.12, min_h=40):
                 try:
-                    ds=renderer.defaultSize(); w,h=ds.width(), ds.height();
-                    if w<=0 or h<=0: vb=renderer.viewBoxF(); w,h=vb.width(), vb.height();
-                    if w>0 and h>0 and tw>0: return int(round(h*(tw/w)))
-                except Exception: return None
-                return None
+                    ds=renderer.defaultSize(); w,h=ds.width(), ds.height()
+                    if w<=0 or h<=0:
+                        vb=renderer.viewBoxF(); w,h=vb.width(), vb.height()
+                    if w>0 and h>0 and tw>0:
+                        return int(round(h*(tw/float(w))))
+                except Exception:
+                    pass
+                return max(min_h, int(round(tw*default_ratio))) if tw>0 else None
             tw = content_pix.width(); hh=_svg_h(header_svg_renderer, tw)
-            if hh:
-                combo = QPixmap(tw, hh+content_pix.height()); combo.fill(); painter=QPainter(combo)
-                from PyQt5.QtCore import QRectF
-                header_svg_renderer.render(painter, QRectF(0,0,tw,hh)); painter.drawPixmap(0,hh,content_pix); painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
+            combo = QPixmap(tw, hh+content_pix.height()); combo.fill(); painter=QPainter(combo)
+            from PyQt5.QtCore import QRectF
+            header_svg_renderer.render(painter, QRectF(0,0,tw,hh)); painter.drawPixmap(0,hh,content_pix); painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
         if header_pixmap and not header_pixmap.isNull():
             cw = max(header_pixmap.width(), content_pix.width()); combo = QPixmap(cw, header_pixmap.height()+content_pix.height()); combo.fill()
             painter = QPainter(combo); hx=(cw-header_pixmap.width())//2; painter.drawPixmap(hx,0, header_pixmap); painter.drawPixmap(0, header_pixmap.height(), content_pix); painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
@@ -4555,7 +4561,7 @@ class MainWindow(QMainWindow):
             # File-based edit lock ownership flag
             self._own_lock = False
 
-            # Header with centered header.svg preferred (PNG fallback)
+            # Header with centered header.svg only (no PNG fallback in UI)
             header_layout = QHBoxLayout()
             # Eliminate extra margins/spacing around the header row
             header_layout.setContentsMargins(0, 0, 0, 0)
@@ -4566,12 +4572,11 @@ class MainWindow(QMainWindow):
             self._header_widget = None
             self._header_is_svg = False
             self._header_svg_renderer = None
-            self._header_png_pixmap = None
-            self._header_aspect = None  # width / height (unused after trim logic, retained for fallback)
+            self._header_png_pixmap = None  # deprecated: no PNG fallback in UI
+            self._header_aspect = None  # width / height (unused after trim logic)
             self._header_label = None  # QLabel used to display trimmed pixmap
             try:
                 svg_path = resolve_resource_path("header.svg")
-                png_path = resolve_resource_path("header.png")
                 used_svg = False
                 if svg_path and os.path.exists(svg_path):
                     try:
@@ -4595,19 +4600,14 @@ class MainWindow(QMainWindow):
                     except Exception:
                         used_svg = False
                 if not used_svg:
-                    lbl = QLabel()
-                    if png_path and os.path.exists(png_path):
-                        pm = QPixmap(png_path)
-                        # Store pixmap; dynamic resize will render trimmed version
-                        self._header_png_pixmap = pm
-                    else:
-                        lbl.setText("[header.svg/.png not found]")
+                    # No SVG available: show a small placeholder text instead of falling back to PNG
+                    lbl = QLabel("[header.svg not found]")
                     header_widget = lbl
-                    # Save for dynamic resizing
+                    # Save for dynamic sizing
                     self._header_widget = lbl
                     self._header_label = lbl
                     self._header_is_svg = False
-                    self._header_aspect = (pm.width()/pm.height()) if 'pm' in locals() and pm and not pm.isNull() and pm.height() > 0 else 4.0
+                    self._header_aspect = 4.0
             except Exception:
                 # Final fallback
                 lbl = QLabel("[header load error]")
@@ -6096,22 +6096,11 @@ class MainWindow(QMainWindow):
                     # Fallback: just set height of widget
                     self._header_widget.setFixedHeight(target_h)
             else:
-                # For PNG fallback, trim/crop and scale
-                pm = getattr(self, '_header_png_pixmap', None)
-                if pm and not pm.isNull():
-                    pm2 = trim_transparent(pm)
-                    if pm2.width() >= pm.width() * 0.98 and pm2.height() >= pm.height() * 0.98:
-                        pm2 = trim_uniform_color(pm2, 10)
-                    pm2 = pm2.scaled(max_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                    if getattr(self, '_header_label', None):
-                        try:
-                            from PyQt5.QtWidgets import QSizePolicy
-                            self._header_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-                            self._header_label.setAlignment(Qt.AlignCenter)
-                        except Exception:
-                            pass
-                        self._header_label.setPixmap(pm2)
-                        self._header_label.setFixedHeight(target_h)
+                # No SVG (placeholder label): just update height to keep spacing consistent
+                try:
+                    self._header_widget.setFixedHeight(target_h)
+                except Exception:
+                    pass
         except Exception:
             pass
 

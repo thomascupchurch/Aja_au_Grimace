@@ -3,7 +3,7 @@
 
 import os
 
-datas_list = [('project_data.db', '.'), ('images/*', 'images')]
+datas_list = [('project_data.db', '.'), ('images/*', 'images'), ('header.svg', '.')]
 if os.path.isdir('attachments'):
     datas_list.append(('attachments/*', 'attachments'))
 
@@ -12,7 +12,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=datas_list,
-    hiddenimports=[],
+    hiddenimports=['PyQt5.QtSvg'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

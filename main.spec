@@ -4,7 +4,7 @@
 import os
 
 # Build datas list dynamically so missing optional folders don't break build
-datas_list = [('project_data.db', '.'), ('images/*', 'images')]
+datas_list = [('project_data.db', '.'), ('images/*', 'images'), ('header.svg', '.')]
 if os.path.isdir('attachments'):
     datas_list.append(('attachments/*', 'attachments'))
 
@@ -14,7 +14,7 @@ a = Analysis(
     binaries=[],
     # Include database, images, and optionally attachments directory contents
     datas=datas_list,
-    hiddenimports=[],
+    hiddenimports=['PyQt5.QtSvg'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

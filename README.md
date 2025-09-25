@@ -105,6 +105,20 @@ Examples:
 ./quickstart.ps1 -Python "C:\\Users\\you\\AppData\\Local\\Programs\\Python\\Python311\\python.exe"
 ```
 
+## Quickstart (macOS / Linux)
+
+Use the shell script to set up a virtualenv and run the app:
+
+```bash
+./quickstart.sh --db "/path/to/shared/project_data.db"
+```
+
+Options:
+- `--db <path>` – optional; writes `db_path.txt` and exports `PROJECT_DB_PATH` for this run
+- `--python </path/to/python>` – specify a particular interpreter
+
+If you see Qt platform plugin errors on Linux in a headless environment, set `QT_QPA_PLATFORM=offscreen` when running tests only; the GUI app itself requires an X/Wayland session.
+
 ## Running (VS Code Task)
 
 Use the built-in task:
@@ -235,7 +249,7 @@ For packaged onedir deployments:
 ./update_onedrive.ps1 -OneDriveAppPath "C:\Users\you\OneDrive - Org\ProjectPlanner-App" -Mode onedir
 ```
 
-The script preserves any existing `db_path.txt` so users remain pointed at the shared database.
+The script preserves any existing `db_path.txt` so users remain pointed at the shared database. A convenience launcher `run_app.ps1` can start a packaged onedir build by autodetecting `dist/main/main.exe` or `dist/main.exe`.
 
 ### Edit Lock (collaborative etiquette)
 
