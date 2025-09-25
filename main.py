@@ -3580,9 +3580,6 @@ class TimelineView(QWidget):
         if not self.model or not hasattr(self.model, 'rows'):
             return
         rows = [row for row in self.model.rows if row.get("Start Date") and row.get("Duration (days)")]
-        # --- Critical Path ---
-        critical_path = find_critical_path(rows)
-        # ...existing code...
         def topo_sort(rows):
             name_to_row = {row.get("Project Part", ""): row for row in rows}
             visited = set()
@@ -3665,6 +3662,11 @@ class TimelineView(QWidget):
         min_date = min([b[1] for b in bars])
         max_date = max([b[1] + datetime.timedelta(days=b[2]) for b in bars])
         total_days = (max_date - min_date).days
+        # Compute critical path set for highlighting
+        try:
+            critical_path = find_critical_path(rows)
+        except Exception:
+            critical_path = set()
         # Draw bars and record their positions for connectors
         bar_height = 24
         bar_gap = 12
@@ -4486,6 +4488,8 @@ class MainWindow(QMainWindow):
             """)
 
             self.model = model
+            # File-based edit lock ownership flag
+            self._own_lock = False
 
             # Header with centered header.svg preferred (PNG fallback)
             header_layout = QHBoxLayout()
@@ -4681,6 +4685,97 @@ class MainWindow(QMainWindow):
                     except Exception as e:
                         print(f"Backup failed: {e}")
                 act_backup_db.triggered.connect(do_backup_db)
+                # Create Shared Folder (OneDrive template)
+                def do_create_shared_folder():
+                    try:
+                        from PyQt5.QtWidgets import QFileDialog, QInputDialog, QMessageBox
+                        import os, shutil
+                        base_dir = QFileDialog.getExistingDirectory(self, "Choose OneDrive location for shared folder", os.path.expanduser("~"))
+                        if not base_dir:
+                            return
+                        name, ok = QInputDialog.getText(self, "Folder Name", "Shared folder name:", text="ProjectPlanner-Shared")
+                        if not ok or not name.strip():
+                            return
+                        target = os.path.join(base_dir, name.strip())
+                        if not os.path.exists(target):
+                            os.makedirs(target)
+                        # Create subfolders
+                        for sub in ("images", "attachments", "backups"):
+                            try:
+                                os.makedirs(os.path.join(target, sub), exist_ok=True)
+                            except Exception:
+                                pass
+                        # Copy holidays.json if present
+                        try:
+                            hp = _holidays_path()
+                            if hp and os.path.exists(hp):
+                                shutil.copy2(hp, os.path.join(target, "holidays.json"))
+                        except Exception:
+                            pass
+                        # Offer to copy current DB
+                        dest_db = os.path.join(target, "project_data.db")
+                        do_copy = False
+                        try:
+                            if os.path.exists(self.model.DB_FILE):
+                                ret = QMessageBox.question(self, "Copy Database?", f"Copy current database to shared folder as\n{dest_db}?", QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+                                do_copy = (ret == QMessageBox.Yes)
+                        except Exception:
+                            pass
+                        if do_copy:
+                            try:
+                                shutil.copy2(self.model.DB_FILE, dest_db)
+                                for ext in ("-wal","-shm"):
+                                    side = self.model.DB_FILE + ext
+                                    if os.path.exists(side):
+                                        shutil.copy2(side, dest_db + ext)
+                            except Exception:
+                                pass
+                        # Write helper docs
+                        try:
+                            readme = os.path.join(target, "README_SHARED.md")
+                            with open(readme, "w", encoding="utf-8") as f:
+                                f.write("""# Project Planner Shared Folder (OneDrive)\n\nThis folder is designed to be placed in OneDrive so a small team can view/edit the same project data.\n\nRecommended contents:\n- `project_data.db` – SQLite database used by the desktop app\n- `holidays.json` – Shared holidays used for weekend/holiday shading\n- `images/` – Any task-linked images\n- `attachments/` – Optional linked files\n- `backups/` – Destination for timestamped database backups (optional)\n\nThe app may also create/manage:\n- `project_data.db.lock.json` – Lightweight edit lock file\n- `project_data.db-wal` / `project_data.db-shm` – SQLite WAL sidecar files\n\nHow to wire it up:\n1. Each teammate runs the desktop app locally (not from this folder).\n2. In the app: Tools → Switch Data File… → select `project_data.db` here.\n3. Viewers use Read-Only Mode; editors toggle it off to acquire the edit lock.\n""")
+                        except Exception:
+                            pass
+                        try:
+                            g = os.path.join(target, "GETTING_STARTED_SHARED.md")
+                            with open(g, "w", encoding="utf-8") as f:
+                                f.write("""# Getting Started (Shared Data)\n\nPlace this folder in OneDrive and share it with your team. Then either:\n\nOption A – Point your local app at this DB (recommended)\n1) Launch the desktop app locally\n2) Tools → Switch Data File… → select this folder’s `project_data.db`\n3) Toggle Tools → Read-Only Mode ON if viewing; OFF to edit (takes lock)\n\nOption B – Environment variable\n- Set `PROJECT_DB_PATH` to the full path of `project_data.db` in this folder before launching the app\n\nNotes\n- The app uses an edit-lock file to coordinate a single active editor. If a lock looks stale, you may be prompted to take over (configurable).\n- Backups: use Tools → Backup Database…; you can keep them in `backups/`.\n- Don’t put your `.venv` here; keep virtualenvs local.\n""")
+                        except Exception:
+                            pass
+                        # Write a db_path.txt in the shared folder to document the canonical path
+                        try:
+                            with open(os.path.join(target, "db_path.txt"), "w", encoding="utf-8") as f:
+                                f.write(dest_db)
+                        except Exception:
+                            pass
+                        # Ask to switch app to new DB
+                        try:
+                            ret = QMessageBox.question(self, "Switch to Shared DB?", "Switch the app to use the new shared database now?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                            if ret == QMessageBox.Yes and os.path.exists(dest_db):
+                                # Persist to db_path.txt in current working dir and QSettings
+                                try:
+                                    with open(os.path.join(os.getcwd(), "db_path.txt"), "w", encoding="utf-8") as wf:
+                                        wf.write(dest_db)
+                                except Exception:
+                                    pass
+                                try:
+                                    from PyQt5.QtCore import QSettings
+                                    QSettings('LSI','ProjectApp').setValue('DB/path', dest_db)
+                                except Exception:
+                                    pass
+                                self.model.DB_FILE = dest_db
+                                self.model.ensure_schema()
+                                self.model.load_from_db()
+                                self.on_data_changed()
+                        except Exception:
+                            pass
+                        if self.statusBar():
+                            self.statusBar().showMessage(f"Shared folder created at {target}", 4000)
+                    except Exception as e:
+                        print(f"Create Shared Folder failed: {e}")
+                act_create_shared = tmenu.addAction("Create Shared Folder…")
+                act_create_shared.triggered.connect(do_create_shared_folder)
                 tmenu.addSeparator()
                 act_toggle_ro = tmenu.addAction("Read-Only Mode")
                 act_toggle_ro.setCheckable(True)
@@ -4691,22 +4786,52 @@ class MainWindow(QMainWindow):
                     pass
                 def do_toggle_ro(checked):
                     try:
-                        self.model.read_only = bool(checked)
+                        # When switching to editing (checked=False), try to acquire lock
+                        if not checked:
+                            if not self._acquire_edit_lock():
+                                # Revert to read-only and notify
+                                try:
+                                    act_toggle_ro.blockSignals(True)
+                                    act_toggle_ro.setChecked(True)
+                                    act_toggle_ro.blockSignals(False)
+                                except Exception:
+                                    pass
+                                self.model.read_only = True
+                                try:
+                                    from PyQt5.QtWidgets import QMessageBox
+                                    info = self._read_edit_lock() or {}
+                                    holder = info.get('owner', 'someone else')
+                                    when = info.get('when', '')
+                                    QMessageBox.information(self, "Edit Lock Held",
+                                        f"Another user holds the edit lock (owner: {holder}{' @ ' + when if when else ''}).\n"
+                                        "Continue in Read-Only mode or try again later.")
+                                except Exception:
+                                    pass
+                            else:
+                                self.model.read_only = False
+                        else:
+                            # Enabling read-only -> release lock if owned
+                            try:
+                                self._release_edit_lock()
+                            except Exception:
+                                pass
+                            self.model.read_only = True
                         from PyQt5.QtCore import QSettings
-                        QSettings('LSI','ProjectApp').setValue('DB/read_only', bool(checked))
+                        QSettings('LSI','ProjectApp').setValue('DB/read_only', bool(self.model.read_only))
                         # Update DatabaseView editability if available
                         if hasattr(self, 'database_view') and hasattr(self.database_view, 'set_read_only'):
-                            self.database_view.set_read_only(bool(checked))
+                            self.database_view.set_read_only(bool(self.model.read_only))
                         # Update subtle read-only badge visibility
                         try:
                             self._update_read_only_indicator()
                         except Exception:
                             pass
                         if self.statusBar():
-                            self.statusBar().showMessage("Read-Only {}".format("On" if checked else "Off"), 2500)
+                            self.statusBar().showMessage("Read-Only {}".format("On" if self.model.read_only else "Off"), 2500)
                     except Exception as e:
                         print(f"Toggle Read-Only failed: {e}")
                 act_toggle_ro.toggled.connect(do_toggle_ro)
+                self._act_toggle_ro = act_toggle_ro
 
                 # --- Filters submenu (consolidated from right-side dock) ---
                 self._init_filter_state()
@@ -4821,6 +4946,84 @@ class MainWindow(QMainWindow):
                             self.statusBar().showMessage(f"Watch interval set to {sec}s", 2500)
                 sync_menu.addAction("Change Watch Interval…", change_interval)
                 tmenu.addMenu(sync_menu)
+                # --- Edit Lock submenu ---
+                lock_menu = QMenu("Edit Lock", self)
+                def on_acquire_lock():
+                    if self._acquire_edit_lock():
+                        try:
+                            self._act_toggle_ro.blockSignals(True)
+                            self._act_toggle_ro.setChecked(False)
+                            self._act_toggle_ro.blockSignals(False)
+                        except Exception:
+                            pass
+                        self.model.read_only = False
+                        if hasattr(self, 'database_view') and hasattr(self.database_view, 'set_read_only'):
+                            self.database_view.set_read_only(False)
+                        try:
+                            self._update_read_only_indicator()
+                        except Exception:
+                            pass
+                        if self.statusBar():
+                            self.statusBar().showMessage("Edit lock acquired", 2500)
+                    else:
+                        try:
+                            from PyQt5.QtWidgets import QMessageBox
+                            info = self._read_edit_lock() or {}
+                            holder = info.get('owner', 'someone else')
+                            when = info.get('when', '')
+                            QMessageBox.information(self, "Edit Lock Held",
+                                f"Another user holds the edit lock (owner: {holder}{' @ ' + when if when else ''}).")
+                        except Exception:
+                            pass
+                def on_release_lock():
+                    self._release_edit_lock()
+                    try:
+                        self._act_toggle_ro.blockSignals(True)
+                        self._act_toggle_ro.setChecked(True)
+                        self._act_toggle_ro.blockSignals(False)
+                    except Exception:
+                        pass
+                    self.model.read_only = True
+                    if hasattr(self, 'database_view') and hasattr(self.database_view, 'set_read_only'):
+                        self.database_view.set_read_only(True)
+                    try:
+                        self._update_read_only_indicator()
+                    except Exception:
+                        pass
+                    if self.statusBar():
+                        self.statusBar().showMessage("Edit lock released", 2500)
+                lock_menu.addAction("Acquire Edit Lock", on_acquire_lock)
+                lock_menu.addAction("Release Edit Lock", on_release_lock)
+                # Settings inside Edit Lock submenu
+                try:
+                    from PyQt5.QtCore import QSettings
+                    s = QSettings('LSI','ProjectApp')
+                    pt_val = s.value('Lock/prompt_takeover', True)
+                    if isinstance(pt_val, str):
+                        pt_val = pt_val.lower() in ('1','true','yes','on')
+                    act_prompt = lock_menu.addAction("Prompt to Take Over Stale Lock")
+                    act_prompt.setCheckable(True)
+                    act_prompt.setChecked(bool(pt_val))
+                    def toggle_prompt():
+                        try:
+                            s.setValue('Lock/prompt_takeover', bool(act_prompt.isChecked()))
+                        except Exception:
+                            pass
+                    act_prompt.toggled.connect(toggle_prompt)
+                    def change_timeout():
+                        try:
+                            from PyQt5.QtWidgets import QInputDialog
+                            cur = int(s.value('Lock/stale_minutes', 30))
+                            minutes, ok = QInputDialog.getInt(self, 'Stale Lock Timeout', 'Consider lock stale after (minutes):', value=max(1,cur), min=1, max=1440, step=1)
+                            if ok:
+                                s.setValue('Lock/stale_minutes', int(minutes))
+                                self._update_lock_status()
+                        except Exception:
+                            pass
+                    lock_menu.addAction("Change Stale Timeout…", change_timeout)
+                except Exception:
+                    pass
+                tmenu.addMenu(lock_menu)
                 self.tools_btn.setMenu(tmenu)
                 controls_layout.addWidget(self.tools_btn)
 
@@ -4911,6 +5114,9 @@ class MainWindow(QMainWindow):
             # Last local code update (proxy for last sync of shared source)
             self.code_sync_label = QLabel("Code: —")
             self.code_sync_label.setStyleSheet("color:#aaa; font-size:11px")
+            # Edit lock indicator label
+            self.lock_label = QLabel("Lock: —")
+            self.lock_label.setStyleSheet("color:#aaa; font-size:11px")
             self.db_warning_label = QLabel()
             self.db_warning_label.setStyleSheet("color:#FFD166; font-size:11px")
             # Read-only indicator label
@@ -4926,6 +5132,7 @@ class MainWindow(QMainWindow):
             sb.addPermanentWidget(self.db_status_label, 1)
             sb.addPermanentWidget(self.db_sync_label, 0)
             sb.addPermanentWidget(self.code_sync_label, 0)
+            sb.addPermanentWidget(self.lock_label, 0)
             sb.addPermanentWidget(self.db_warning_label, 0)
             sb.addPermanentWidget(self.db_ro_label, 0)
             sb.addPermanentWidget(self.open_folder_btn, 0)
@@ -4933,6 +5140,11 @@ class MainWindow(QMainWindow):
             # Initialize code sync status once at startup
             try:
                 self._update_code_status()
+            except Exception:
+                pass
+            # Initialize lock status once at startup
+            try:
+                self._update_lock_status()
             except Exception:
                 pass
             # Initialize read-only indicator visibility
@@ -4961,6 +5173,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     self._last_code_mtime = 0.0
                 self._code_check_accum = 0
+                self._lock_tick = 0
             except Exception:
                 pass
 
@@ -5114,9 +5327,149 @@ class MainWindow(QMainWindow):
                 self.code_sync_label.setText(text)
         except Exception:
             pass
+    # -------- Edit Lock helpers --------
+    def _lock_path(self):
+        import os
+        try:
+            base = os.path.abspath(self.model.DB_FILE)
+        except Exception:
+            base = self.model.DB_FILE
+        return base + ".lock.json"
+    def _whoami(self):
+        import socket, getpass
+        try:
+            user = getpass.getuser()
+        except Exception:
+            user = "unknown"
+        try:
+            host = socket.gethostname()
+        except Exception:
+            host = "host"
+        return f"{user}@{host}"
+    def _read_edit_lock(self):
+        import os, json
+        p = self._lock_path()
+        try:
+            if os.path.exists(p):
+                with open(p, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return None
+    def _write_edit_lock(self):
+        import json, time, os
+        info = {"owner": self._whoami(), "when": time.strftime('%Y-%m-%d %H:%M:%S'), "pid": os.getpid()}
+        try:
+            with open(self._lock_path(), 'w', encoding='utf-8') as f:
+                json.dump(info, f)
+            return True
+        except Exception:
+            return False
+    def _get_lock_settings(self):
+        # Returns (stale_minutes:int, prompt_takeover:bool)
+        try:
+            from PyQt5.QtCore import QSettings
+            s = QSettings('LSI','ProjectApp')
+            stale_minutes = int(s.value('Lock/stale_minutes', 30))
+            pt = s.value('Lock/prompt_takeover', True)
+            if isinstance(pt, str):
+                pt = pt.lower() in ('1','true','yes','on')
+            return max(1, stale_minutes), bool(pt)
+        except Exception:
+            return 30, True
+    def _is_lock_stale(self, info):
+        try:
+            if not info:
+                return False
+            when = info.get('when')
+            if not when:
+                return False
+            import time
+            try:
+                ts = time.mktime(time.strptime(when, '%Y-%m-%d %H:%M:%S'))
+            except Exception:
+                return False
+            stale_minutes, _ = self._get_lock_settings()
+            return (time.time() - ts) > (stale_minutes * 60)
+        except Exception:
+            return False
+    def _acquire_edit_lock(self):
+        existing = self._read_edit_lock()
+        if existing and existing.get('owner') != self._whoami():
+            # If stale, optionally prompt for takeover
+            if self._is_lock_stale(existing):
+                _, prompt = self._get_lock_settings()
+                if prompt:
+                    try:
+                        from PyQt5.QtWidgets import QMessageBox
+                        owner = existing.get('owner') or 'unknown'
+                        when = existing.get('when') or ''
+                        m = QMessageBox(self)
+                        m.setIcon(QMessageBox.Warning)
+                        m.setWindowTitle('Stale Edit Lock')
+                        m.setText('An existing edit lock appears stale.')
+                        m.setInformativeText(f"Owner: {owner}{' @ ' + when if when else ''}\nTake over the lock?")
+                        m.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+                        m.setDefaultButton(QMessageBox.No)
+                        choice = m.exec_()
+                        if choice == QMessageBox.Yes:
+                            ok = self._write_edit_lock()
+                            if ok:
+                                self._own_lock = True
+                                self._update_lock_status()
+                            return ok
+                    except Exception:
+                        pass
+            self._own_lock = False
+            self._update_lock_status(existing)
+            return False
+        ok = self._write_edit_lock()
+        if ok:
+            self._own_lock = True
+            self._update_lock_status()
+        return ok
+    def _release_edit_lock(self):
+        import os
+        p = self._lock_path()
+        try:
+            info = self._read_edit_lock()
+            if info and info.get('owner') != self._whoami():
+                self._own_lock = False
+                self._update_lock_status(info)
+                return False
+            if os.path.exists(p):
+                os.remove(p)
+            self._own_lock = False
+            self._update_lock_status()
+            return True
+        except Exception:
+            return False
+    def _update_lock_status(self, info=None):
+        try:
+            info = info if info is not None else (self._read_edit_lock() or {})
+            if info:
+                owner = info.get('owner') or 'unknown'
+                when = info.get('when') or ''
+                stale_mark = ' (stale)' if self._is_lock_stale(info) else ''
+                txt = f"Lock: {owner}{' @ ' + when if when else ''}{stale_mark}"
+            else:
+                txt = "Lock: —"
+            if hasattr(self, 'lock_label') and self.lock_label is not None:
+                self.lock_label.setText(txt)
+        except Exception:
+            pass
     def _check_db_changed(self):
         import time
         try:
+            # Refresh lock status every tick; heartbeat our lock every ~10 ticks
+            try:
+                self._update_lock_status()
+                self._lock_tick = getattr(self, '_lock_tick', 0) + 1
+                if self._lock_tick >= 10 and getattr(self, '_own_lock', False):
+                    self._lock_tick = 0
+                    self._write_edit_lock()
+            except Exception:
+                pass
             # Periodically refresh code sync label (every ~5 ticks)
             try:
                 self._code_check_accum = getattr(self, '_code_check_accum', 0) + 1
@@ -5213,6 +5566,16 @@ class MainWindow(QMainWindow):
                                 self.db_sync_label.setText(base + " — off")
                         except Exception:
                             pass
+        except Exception:
+            pass
+    def closeEvent(self, event):
+        try:
+            if getattr(self, '_own_lock', False):
+                self._release_edit_lock()
+        except Exception:
+            pass
+        try:
+            super().closeEvent(event)
         except Exception:
             pass
     def on_tree_part_selected(self, part_name):

@@ -86,6 +86,25 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+## Quickstart (Windows)
+
+If you prefer a one-command setup, use the included helper which creates a virtualenv, installs dependencies, and launches the app:
+
+```powershell
+./quickstart.ps1
+```
+
+Optional parameters:
+- `-DbPath "C:\\path\\to\\shared\\project_data.db"` – run against a specific SQLite file (also works with a OneDrive-shared path)
+- `-Python "C:\\Path\\To\\python.exe"` – override the Python interpreter if needed
+
+Examples:
+
+```powershell
+./quickstart.ps1 -DbPath "C:\\Users\\you\\OneDrive - Org\\Shared\\project_data.db"
+./quickstart.ps1 -Python "C:\\Users\\you\\AppData\\Local\\Programs\\Python\\Python311\\python.exe"
+```
+
 ## Running (VS Code Task)
 
 Use the built-in task:
@@ -167,7 +186,7 @@ You can place the SQLite database in a shared OneDrive folder so multiple teamma
 
 1. Place `project_data.db` in a OneDrive-backed folder that all collaborators can access.
 2. In the desktop app, use Tools → Switch Data File… to point at that DB. This writes `db_path.txt` so the path persists across launches. You can also set `PROJECT_DB_PATH` as an environment variable to override the path.
-3. Viewers should enable Tools → Read-Only Mode. Editors can leave it off and the app will acquire a write lock only during saves.
+3. Viewers should enable Tools → Read-Only Mode. Editors can leave it off; the app will guard writes and display an edit lock status.
 4. Use Tools → Reload Data to pick up changes that synced from other machines while your app is open.
 5. Use Tools → Backup Database… to create timestamped copies of the `.db` (and any `-wal`/`-shm`) in the same folder before risky edits.
 
@@ -175,6 +194,46 @@ Notes:
 - The app configures SQLite for collaboration: WAL journal mode, a sane busy timeout, and explicit BEGIN IMMEDIATE transactions for writes.
 - Holidays are stored as `holidays.json` next to the active DB so everyone sees the same shading.
 - Avoid simultaneous heavy edits from multiple writers; SQLite handles short overlaps, but it is not a multi-master database.
+
+### Deploying to OneDrive (source or packaged)
+
+Two helper scripts are included to make OneDrive sharing easy:
+
+- `run_from_onedrive.ps1` (source): Place the repo folder inside OneDrive. Optionally create a `db_path.txt` in the same folder that contains the full path to your shared `project_data.db`. Then double‑click `run_from_onedrive.ps1` to launch using your local `.venv` if present (falls back to `py -3`/`python.exe`).
+- `deploy_onedrive.ps1` (source or onedir): Copies either the source folder or a PyInstaller onedir build into your OneDrive under a chosen app folder name. It can also create a sibling shared data folder with `images/`, `attachments/`, `backups/`, and seed files from `shared_template/`.
+
+Examples (PowerShell):
+
+```powershell
+# Copy source into OneDrive and create a shared data folder next to it
+./deploy_onedrive.ps1 -OneDrivePath "C:\Users\you\OneDrive - Org" -Mode source -CreateSharedData -CopyDB
+
+# Copy a packaged onedir build into OneDrive
+./deploy_onedrive.ps1 -OneDrivePath "C:\Users\you\OneDrive - Org" -Mode onedir
+```
+
+Notes:
+- When `-CreateSharedData` is used, the script writes `db_path.txt` in the app folder pointing to `<OneDrive>\ProjectPlanner-Shared\project_data.db` so all launches read that DB.
+- You can move/rename the shared folder later; just update `db_path.txt`.
+- The app also honors the `PROJECT_DB_PATH` environment variable; `run_from_onedrive.ps1` will set it automatically if `db_path.txt` exists.
+
+### Edit Lock (collaborative etiquette)
+
+To reduce accidental concurrent edits on a shared database, the app maintains a lightweight file-based lock next to the database:
+
+- Lock file: `<database>.lock.json` (created in the same folder as the `.db`)
+- Contents: `{ owner: "user@host", when: <ISO timestamp>, pid: <process id> }`
+- Status bar shows `Lock: —` when no lock is held, or `Lock: user@host @ time` when held
+
+How to use it:
+- Turning OFF Tools → Read-Only Mode attempts to acquire the edit lock. If another user holds it, you'll be notified and remain in read-only.
+- Turning ON Read-Only Mode releases your lock immediately.
+- Tools → Edit Lock → Acquire/Release lets you manage the lock directly.
+- The app updates the lock's timestamp periodically while you’re editing, and releases the lock on exit.
+
+Recovery / stale locks:
+- If someone crashes or loses power, you may see a stale lock. Coordinate with your teammate first. If confirmed stale, the file `<database>.lock.json` can be deleted to clear the lock.
+- There is no forced takeover in-app by design—this keeps the workflow polite and explicit for shared OneDrive folders.
 
 ## Shortcuts & Navigation
 
