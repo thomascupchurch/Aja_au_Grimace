@@ -4583,6 +4583,10 @@ class MainWindow(QMainWindow):
                         from PyQt5.QtSvg import QSvgRenderer  # type: ignore
                         renderer = QSvgRenderer(svg_path)
                         if renderer.isValid():
+                            try:
+                                print(f"[UI] Using header.svg -> {svg_path}")
+                            except Exception:
+                                pass
                             # Use a QLabel + pixmap rendered from SVG and trimmed of transparent margins
                             lbl = QLabel()
                             try:
@@ -4598,9 +4602,18 @@ class MainWindow(QMainWindow):
                             self._header_is_svg = True
                             self._header_svg_renderer = renderer
                     except Exception:
+                        try:
+                            print("[UI] QSvgRenderer load failed; SVG header disabled")
+                        except Exception:
+                            pass
                         used_svg = False
                 if not used_svg:
                     # No SVG available: show a small placeholder text instead of falling back to PNG
+                    try:
+                        _msg = f"[UI] header.svg missing or invalid at path: {svg_path if svg_path else '(none)'}"
+                        print(_msg)
+                    except Exception:
+                        pass
                     lbl = QLabel("[header.svg not found]")
                     header_widget = lbl
                     # Save for dynamic sizing

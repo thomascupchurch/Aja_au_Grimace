@@ -101,7 +101,7 @@ $exclude = @(
   'dist*','build*','.venv*','__pycache__*','*.pyc','*.pyo','.git*','release_*.zip','*.sha256','*.spec' # include main.spec via list below
 )
 $include = @(
-  'main.py','README.md','requirements.txt','header.png','header.svg','main.spec','quickstart.ps1','run_app.ps1','run_from_onedrive.ps1','deploy_onedrive.ps1','update_onedrive.ps1','shared_template*','web*','images*','VERSION'
+  'main.py','README.md','requirements.txt','header.png','header.svg','main.spec','quickstart.ps1','quickstart.sh','run_app.ps1','run_from_onedrive.ps1','deploy_onedrive.ps1','update_onedrive.ps1','shared_template*','web*','images*','VERSION','project_data.db'
 )
 
 if ($Mode -eq 'source') {
