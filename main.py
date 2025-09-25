@@ -809,7 +809,28 @@ class ProjectTreeView(QWidget):
             self.refresh()
         def do_toggle_preview():
             self._hover_preview_enabled = not self._hover_preview_enabled
-            toggle_img_btn.setText(f"Previews: {'On' if self._hover_preview_enabled else 'Off'}")
+            is_on = self._hover_preview_enabled
+            toggle_img_btn.setText(f"Previews: {'On' if is_on else 'Off'}")
+            if not is_on:
+                try:
+                    self.preview_label.clear()
+                except Exception:
+                    pass
+            else:
+                # If turning on, try to show preview for the item under cursor
+                try:
+                    from PyQt5.QtGui import QCursor
+                    vp = self.view.mapFromGlobal(QCursor.pos())
+                    sp = self.view.mapToScene(vp)
+                    item = self.scene.itemAt(sp, self.view.transform())
+                    if item:
+                        name = item.data(0)
+                        if isinstance(name, str):
+                            row = self._name_to_row.get(name)
+                            if row:
+                                self._show_image_for_row(row)
+                except Exception:
+                    pass
         fit_btn.clicked.connect(do_fit)
         refresh_btn.clicked.connect(do_refresh)
         toggle_img_btn.clicked.connect(do_toggle_preview)
@@ -883,6 +904,12 @@ class ProjectTreeView(QWidget):
         self.view = ZoomableGraphicsView()
         self.view.setScene(self.scene)
         self.view.setRenderHints(self.view.renderHints())
+        # Enable hover tracking so we receive GraphicsSceneHoverMove without pressing mouse buttons
+        try:
+            self.view.setMouseTracking(True)
+            self.view.viewport().setMouseTracking(True)
+        except Exception:
+            pass
         # Assign settings key to persist zoom
         try:
             self.view.setSettingsKey('TreeZoom')
@@ -1096,6 +1123,11 @@ class ProjectTreeView(QWidget):
             rect_item = self.scene.addRect(x, y, node_w, node_h, QPen(QColor('#888')), QBrush(base_color))
             rect_item.setData(0, name)
             rect_item.setFlag(rect_item.ItemIsSelectable, True)
+            try:
+                # Ensure hover events fire at scene level
+                rect_item.setAcceptHoverEvents(True)
+            except Exception:
+                pass
             # Collapse/expand indicator if has children
             if name in children and children[name]:
                 tri_w = 12; tri_h = 12
@@ -1108,11 +1140,20 @@ class ProjectTreeView(QWidget):
                 poly = self.scene.addPolygon(QPolygonF(pts), QPen(QColor('#ddd')), QBrush(QColor('#ddd')))
                 poly.setData(0, f"__toggle__::{name}")
                 poly.setZValue(rect_item.zValue()+3)
+                try:
+                    poly.setAcceptHoverEvents(True)
+                except Exception:
+                    pass
             # Progress overlay
             if pc > 0:
                 prog_w = int((pc/100)*node_w)
                 prog = self.scene.addRect(x, y+node_h-8, prog_w, 8, QPen(Qt.NoPen), QBrush(QColor('#FF8200')))
                 prog.setZValue(rect_item.zValue()+1)
+                try:
+                    prog.setData(0, name)
+                    prog.setAcceptHoverEvents(True)
+                except Exception:
+                    pass
             # Text (wrap / elide simple)
             txt = name
             if len(txt) > 40:
@@ -1126,6 +1167,12 @@ class ProjectTreeView(QWidget):
             br = text_item.boundingRect()
             text_item.setPos(x + (node_w - br.width())/2, y + 6)
             text_item.setZValue(rect_item.zValue()+2)
+            try:
+                # Carry the name so hover/click on text resolves the part
+                text_item.setData(0, name)
+                text_item.setAcceptHoverEvents(True)
+            except Exception:
+                pass
             # Status / percent line
             meta_line = f"{status or ''}  {pc}%".strip()
             if meta_line:
@@ -1136,6 +1183,11 @@ class ProjectTreeView(QWidget):
                 mbr = meta_item.boundingRect()
                 meta_item.setPos(x + (node_w - mbr.width())/2, y + node_h - mbr.height() - 12)
                 meta_item.setZValue(rect_item.zValue()+2)
+                try:
+                    meta_item.setData(0, name)
+                    meta_item.setAcceptHoverEvents(True)
+                except Exception:
+                    pass
             self._name_to_item[name] = rect_item
         # Interaction
         self.scene.installEventFilter(self)
