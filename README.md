@@ -217,6 +217,26 @@ Notes:
 - You can move/rename the shared folder later; just update `db_path.txt`.
 - The app also honors the `PROJECT_DB_PATH` environment variable; `run_from_onedrive.ps1` will set it automatically if `db_path.txt` exists.
 
+### Updating an existing OneDrive app folder
+
+Use `update_onedrive.ps1` to sync changes from this repo into your shared OneDrive app folder without re-copying everything:
+
+```powershell
+# Dry run first
+./update_onedrive.ps1 -OneDriveAppPath "C:\Users\you\OneDrive - Org\ProjectPlanner-App" -Mode source -DryRun
+
+# Perform update and create a backup zip of the previous state
+./update_onedrive.ps1 -OneDriveAppPath "C:\Users\you\OneDrive - Org\ProjectPlanner-App" -Mode source -BackupDir "C:\Backups\App"
+```
+
+For packaged onedir deployments:
+
+```powershell
+./update_onedrive.ps1 -OneDriveAppPath "C:\Users\you\OneDrive - Org\ProjectPlanner-App" -Mode onedir
+```
+
+The script preserves any existing `db_path.txt` so users remain pointed at the shared database.
+
 ### Edit Lock (collaborative etiquette)
 
 To reduce accidental concurrent edits on a shared database, the app maintains a lightweight file-based lock next to the database:
