@@ -4906,8 +4906,11 @@ class MainWindow(QMainWindow):
             self.db_status_label = QLabel()
             self.db_status_label.setStyleSheet("color:#ccc; font-size:11px")
             # Last sync/update detected label
-            self.db_sync_label = QLabel("Last Update: —")
+            self.db_sync_label = QLabel("Last: —")
             self.db_sync_label.setStyleSheet("color:#aaa; font-size:11px")
+            # Last local code update (proxy for last sync of shared source)
+            self.code_sync_label = QLabel("Code: —")
+            self.code_sync_label.setStyleSheet("color:#aaa; font-size:11px")
             self.db_warning_label = QLabel()
             self.db_warning_label.setStyleSheet("color:#FFD166; font-size:11px")
             # Read-only indicator label
@@ -4922,10 +4925,16 @@ class MainWindow(QMainWindow):
             self.open_folder_btn.clicked.connect(self.open_data_folder)
             sb.addPermanentWidget(self.db_status_label, 1)
             sb.addPermanentWidget(self.db_sync_label, 0)
+            sb.addPermanentWidget(self.code_sync_label, 0)
             sb.addPermanentWidget(self.db_warning_label, 0)
             sb.addPermanentWidget(self.db_ro_label, 0)
             sb.addPermanentWidget(self.open_folder_btn, 0)
             self._update_db_status()
+            # Initialize code sync status once at startup
+            try:
+                self._update_code_status()
+            except Exception:
+                pass
             # Initialize read-only indicator visibility
             try:
                 self._update_read_only_indicator()
@@ -4946,6 +4955,12 @@ class MainWindow(QMainWindow):
                 self._db_watch_timer.setInterval(int(self._sync_watch_ms))
                 self._db_watch_timer.timeout.connect(self._check_db_changed)
                 self._db_watch_timer.start()
+                # Initialize code sync tracking for periodic refresh
+                try:
+                    self._last_code_mtime = self._get_code_mtime()
+                except Exception:
+                    self._last_code_mtime = 0.0
+                self._code_check_accum = 0
             except Exception:
                 pass
 
@@ -5059,30 +5074,95 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         return max(mtimes) if mtimes else 0.0
+    def _get_code_mtime(self):
+        # Proxy for last sync time: most recent mtime among source files in the app folder
+        import os, time
+        root = os.path.dirname(os.path.abspath(__file__))
+        latest = 0.0
+        skip_dirs = {'.git','build','dist','__pycache__','images','web/static/vendor'}
+        allow_ext = {'.py','.spec','.md','.json','.ini','.yaml','.yml','.qss'}
+        for base, dirs, files in os.walk(root):
+            # prune skip dirs
+            pruned = []
+            for d in list(dirs):
+                rel = os.path.relpath(os.path.join(base, d), root).replace('\\','/')
+                if d in skip_dirs or rel in skip_dirs:
+                    pruned.append(d)
+            for d in pruned:
+                dirs.remove(d)
+            for f in files:
+                _, ext = os.path.splitext(f)
+                if ext.lower() in allow_ext:
+                    p = os.path.join(base, f)
+                    try:
+                        m = os.path.getmtime(p)
+                        if m > latest:
+                            latest = m
+                    except Exception:
+                        pass
+        return latest
+    def _update_code_status(self):
+        import time
+        try:
+            m = self._get_code_mtime()
+            if m:
+                ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(m))
+                text = f"Code: {ts}"
+            else:
+                text = "Code: —"
+            if hasattr(self, 'code_sync_label') and self.code_sync_label is not None:
+                self.code_sync_label.setText(text)
+        except Exception:
+            pass
     def _check_db_changed(self):
         import time
         try:
+            # Periodically refresh code sync label (every ~5 ticks)
+            try:
+                self._code_check_accum = getattr(self, '_code_check_accum', 0) + 1
+                if self._code_check_accum >= 5:
+                    self._code_check_accum = 0
+                    m = self._get_code_mtime()
+                    if m and m != getattr(self, '_last_code_mtime', 0.0):
+                        self._last_code_mtime = m
+                        self._update_code_status()
+            except Exception:
+                pass
+
             cur = self._get_db_mtime()
             last = getattr(self, '_db_last_mtime', 0.0)
             if cur and (cur > last + 0.5):
                 # File changed on disk – update baseline and act
                 self._db_last_mtime = cur
-                # Update the last update label in the status bar
+                # Compute timestamp once for status label
+                tstr = None
                 try:
-                    if hasattr(self, 'db_sync_label') and self.db_sync_label is not None:
-                        tstr = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
-                        self.db_sync_label.setText(f"Last Update: {tstr}")
+                    tstr = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
                 except Exception:
-                    pass
+                    tstr = None
                 # Auto-reload if read-only (safe), otherwise prompt (cooldown 10s)
                 if bool(getattr(self.model, 'read_only', False)):
                     # Auto-reload only if enabled in settings
                     if bool(getattr(self, '_sync_auto_reload_readonly', True)):
                         if hasattr(self, '_do_reload') and callable(self._do_reload):
                             self._do_reload()
+                        # Update label with outcome
+                        try:
+                            if hasattr(self, 'db_sync_label') and self.db_sync_label is not None:
+                                base = f"Last: {tstr}" if tstr else "Last"
+                                self.db_sync_label.setText(base + " — auto")
+                        except Exception:
+                            pass
                     else:
                         if self.statusBar():
                             self.statusBar().showMessage("Update detected (read-only) – auto-reload disabled", 4000)
+                        # Update label with outcome
+                        try:
+                            if hasattr(self, 'db_sync_label') and self.db_sync_label is not None:
+                                base = f"Last: {tstr}" if tstr else "Last"
+                                self.db_sync_label.setText(base + " — off")
+                        except Exception:
+                            pass
                 else:
                     if bool(getattr(self, '_sync_prompt_reload_editing', True)):
                         now = time.time()
@@ -5096,16 +5176,43 @@ class MainWindow(QMainWindow):
                                 if resp == QMessageBox.Yes:
                                     if hasattr(self, '_do_reload') and callable(self._do_reload):
                                         self._do_reload()
+                                    # Update label with outcome
+                                    try:
+                                        if hasattr(self, 'db_sync_label') and self.db_sync_label is not None:
+                                            base = f"Last: {tstr}" if tstr else "Last"
+                                            self.db_sync_label.setText(base + " — reload")
+                                    except Exception:
+                                        pass
                                 else:
                                     if self.statusBar():
                                         self.statusBar().showMessage("Update detected – use Tools → Reload Data to refresh", 5000)
+                                    # Update label with outcome
+                                    try:
+                                        if hasattr(self, 'db_sync_label') and self.db_sync_label is not None:
+                                            base = f"Last: {tstr}" if tstr else "Last"
+                                            self.db_sync_label.setText(base + " — later")
+                                    except Exception:
+                                        pass
                             except Exception:
                                 # Fallback: just show a status message
                                 if self.statusBar():
                                     self.statusBar().showMessage("Database updated on disk – Reload available", 4000)
+                                try:
+                                    if hasattr(self, 'db_sync_label') and self.db_sync_label is not None:
+                                        base = f"Last: {tstr}" if tstr else "Last"
+                                        self.db_sync_label.setText(base + " — seen")
+                                except Exception:
+                                    pass
                     else:
                         if self.statusBar():
                             self.statusBar().showMessage("Update detected (editing) – prompts disabled", 4000)
+                        # Update label with outcome
+                        try:
+                            if hasattr(self, 'db_sync_label') and self.db_sync_label is not None:
+                                base = f"Last: {tstr}" if tstr else "Last"
+                                self.db_sync_label.setText(base + " — off")
+                        except Exception:
+                            pass
         except Exception:
             pass
     def on_tree_part_selected(self, part_name):
