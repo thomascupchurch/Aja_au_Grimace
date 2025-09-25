@@ -257,21 +257,40 @@ class ProjectDataModel:
             self.read_only = False
         # Resolve DB path with simple override mechanisms suitable for a shared network DB scenario.
         # Precedence:
-        #  1) Environment variable PROJECT_DB_PATH (UNC or local)
+        #  1) Environment variable PROJECT_DB_PATH (UNC or local; supports %VAR% and ~)
         #  2) db_path.txt file in the working directory containing a path
-        #  3) Default: project_data.db next to the executable/working dir
+        #  3) db_path.txt adjacent to this script
+        #  4) Default: project_data.db in current working directory
         try:
             import os
+            def _norm(p):
+                if not p:
+                    return p
+                p = os.path.expanduser(os.path.expandvars(p.strip()))
+                return os.path.normpath(p)
             env_path = os.environ.get("PROJECT_DB_PATH")
             if env_path and env_path.strip():
-                self.DB_FILE = env_path.strip()
+                # Strip UTF-8 BOM if present
+                if env_path and env_path[:1] == '\ufeff':
+                    env_path = env_path.lstrip('\ufeff')
+                self.DB_FILE = _norm(env_path)
             else:
-                cfg_file = os.path.join(os.getcwd(), "db_path.txt")
-                if os.path.exists(cfg_file):
-                    with open(cfg_file, "r", encoding="utf-8") as f:
-                        cfg_path = f.read().strip()
-                        if cfg_path:
-                            self.DB_FILE = cfg_path
+                # db_path.txt in CWD
+                cwd_cfg = os.path.join(os.getcwd(), "db_path.txt")
+                script_cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db_path.txt")
+                use_cfg = cwd_cfg if os.path.exists(cwd_cfg) else (script_cfg if os.path.exists(script_cfg) else None)
+                if use_cfg:
+                    try:
+                        with open(use_cfg, "r", encoding="utf-8") as f:
+                            cfg_path = f.read()
+                            # Remove BOM and whitespace/newlines
+                            if cfg_path and cfg_path[:1] == '\ufeff':
+                                cfg_path = cfg_path.lstrip('\ufeff')
+                            cfg_path = cfg_path.strip()
+                            if cfg_path:
+                                self.DB_FILE = _norm(cfg_path)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -295,14 +314,37 @@ class ProjectDataModel:
                         shutil.copy2(candidate, self.DB_FILE)
         except Exception:
             pass
-        self.ensure_schema()
-        self.load_from_db()
+        # Ensure parent directory exists for DB file when using a custom path
+        try:
+            import os
+            db_dir = os.path.dirname(os.path.abspath(self.DB_FILE))
+            if db_dir and not os.path.exists(db_dir):
+                os.makedirs(db_dir, exist_ok=True)
+        except Exception:
+            pass
+        try:
+            self.ensure_schema()
+            self.load_from_db()
+        except Exception as e:
+            # Provide better diagnostics when DB cannot be opened
+            import traceback
+            print(f"ERROR: Failed to open database '{self.DB_FILE}': {e}")
+            traceback.print_exc()
+            raise
 
     def _connect(self):
         """Return an sqlite3 connection with WAL, busy timeout and slightly safer cache settings.
         For network drives like OneDrive/SharePoint, WAL reduces lock contention but conflicts can still occur.
         """
         import sqlite3
+        # Ensure parent exists (defensive guard for scenarios where DB path dir was missing)
+        try:
+            import os
+            db_dir = os.path.dirname(os.path.abspath(self.DB_FILE))
+            if db_dir and not os.path.exists(db_dir):
+                os.makedirs(db_dir, exist_ok=True)
+        except Exception:
+            pass
         # Use check_same_thread=False to allow background UI operations if needed (Qt timers)
         conn = sqlite3.connect(self.DB_FILE, timeout=5.0, check_same_thread=False)
         try:
@@ -5127,6 +5169,69 @@ class MainWindow(QMainWindow):
             self.views.addWidget(self.timeline_view)
             self.views.addWidget(self.database_view)
             self.views.addWidget(self.progress_dashboard)
+
+            # --- Global Preview Panel setting (applies to all views with preview labels) ---
+            def _read_preview_setting_default_true():
+                try:
+                    from PyQt5.QtCore import QSettings
+                    s = QSettings('LSI','ProjectApp')
+                    v = s.value('UI/ShowPreviewPanel', None)
+                    if v is None:
+                        # Back-compat with older per-tree key
+                        v = s.value('TreeShowPreviewPanel', 'true')
+                    if isinstance(v, str):
+                        v = v.lower() in ('1','true','yes','on')
+                    return True if v is None else bool(v)
+                except Exception:
+                    return True
+            def _persist_preview_setting(val: bool):
+                try:
+                    from PyQt5.QtCore import QSettings
+                    s = QSettings('LSI','ProjectApp')
+                    s.setValue('UI/ShowPreviewPanel', bool(val))
+                    # Keep tree key in sync for back-compat with internal tree logic
+                    s.setValue('TreeShowPreviewPanel', bool(val))
+                except Exception:
+                    pass
+            def _apply_preview_to_widget(w, visible: bool):
+                try:
+                    if hasattr(w, 'preview_label') and getattr(w, 'preview_label') is not None:
+                        lab = w.preview_label
+                        lab.setVisible(bool(visible))
+                        # Collapse when hidden to reclaim space
+                        try:
+                            if bool(visible):
+                                lab.setMaximumHeight(16777215)
+                            else:
+                                lab.setMaximumHeight(0)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            self._show_preview_panels = _read_preview_setting_default_true()
+            # Apply initial state to all views
+            for vw in (self.project_tree_view, self.gantt_chart_view, self.calendar_view, self.timeline_view):
+                _apply_preview_to_widget(vw, bool(self._show_preview_panels))
+            # Sync Project Tree checkbox with global and propagate on change
+            try:
+                if hasattr(self.project_tree_view, 'preview_panel_cb'):
+                    cb = self.project_tree_view.preview_panel_cb
+                    # Initialize checkbox to global value without firing loops
+                    try:
+                        cb.blockSignals(True)
+                        cb.setChecked(bool(self._show_preview_panels))
+                        cb.blockSignals(False)
+                    except Exception:
+                        pass
+                    def _on_tree_preview_toggled(_state):
+                        val = bool(cb.isChecked())
+                        self._show_preview_panels = val
+                        _persist_preview_setting(val)
+                        for vw in (self.project_tree_view, self.gantt_chart_view, self.calendar_view, self.timeline_view):
+                            _apply_preview_to_widget(vw, val)
+                    cb.stateChanged.connect(_on_tree_preview_toggled)
+            except Exception:
+                pass
 
             # Layout
             main_layout = QVBoxLayout()
