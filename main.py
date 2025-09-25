@@ -38,6 +38,15 @@ def resolve_resource_path(path: str) -> str:
 HOLIDAYS_FILE = "holidays.json"
 def _holidays_path():
     import os
+    try:
+        from PyQt5.QtCore import QSettings
+        db_path = QSettings('LSI','ProjectApp').value('DB/path', '')
+        if db_path:
+            base_dir = os.path.dirname(os.path.abspath(db_path))
+            return os.path.join(base_dir, HOLIDAYS_FILE)
+    except Exception:
+        pass
+    # Fallback to app folder
     base_dir = os.path.dirname(resolve_resource_path("."))
     return os.path.join(base_dir, HOLIDAYS_FILE)
 
@@ -236,6 +245,16 @@ class ProjectDataModel:
 
     def __init__(self):
         self.rows = []  # Each row is a dict with keys as COLUMNS
+        # collaborative mode: prevent writes on viewer machines (persisted via QSettings)
+        try:
+            from PyQt5.QtCore import QSettings
+            _qs = QSettings('LSI','ProjectApp')
+            ro = _qs.value('DB/read_only', False)
+            if isinstance(ro, str):
+                ro = ro.lower() in ('1','true','yes','on')
+            self.read_only = bool(ro)
+        except Exception:
+            self.read_only = False
         # Resolve DB path with simple override mechanisms suitable for a shared network DB scenario.
         # Precedence:
         #  1) Environment variable PROJECT_DB_PATH (UNC or local)
@@ -256,6 +275,13 @@ class ProjectDataModel:
         except Exception:
             pass
 
+        # Persist resolved DB path for helpers (e.g., holidays path)
+        try:
+            from PyQt5.QtCore import QSettings
+            QSettings('LSI','ProjectApp').setValue('DB/path', self.DB_FILE)
+        except Exception:
+            pass
+
         # If running in a PyInstaller one-file bundle, the bundled DB is read-only inside the temp extraction dir.
         # We want user edits to persist next to the executable (current working directory) if no DB exists yet.
         try:
@@ -273,13 +299,18 @@ class ProjectDataModel:
         self.load_from_db()
 
     def _connect(self):
-        """Return an sqlite3 connection with WAL and busy timeout configured."""
+        """Return an sqlite3 connection with WAL, busy timeout and slightly safer cache settings.
+        For network drives like OneDrive/SharePoint, WAL reduces lock contention but conflicts can still occur.
+        """
         import sqlite3
-        conn = sqlite3.connect(self.DB_FILE)
+        # Use check_same_thread=False to allow background UI operations if needed (Qt timers)
+        conn = sqlite3.connect(self.DB_FILE, timeout=5.0, check_same_thread=False)
         try:
             cur = conn.cursor()
             cur.execute("PRAGMA journal_mode=WAL")
-            cur.execute("PRAGMA busy_timeout=5000")  # 5s
+            cur.execute("PRAGMA synchronous=NORMAL")
+            cur.execute("PRAGMA busy_timeout=5000")
+            cur.execute("PRAGMA foreign_keys=ON")
             conn.commit()
         except Exception:
             pass
@@ -417,12 +448,20 @@ class ProjectDataModel:
 
     def save_to_db(self):
         import sqlite3
+        if getattr(self, 'read_only', False):
+            # Skip save in read-only mode (collaborative viewer)
+            return
         self.update_calculated_end_dates()
         # Roll-ups before save to persist auto-calculated parent progress
         self.rollup_progress()
         self.create_table()
         with self._connect() as conn:
             c = conn.cursor()
+            try:
+                # Acquire an immediate transaction lock to avoid mid-write conflicts
+                c.execute("BEGIN IMMEDIATE")
+            except Exception:
+                pass
             c.execute("DELETE FROM project_parts")
             for row in self.rows:
                 values = [row.get(col, "") for col in self.COLUMNS]
@@ -3867,6 +3906,8 @@ class DatabaseView(QWidget):
         super().__init__()
         self.model = model
         self.on_data_changed = on_data_changed
+        # Honor app-level read-only flag if present
+        self._read_only = bool(getattr(self.model, 'read_only', False))
         layout = QVBoxLayout()
         layout.addWidget(QLabel("Database View (Editable)"))
         self.table = QTableWidget()
@@ -3878,25 +3919,53 @@ class DatabaseView(QWidget):
         layout.addWidget(self.table)
 
         btn_layout = QHBoxLayout()
-        add_btn = QPushButton("Add Row")
-        add_btn.clicked.connect(self.add_row)
-        btn_layout.addWidget(add_btn)
-        del_btn = QPushButton("Delete Row")
-        del_btn.clicked.connect(self.delete_row)
-        btn_layout.addWidget(del_btn)
-        export_btn = QPushButton("Export Database")
-        export_btn.clicked.connect(self.export_database)
-        btn_layout.addWidget(export_btn)
-        import_btn = QPushButton("Import Data")
-        import_btn.clicked.connect(self.import_data)
-        btn_layout.addWidget(import_btn)
+        self.add_btn = QPushButton("Add Row")
+        self.add_btn.clicked.connect(self.add_row)
+        btn_layout.addWidget(self.add_btn)
+        self.del_btn = QPushButton("Delete Row")
+        self.del_btn.clicked.connect(self.delete_row)
+        btn_layout.addWidget(self.del_btn)
+        self.export_btn = QPushButton("Export Database")
+        self.export_btn.clicked.connect(self.export_database)
+        btn_layout.addWidget(self.export_btn)
+        self.import_btn = QPushButton("Import Data")
+        self.import_btn.clicked.connect(self.import_data)
+        btn_layout.addWidget(self.import_btn)
         layout.addLayout(btn_layout)
 
         self.setLayout(layout)
         self.refresh_table()
         self.table.cellChanged.connect(self.cell_edited)
 
+    def set_read_only(self, read_only: bool):
+        """Enable/disable editing and mutating operations in the Database view."""
+        self._read_only = bool(read_only)
+        try:
+            from PyQt5.QtWidgets import QAbstractItemView
+            if self._read_only:
+                self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            else:
+                self.table.setEditTriggers(QAbstractItemView.AllEditTriggers)
+        except Exception:
+            pass
+        # Buttons: disable mutating actions in read-only; export stays enabled
+        try:
+            self.add_btn.setEnabled(not self._read_only)
+            self.del_btn.setEnabled(not self._read_only)
+            self.import_btn.setEnabled(not self._read_only)
+        except Exception:
+            pass
+        # Rebuild widgets to reflect enabled/disabled state
+        try:
+            self.refresh_table()
+        except Exception:
+            pass
+
     def import_data(self):
+        if getattr(self, '_read_only', False):
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Read-Only", "Import is disabled in read-only mode.")
+            return
         from PyQt5.QtWidgets import QFileDialog, QMessageBox
         import csv
         path, _ = QFileDialog.getOpenFileName(self, "Import Data", "", "CSV Files (*.csv)")
@@ -3976,6 +4045,8 @@ class DatabaseView(QWidget):
                         else:
                             date_edit.clear()
                     date_edit.dateChanged.connect(lambda d, r=row, c=col: self.date_changed(r, c, d))
+                    if getattr(self, '_read_only', False):
+                        date_edit.setEnabled(False)
                     self.table.setCellWidget(row, col, date_edit)
                     # Show blank in the table cell if value is empty or minimum blank
                     if not date_val or date_val == min_blank.toString("MM-dd-yyyy"):
@@ -4006,6 +4077,8 @@ class DatabaseView(QWidget):
                         spin.setToolTip("Parent progress is rolled up automatically from children.")
                     else:
                         spin.valueChanged.connect(lambda val, r=row, c=col: self.percent_changed(r, c, val))
+                    if getattr(self, '_read_only', False):
+                        spin.setEnabled(False)
                     self.table.setCellWidget(row, col, spin)
                     self.table.setItem(row, col, QTableWidgetItem(str(spin.value())))
                 elif colname in self.DROPDOWN_FIELDS or colname == "Parent":
@@ -4027,6 +4100,8 @@ class DatabaseView(QWidget):
                         if current_val in part_names:
                             combo.setCurrentText(current_val)
                         combo.currentTextChanged.connect(lambda val, r=row, c=col: self.dropdown_changed(r, c, val))
+                        if getattr(self, '_read_only', False):
+                            combo.setEnabled(False)
                         self.table.setCellWidget(row, col, combo)
                         self.table.setItem(row, col, QTableWidgetItem(combo.currentText()))
                     else:
@@ -4042,10 +4117,17 @@ class DatabaseView(QWidget):
                                 combo.currentTextChanged.connect(lambda val, r=row, c=col: self.status_changed(r, c, val))
                         else:
                             combo.currentTextChanged.connect(lambda val, r=row, c=col: self.dropdown_changed(r, c, val))
+                            if getattr(self, '_read_only', False):
+                                combo.setEnabled(False)
                         self.table.setCellWidget(row, col, combo)
                         self.table.setItem(row, col, QTableWidgetItem(combo.currentText()))
                 elif colname == "Images":
                     img_widget = ImageCellWidget(self, row, col, self.model, self.on_data_changed)
+                    if getattr(self, '_read_only', False) and hasattr(img_widget, 'btn'):
+                        try:
+                            img_widget.btn.setEnabled(False)
+                        except Exception:
+                            pass
                     self.table.setCellWidget(row, col, img_widget)
                     img_widget.refresh()  # Ensure preview is updated after loading
                     img_val = rowdata.get(colname, "")
@@ -4075,6 +4157,8 @@ class DatabaseView(QWidget):
                             if self.on_data_changed:
                                 self.on_data_changed()
                         line_edit.editingFinished.connect(on_edit_finished)
+                        if getattr(self, '_read_only', False):
+                            line_edit.setEnabled(False)
                         self.table.setCellWidget(row, col, line_edit)
                         self.table.setItem(row, col, QTableWidgetItem(link))
                 else:
@@ -4094,6 +4178,10 @@ class DatabaseView(QWidget):
         self.table.resizeColumnToContents(part_col)
 
     def add_row(self):
+        if getattr(self, '_read_only', False):
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Read-Only", "Add Row is disabled in read-only mode.")
+            return
         data = []
         for col in ProjectDataModel.COLUMNS:
             if col == "Duration (days)":
@@ -4114,6 +4202,10 @@ class DatabaseView(QWidget):
             self.on_data_changed()
 
     def delete_row(self):
+        if getattr(self, '_read_only', False):
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Read-Only", "Delete Row is disabled in read-only mode.")
+            return
         row = self.table.currentRow()
         if row >= 0:
             self.model.delete_row(row)
@@ -4524,6 +4616,76 @@ class MainWindow(QMainWindow):
                 act_open_folder.triggered.connect(self.open_data_folder)
                 act_manage_holidays = tmenu.addAction("Manage Holidays…")
                 act_manage_holidays.triggered.connect(self._open_holidays_manager)
+                tmenu.addSeparator()
+                act_switch_db = tmenu.addAction("Switch Data File…")
+                def do_switch_db():
+                    try:
+                        path, _ = QFileDialog.getOpenFileName(self, "Choose Database File", os.path.dirname(os.path.abspath(self.model.DB_FILE)), "SQLite DB (*.db);;All Files (*.*)")
+                        if not path:
+                            return
+                        # Persist to db_path.txt and QSettings
+                        try:
+                            with open(os.path.join(os.getcwd(), "db_path.txt"), "w", encoding="utf-8") as f:
+                                f.write(path)
+                        except Exception:
+                            pass
+                        try:
+                            from PyQt5.QtCore import QSettings
+                            QSettings('LSI','ProjectApp').setValue('DB/path', path)
+                        except Exception:
+                            pass
+                        # Point model to new DB and reload
+                        self.model.DB_FILE = path
+                        self.model.ensure_schema()
+                        self.model.load_from_db()
+                        self.on_data_changed()
+                        if self.statusBar():
+                            self.statusBar().showMessage("Switched DB and reloaded", 3000)
+                    except Exception as e:
+                        print(f"Switch DB failed: {e}")
+                act_switch_db.triggered.connect(do_switch_db)
+                act_backup_db = tmenu.addAction("Backup Database…")
+                def do_backup_db():
+                    import datetime
+                    try:
+                        base = os.path.abspath(self.model.DB_FILE)
+                        folder = os.path.dirname(base)
+                        ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+                        stem = os.path.splitext(os.path.basename(base))[0]
+                        dest = os.path.join(folder, f"{stem}_{ts}.db")
+                        import shutil
+                        shutil.copy2(base, dest)
+                        # Copy WAL/SHM if present
+                        for ext in ("-wal","-shm"):
+                            src = base + ext
+                            if os.path.exists(src):
+                                shutil.copy2(src, dest + ext)
+                        if self.statusBar():
+                            self.statusBar().showMessage(f"Backup created: {dest}", 3000)
+                    except Exception as e:
+                        print(f"Backup failed: {e}")
+                act_backup_db.triggered.connect(do_backup_db)
+                tmenu.addSeparator()
+                act_toggle_ro = tmenu.addAction("Read-Only Mode")
+                act_toggle_ro.setCheckable(True)
+                # Initialize from model
+                try:
+                    act_toggle_ro.setChecked(bool(getattr(self.model, 'read_only', False)))
+                except Exception:
+                    pass
+                def do_toggle_ro(checked):
+                    try:
+                        self.model.read_only = bool(checked)
+                        from PyQt5.QtCore import QSettings
+                        QSettings('LSI','ProjectApp').setValue('DB/read_only', bool(checked))
+                        # Update DatabaseView editability if available
+                        if hasattr(self, 'database_view') and hasattr(self.database_view, 'set_read_only'):
+                            self.database_view.set_read_only(bool(checked))
+                        if self.statusBar():
+                            self.statusBar().showMessage("Read-Only {}".format("On" if checked else "Off"), 2500)
+                    except Exception as e:
+                        print(f"Toggle Read-Only failed: {e}")
+                act_toggle_ro.toggled.connect(do_toggle_ro)
 
                 # --- Filters submenu (consolidated from right-side dock) ---
                 self._init_filter_state()
@@ -4610,6 +4772,12 @@ class MainWindow(QMainWindow):
             self.calendar_view = CalendarView(self.model)
             self.timeline_view = TimelineView(self.model)
             self.database_view = DatabaseView(self.model, on_data_changed=self.on_data_changed)
+            try:
+                # Initialize database view read-only state from model setting
+                if hasattr(self.database_view, 'set_read_only'):
+                    self.database_view.set_read_only(bool(getattr(self.model, 'read_only', False)))
+            except Exception:
+                pass
             self.progress_dashboard = ProgressDashboard(self.model)
 
             self.views = QStackedWidget()
@@ -4659,13 +4827,25 @@ class MainWindow(QMainWindow):
             self.db_status_label.setStyleSheet("color:#ccc; font-size:11px")
             self.db_warning_label = QLabel()
             self.db_warning_label.setStyleSheet("color:#FFD166; font-size:11px")
+            # Read-only indicator label
+            self.db_ro_label = QLabel("READ-ONLY")
+            self.db_ro_label.setStyleSheet(
+                "color: #fff; background-color: #d9534f; font-weight: bold; font-size: 10px;"
+                "padding: 1px 6px; border-radius: 3px;"
+            )
             self.open_folder_btn = _QBtn("Open Data Folder")
             self.open_folder_btn.setStyleSheet("font-size:11px")
             self.open_folder_btn.clicked.connect(self.open_data_folder)
             sb.addPermanentWidget(self.db_status_label, 1)
             sb.addPermanentWidget(self.db_warning_label, 0)
+            sb.addPermanentWidget(self.db_ro_label, 0)
             sb.addPermanentWidget(self.open_folder_btn, 0)
             self._update_db_status()
+            # Initialize read-only indicator visibility
+            try:
+                self._update_read_only_indicator()
+            except Exception:
+                pass
 
             # Basic Tools menu (keep hidden to avoid extra top padding – use inline menu below the logo)
             mb = self.menuBar(); tools_menu = mb.addMenu("Tools")
@@ -4701,6 +4881,16 @@ class MainWindow(QMainWindow):
             import traceback
             print("EXCEPTION in MainWindow.__init__:", e)
             traceback.print_exc()
+    def _update_read_only_indicator(self):
+        try:
+            ro = bool(getattr(self.model, 'read_only', False))
+        except Exception:
+            ro = False
+        try:
+            if hasattr(self, 'db_ro_label') and self.db_ro_label is not None:
+                self.db_ro_label.setVisible(ro)
+        except Exception:
+            pass
     def open_data_folder(self):
         import os, sys, subprocess
         base_dir = os.path.dirname(os.path.abspath(self.model.DB_FILE))

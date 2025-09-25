@@ -50,6 +50,16 @@ A desktop project planning & visualization tool built with PyQt5 + QGraphicsScen
 - Conditional data bundling (attachments folder only if present)
 - Accessible hover contrast (orange background preserved)
 
+### Collaboration & OneDrive-friendly behavior
+
+- Shared SQLite with safe defaults: WAL mode, busy timeout, and explicit transactions for writers
+- Toggle Read-Only Mode to safely browse a shared DB without taking any write locks
+- Holidays stored next to the active DB as `holidays.json` so all collaborators see the same calendar
+- Tools menu helpers:
+   - Switch Data File… writes `db_path.txt` and reloads, overriding the default `project_data.db`
+   - Backup Database… creates timestamped copies of the `.db` and any `-wal`/`-shm` sidecar files
+   - Reload Data brings in changes that synced while the app was open
+
 ## Data Model (Selected Fields)
 
 - Project Part (string, unique name)
@@ -146,6 +156,21 @@ python -m PyInstaller main_onefile.spec  # one-file
 ```
 
 If images do not appear in the packaged build, confirm they are collected—adjust the spec's datas list accordingly.
+
+## Collaboration Setup (OneDrive / Microsoft 365)
+
+You can place the SQLite database in a shared OneDrive folder so multiple teammates can view the same data. Recommended workflow:
+
+1. Place `project_data.db` in a OneDrive-backed folder that all collaborators can access.
+2. In the desktop app, use Tools → Switch Data File… to point at that DB. This writes `db_path.txt` so the path persists across launches. You can also set `PROJECT_DB_PATH` as an environment variable to override the path.
+3. Viewers should enable Tools → Read-Only Mode. Editors can leave it off and the app will acquire a write lock only during saves.
+4. Use Tools → Reload Data to pick up changes that synced from other machines while your app is open.
+5. Use Tools → Backup Database… to create timestamped copies of the `.db` (and any `-wal`/`-shm`) in the same folder before risky edits.
+
+Notes:
+- The app configures SQLite for collaboration: WAL journal mode, a sane busy timeout, and explicit BEGIN IMMEDIATE transactions for writes.
+- Holidays are stored as `holidays.json` next to the active DB so everyone sees the same shading.
+- Avoid simultaneous heavy edits from multiple writers; SQLite handles short overlaps, but it is not a multi-master database.
 
 ## Shortcuts & Navigation
 
