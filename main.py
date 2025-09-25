@@ -1296,6 +1296,21 @@ class ProjectTreeView(QWidget):
                         row = self._name_to_row.get(name)
                         if row:
                             self._show_image_for_row(row)
+        elif event.type() == QEvent.GraphicsSceneMouseMove:
+            # Fallback: some items might not emit hover events; use mouse move to drive previews
+            if not self._hover_preview_enabled:
+                self.preview_label.clear()
+            else:
+                try:
+                    item = self.scene.itemAt(event.scenePos(), self.view.transform())
+                    if item:
+                        name = item.data(0)
+                        if isinstance(name, str):
+                            row = self._name_to_row.get(name)
+                            if row:
+                                self._show_image_for_row(row)
+                except Exception:
+                    pass
         elif event.type() == QEvent.GraphicsSceneHoverLeave:
             self.preview_label.clear()
         return super().eventFilter(obj, event)
