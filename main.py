@@ -3909,7 +3909,16 @@ class DatabaseView(QWidget):
         # Honor app-level read-only flag if present
         self._read_only = bool(getattr(self.model, 'read_only', False))
         layout = QVBoxLayout()
-        layout.addWidget(QLabel("Database View (Editable)"))
+        # Subtle read-only note at top
+        top_row = QHBoxLayout()
+        title = QLabel("Database View")
+        self.ro_banner = QLabel("read-only")
+        self.ro_banner.setStyleSheet("color:#777; font-style:italic; padding:2px 4px;")
+        self.ro_banner.setVisible(self._read_only)
+        top_row.addWidget(title)
+        top_row.addStretch(1)
+        top_row.addWidget(self.ro_banner)
+        layout.addLayout(top_row)
         self.table = QTableWidget()
         self.table.setColumnCount(len(ProjectDataModel.COLUMNS))
         self.table.setHorizontalHeaderLabels(ProjectDataModel.COLUMNS)
@@ -3940,6 +3949,11 @@ class DatabaseView(QWidget):
     def set_read_only(self, read_only: bool):
         """Enable/disable editing and mutating operations in the Database view."""
         self._read_only = bool(read_only)
+        try:
+            if hasattr(self, 'ro_banner') and self.ro_banner is not None:
+                self.ro_banner.setVisible(self._read_only)
+        except Exception:
+            pass
         try:
             from PyQt5.QtWidgets import QAbstractItemView
             if self._read_only:
@@ -4600,10 +4614,10 @@ class MainWindow(QMainWindow):
             # Tools menu button (moved here from under the header)
             try:
                 from PyQt5.QtWidgets import QToolButton, QMenu, QAction, QInputDialog
-                tools_btn = QToolButton()
-                tools_btn.setText("Tools")
-                tools_btn.setToolTip("App tools and utilities")
-                tools_btn.setPopupMode(QToolButton.InstantPopup)
+                self.tools_btn = QToolButton()
+                self.tools_btn.setText("Tools")
+                self.tools_btn.setToolTip("App tools and utilities")
+                self.tools_btn.setPopupMode(QToolButton.InstantPopup)
                 tmenu = QMenu(self)
                 # Actions
                 act_jump = tmenu.addAction("Jump to Part")
@@ -4741,8 +4755,8 @@ class MainWindow(QMainWindow):
 
                 # Attach Filters submenu and put menu on the button
                 tmenu.addMenu(filters_menu)
-                tools_btn.setMenu(tmenu)
-                controls_layout.addWidget(tools_btn)
+                self.tools_btn.setMenu(tmenu)
+                controls_layout.addWidget(self.tools_btn)
 
                 # Sync menu with current (loaded) settings later in init
             except Exception:
@@ -4829,9 +4843,10 @@ class MainWindow(QMainWindow):
             self.db_warning_label.setStyleSheet("color:#FFD166; font-size:11px")
             # Read-only indicator label
             self.db_ro_label = QLabel("READ-ONLY")
+            # Subtle badge styling: muted colors, thin border
             self.db_ro_label.setStyleSheet(
-                "color: #fff; background-color: #d9534f; font-weight: bold; font-size: 10px;"
-                "padding: 1px 6px; border-radius: 3px;"
+                "color:#555; background-color:#efefef; border:1px solid #cfcfcf;"
+                "font-size:10px; padding:1px 6px; border-radius:3px;"
             )
             self.open_folder_btn = _QBtn("Open Data Folder")
             self.open_folder_btn.setStyleSheet("font-size:11px")
@@ -4891,6 +4906,7 @@ class MainWindow(QMainWindow):
                 self.db_ro_label.setVisible(ro)
         except Exception:
             pass
+        # Keep Tools button text unchanged and avoid modifying the window title for a subtler signal
     def open_data_folder(self):
         import os, sys, subprocess
         base_dir = os.path.dirname(os.path.abspath(self.model.DB_FILE))
