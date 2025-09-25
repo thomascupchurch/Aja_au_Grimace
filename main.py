@@ -4610,6 +4610,8 @@ class MainWindow(QMainWindow):
                         self._update_db_status()
                     except Exception:
                         pass
+            # Keep a reference for other components (e.g., file change watcher)
+            self._do_reload = do_reload
 
             # Tools menu button (moved here from under the header)
             try:
@@ -4695,6 +4697,11 @@ class MainWindow(QMainWindow):
                         # Update DatabaseView editability if available
                         if hasattr(self, 'database_view') and hasattr(self.database_view, 'set_read_only'):
                             self.database_view.set_read_only(bool(checked))
+                        # Update subtle read-only badge visibility
+                        try:
+                            self._update_read_only_indicator()
+                        except Exception:
+                            pass
                         if self.statusBar():
                             self.statusBar().showMessage("Read-Only {}".format("On" if checked else "Off"), 2500)
                     except Exception as e:
@@ -4755,6 +4762,65 @@ class MainWindow(QMainWindow):
 
                 # Attach Filters submenu and put menu on the button
                 tmenu.addMenu(filters_menu)
+                # --- Sync submenu for OneDrive file watching ---
+                sync_menu = QMenu("Sync", self)
+                # Load persisted settings
+                try:
+                    from PyQt5.QtCore import QSettings
+                    s = QSettings('LSI','ProjectApp')
+                    self._sync_auto_reload_readonly = bool(s.value('Sync/auto_reload_readonly', True, type=bool))
+                    self._sync_prompt_reload_editing = bool(s.value('Sync/prompt_reload_editing', True, type=bool))
+                    self._sync_watch_ms = int(s.value('Sync/watch_interval_ms', 2000))
+                except Exception:
+                    self._sync_auto_reload_readonly = True
+                    self._sync_prompt_reload_editing = True
+                    self._sync_watch_ms = 2000
+                # Actions
+                a_auto = QAction("Auto-Reload on Sync (Read-Only)", self)
+                a_auto.setCheckable(True)
+                a_auto.setChecked(bool(self._sync_auto_reload_readonly))
+                def on_auto(t):
+                    self._sync_auto_reload_readonly = bool(t)
+                    try:
+                        from PyQt5.QtCore import QSettings
+                        QSettings('LSI','ProjectApp').setValue('Sync/auto_reload_readonly', bool(t))
+                    except Exception:
+                        pass
+                a_auto.toggled.connect(on_auto)
+                sync_menu.addAction(a_auto)
+                a_prompt = QAction("Prompt to Reload on Sync (Editing)", self)
+                a_prompt.setCheckable(True)
+                a_prompt.setChecked(bool(self._sync_prompt_reload_editing))
+                def on_prompt(t):
+                    self._sync_prompt_reload_editing = bool(t)
+                    try:
+                        from PyQt5.QtCore import QSettings
+                        QSettings('LSI','ProjectApp').setValue('Sync/prompt_reload_editing', bool(t))
+                    except Exception:
+                        pass
+                a_prompt.toggled.connect(on_prompt)
+                sync_menu.addAction(a_prompt)
+                sync_menu.addSeparator()
+                def change_interval():
+                    from PyQt5.QtWidgets import QInputDialog
+                    cur_sec = max(1, int(round(self._sync_watch_ms/1000)))
+                    sec, ok = QInputDialog.getInt(self, "Change Watch Interval", "Seconds:", cur_sec, 1, 60, 1)
+                    if ok:
+                        self._sync_watch_ms = int(sec * 1000)
+                        try:
+                            if hasattr(self, '_db_watch_timer') and self._db_watch_timer is not None:
+                                self._db_watch_timer.setInterval(self._sync_watch_ms)
+                        except Exception:
+                            pass
+                        try:
+                            from PyQt5.QtCore import QSettings
+                            QSettings('LSI','ProjectApp').setValue('Sync/watch_interval_ms', int(self._sync_watch_ms))
+                        except Exception:
+                            pass
+                        if self.statusBar():
+                            self.statusBar().showMessage(f"Watch interval set to {sec}s", 2500)
+                sync_menu.addAction("Change Watch Interval…", change_interval)
+                tmenu.addMenu(sync_menu)
                 self.tools_btn.setMenu(tmenu)
                 controls_layout.addWidget(self.tools_btn)
 
@@ -4839,6 +4905,9 @@ class MainWindow(QMainWindow):
             self.setStatusBar(sb)
             self.db_status_label = QLabel()
             self.db_status_label.setStyleSheet("color:#ccc; font-size:11px")
+            # Last sync/update detected label
+            self.db_sync_label = QLabel("Last Update: —")
+            self.db_sync_label.setStyleSheet("color:#aaa; font-size:11px")
             self.db_warning_label = QLabel()
             self.db_warning_label.setStyleSheet("color:#FFD166; font-size:11px")
             # Read-only indicator label
@@ -4852,6 +4921,7 @@ class MainWindow(QMainWindow):
             self.open_folder_btn.setStyleSheet("font-size:11px")
             self.open_folder_btn.clicked.connect(self.open_data_folder)
             sb.addPermanentWidget(self.db_status_label, 1)
+            sb.addPermanentWidget(self.db_sync_label, 0)
             sb.addPermanentWidget(self.db_warning_label, 0)
             sb.addPermanentWidget(self.db_ro_label, 0)
             sb.addPermanentWidget(self.open_folder_btn, 0)
@@ -4859,6 +4929,23 @@ class MainWindow(QMainWindow):
             # Initialize read-only indicator visibility
             try:
                 self._update_read_only_indicator()
+            except Exception:
+                pass
+            # Initialize DB change watcher (detect OneDrive sync updates)
+            try:
+                from PyQt5.QtCore import QTimer
+                self._db_last_mtime = self._get_db_mtime()
+                self._db_change_prompt_at = 0.0
+                self._db_watch_timer = QTimer(self)
+                # Respect persisted interval
+                try:
+                    from PyQt5.QtCore import QSettings
+                    self._sync_watch_ms = int(QSettings('LSI','ProjectApp').value('Sync/watch_interval_ms', 2000))
+                except Exception:
+                    self._sync_watch_ms = 2000
+                self._db_watch_timer.setInterval(int(self._sync_watch_ms))
+                self._db_watch_timer.timeout.connect(self._check_db_changed)
+                self._db_watch_timer.start()
             except Exception:
                 pass
 
@@ -4950,6 +5037,77 @@ class MainWindow(QMainWindow):
                 pass
         if hasattr(self, 'db_status_label') and self.db_status_label is not None:
             self.db_status_label.setText(text)
+        # Update cached mtime baseline for watcher if needed
+        try:
+            self._db_last_mtime = self._get_db_mtime()
+        except Exception:
+            pass
+    def _get_db_mtime(self):
+        import os
+        try:
+            base = os.path.abspath(self.model.DB_FILE)
+        except Exception:
+            base = self.model.DB_FILE
+        mtimes = []
+        try:
+            if os.path.exists(base):
+                mtimes.append(os.path.getmtime(base))
+            for ext in ('-wal','-shm'):
+                side = base + ext
+                if os.path.exists(side):
+                    mtimes.append(os.path.getmtime(side))
+        except Exception:
+            pass
+        return max(mtimes) if mtimes else 0.0
+    def _check_db_changed(self):
+        import time
+        try:
+            cur = self._get_db_mtime()
+            last = getattr(self, '_db_last_mtime', 0.0)
+            if cur and (cur > last + 0.5):
+                # File changed on disk – update baseline and act
+                self._db_last_mtime = cur
+                # Update the last update label in the status bar
+                try:
+                    if hasattr(self, 'db_sync_label') and self.db_sync_label is not None:
+                        tstr = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+                        self.db_sync_label.setText(f"Last Update: {tstr}")
+                except Exception:
+                    pass
+                # Auto-reload if read-only (safe), otherwise prompt (cooldown 10s)
+                if bool(getattr(self.model, 'read_only', False)):
+                    # Auto-reload only if enabled in settings
+                    if bool(getattr(self, '_sync_auto_reload_readonly', True)):
+                        if hasattr(self, '_do_reload') and callable(self._do_reload):
+                            self._do_reload()
+                    else:
+                        if self.statusBar():
+                            self.statusBar().showMessage("Update detected (read-only) – auto-reload disabled", 4000)
+                else:
+                    if bool(getattr(self, '_sync_prompt_reload_editing', True)):
+                        now = time.time()
+                        if now - getattr(self, '_db_change_prompt_at', 0.0) >= 10.0:
+                            self._db_change_prompt_at = now
+                            try:
+                                from PyQt5.QtWidgets import QMessageBox
+                                resp = QMessageBox.question(self, "Database Updated",
+                                    "The database changed on disk (e.g., via OneDrive sync). Reload now?",
+                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+                                if resp == QMessageBox.Yes:
+                                    if hasattr(self, '_do_reload') and callable(self._do_reload):
+                                        self._do_reload()
+                                else:
+                                    if self.statusBar():
+                                        self.statusBar().showMessage("Update detected – use Tools → Reload Data to refresh", 5000)
+                            except Exception:
+                                # Fallback: just show a status message
+                                if self.statusBar():
+                                    self.statusBar().showMessage("Database updated on disk – Reload available", 4000)
+                    else:
+                        if self.statusBar():
+                            self.statusBar().showMessage("Update detected (editing) – prompts disabled", 4000)
+        except Exception:
+            pass
     def on_tree_part_selected(self, part_name):
         # No automatic view switching. Optionally, highlight in Gantt if already there.
         if self.sidebar.currentRow() == 1 and hasattr(self.gantt_chart_view, 'highlight_bar'):

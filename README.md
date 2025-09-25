@@ -59,6 +59,10 @@ A desktop project planning & visualization tool built with PyQt5 + QGraphicsScen
    - Switch Data File… writes `db_path.txt` and reloads, overriding the default `project_data.db`
    - Backup Database… creates timestamped copies of the `.db` and any `-wal`/`-shm` sidecar files
    - Reload Data brings in changes that synced while the app was open
+   - Sync submenu:
+     - Auto-Reload on Sync (Read-Only) – when enabled, the app automatically reloads upon detecting OneDrive updates while in read-only mode
+     - Prompt to Reload on Sync (Editing) – when enabled, the app prompts you to reload when updates are detected while editing
+     - Change Watch Interval… – lets you set the polling interval for update detection (default 2 seconds)
 
 ## Data Model (Selected Fields)
 
