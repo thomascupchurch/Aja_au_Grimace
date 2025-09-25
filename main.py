@@ -776,6 +776,10 @@ class ProjectTreeView(QWidget):
         self._name_to_row = {}
         self._name_to_item = {}
         self._hover_preview_enabled = True
+        # tiny LRU cache for preview pixmaps
+        self._preview_cache = {}
+        self._preview_cache_order = []  # MRU at end
+        self._preview_cache_cap = 64
         layout = QVBoxLayout()
         header = QHBoxLayout()
         title = QLabel("Project Tree (Horizontal)")
@@ -786,12 +790,16 @@ class ProjectTreeView(QWidget):
         refresh_btn = QPushButton("Refresh")
         toggle_img_btn = QPushButton("Previews: On")
         export_btn = QPushButton("Export")
+        reset_btn = QPushButton("Reset View")
+        clear_cache_btn = QPushButton("Clear Cache")
         settings_btn = QPushButton("Settings…")
         fit_btn.setToolTip("Fit entire tree in view")
         refresh_btn.setToolTip("Rebuild layout from model")
         toggle_img_btn.setToolTip("Toggle image hover previews")
         export_btn.setToolTip("Export Project Tree")
         settings_btn.setToolTip("Open export settings dialog")
+        reset_btn.setToolTip("Reset zoom and fit entire tree")
+        clear_cache_btn.setToolTip("Clear preview image cache")
         def do_fit():
             if hasattr(self, 'view'):
                 r = self.scene.itemsBoundingRect()
@@ -806,6 +814,27 @@ class ProjectTreeView(QWidget):
         refresh_btn.clicked.connect(do_refresh)
         toggle_img_btn.clicked.connect(do_toggle_preview)
         export_btn.clicked.connect(lambda: self._export_tree())
+        def do_reset():
+            try:
+                if hasattr(self, 'view') and hasattr(self.view, 'resetZoom'):
+                    self.view.resetZoom()
+                # Fit the entire scene after resetting
+                r = self.scene.itemsBoundingRect()
+                if not r.isNull():
+                    self.view.fitInView(r.adjusted(-40,-40,40,40), Qt.KeepAspectRatio)
+            except Exception:
+                pass
+        reset_btn.clicked.connect(do_reset)
+        def do_clear_cache():
+            try:
+                if hasattr(self, '_preview_cache'):
+                    self._preview_cache.clear()
+                if hasattr(self, '_preview_cache_order'):
+                    self._preview_cache_order.clear()
+                self.preview_label.clear()
+            except Exception:
+                pass
+        clear_cache_btn.clicked.connect(do_clear_cache)
         def open_settings():
             try:
                 dlg = ExportSettingsDialog(self)
@@ -818,6 +847,8 @@ class ProjectTreeView(QWidget):
         header.addWidget(refresh_btn)
         header.addWidget(toggle_img_btn)
         header.addWidget(export_btn)
+        header.addWidget(reset_btn)
+        header.addWidget(clear_cache_btn)
         header.addWidget(settings_btn)
         # Panel visibility toggles
         self.preview_panel_cb = QCheckBox("Preview")
@@ -1371,7 +1402,28 @@ class ProjectTreeView(QWidget):
         if img_path and str(img_path).strip():
             from PyQt5.QtGui import QPixmap
             full = resolve_resource_path(img_path)
-            pm = QPixmap(full)
+            # LRU cache lookup
+            pm = None
+            try:
+                if full in self._preview_cache:
+                    pm = self._preview_cache[full]
+                    # move to MRU
+                    try:
+                        self._preview_cache_order.remove(full)
+                    except ValueError:
+                        pass
+                    self._preview_cache_order.append(full)
+                else:
+                    pm = QPixmap(full)
+                    if not pm.isNull():
+                        self._preview_cache[full] = pm
+                        self._preview_cache_order.append(full)
+                        if len(self._preview_cache_order) > self._preview_cache_cap:
+                            # evict LRU
+                            lru = self._preview_cache_order.pop(0)
+                            self._preview_cache.pop(lru, None)
+            except Exception:
+                pm = QPixmap(full)
             if not pm.isNull():
                 self.preview_label.setPixmap(pm.scaledToHeight(120, Qt.SmoothTransformation))
                 self.preview_label.setText("")

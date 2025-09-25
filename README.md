@@ -36,6 +36,11 @@ A desktop project planning & visualization tool built with PyQt5 + QGraphicsScen
 - PyInstaller build support (spec file present)
 - Attachment linking per task with paperclip indicator & thumbnail preview fallback
 - Horizontal Project Tree visualization (mirrors web tree layout): left‑to‑right branching node graph with status + % overlays, progress bar strip, hover image preview toggle, and fit/refresh controls
+   - Minimap panel with click‑to‑center and smooth animated transitions
+   - Collapsible Preview and Minimap panels (state persisted), zero‑height when hidden
+   - Export/Settings for the tree view (PNG/PDF) honoring include‑header setting
+   - Reset View button to restore default zoom and fit entire scene
+   - Clear Cache button for preview images (useful if files change on disk)
 - Export Gantt or Timeline to PNG / PDF (scene render) with automatic horizontal PDF pagination and page header image
 - Search / jump-to-task field centers & highlights first matching bar
 - Filter panel (status, internal/external, responsible substring, critical-only, risk-only) with ancestor auto-include
@@ -145,7 +150,7 @@ If images do not appear in the packaged build, confirm they are collected—adju
 ## Shortcuts & Navigation
 
 - Zoom: Ctrl + Mouse Wheel, or keyboard +/‑ (Zoom In/Out)
-- Reset Zoom: Ctrl+0
+- Reset Zoom: Ctrl+0 (or use the Reset View button in the Project Tree)
 - Fit to View: button in Gantt and Timeline toolbars
 - Fit Selection (Gantt): fits selected bar(s), or the locked/highlighted bar if none selected
 - Pan: click‑and‑drag (hand tool)
@@ -277,6 +282,9 @@ Future enhancements (optional): code signing integration (`signtool`), CI workfl
 
 
 ## Usage Notes
+- Tree view header offers Fit, Refresh, Previews toggle, Export/Settings, Reset View, and Clear Cache.
+- Use the Preview/Minimap checkboxes to reclaim vertical space; hidden panels fully collapse.
+- If you replace image files on disk and previews don’t update, click Clear Cache.
 
 - Only modify data in the Project Tree. Re-open Gantt / Timeline to refresh visuals after edits.
 - Hover a bar to see: bolded label, connector emphasis, potential image preview.
