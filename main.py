@@ -447,10 +447,32 @@ class ProjectDataModel:
                     pass
 
     def save_to_db(self):
-        import sqlite3
+        import sqlite3, os, socket, getpass, json
         if getattr(self, 'read_only', False):
             # Skip save in read-only mode (collaborative viewer)
             return
+        # Enforce single-editor lock: if a lock file exists and we are not the owner, prevent writes
+        try:
+            dbp = getattr(self, 'DB_FILE', None) or ''
+            if dbp:
+                lock_path = os.path.abspath(dbp) + '.lock.json'
+                if os.path.exists(lock_path):
+                    try:
+                        info = json.load(open(lock_path, 'r', encoding='utf-8'))
+                    except Exception:
+                        info = None
+                    me = None
+                    try:
+                        me = f"{getpass.getuser()}@{socket.gethostname()}"
+                    except Exception:
+                        me = 'unknown@host'
+                    owner = (info or {}).get('owner') if isinstance(info, dict) else None
+                    if owner and owner != me:
+                        # Hard block to guarantee only the lock owner can write
+                        print(f"Save blocked: edit lock held by {owner}")
+                        return
+        except Exception:
+            pass
         self.update_calculated_end_dates()
         # Roll-ups before save to persist auto-calculated parent progress
         self.rollup_progress()
@@ -5055,8 +5077,43 @@ class MainWindow(QMainWindow):
             self.calendar_view = CalendarView(self.model)
             self.timeline_view = TimelineView(self.model)
             self.database_view = DatabaseView(self.model, on_data_changed=self.on_data_changed)
+            # Enforce exclusive editing based on existing lock at startup
             try:
-                # Initialize database view read-only state from model setting
+                info = self._read_edit_lock() or {}
+                owner = info.get('owner')
+                is_stale = self._is_lock_stale(info) if info else False
+                me = self._whoami()
+                if owner and not is_stale:
+                    if owner == me:
+                        # We appear to own a current lock from a previous session – honor it
+                        self._own_lock = True
+                        self.model.read_only = False
+                        try:
+                            if hasattr(self, '_act_toggle_ro'):
+                                self._act_toggle_ro.blockSignals(True)
+                                self._act_toggle_ro.setChecked(False)
+                                self._act_toggle_ro.blockSignals(False)
+                        except Exception:
+                            pass
+                    else:
+                        # Someone else holds the lock – force read-only
+                        self.model.read_only = True
+                        try:
+                            if hasattr(self, '_act_toggle_ro'):
+                                self._act_toggle_ro.blockSignals(True)
+                                self._act_toggle_ro.setChecked(True)
+                                self._act_toggle_ro.blockSignals(False)
+                        except Exception:
+                            pass
+                        try:
+                            from PyQt5.QtCore import QSettings
+                            QSettings('LSI','ProjectApp').setValue('DB/read_only', True)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            try:
+                # Initialize database view read-only state from (possibly adjusted) model setting
                 if hasattr(self.database_view, 'set_read_only'):
                     self.database_view.set_read_only(bool(getattr(self.model, 'read_only', False)))
             except Exception:
@@ -5358,13 +5415,34 @@ class MainWindow(QMainWindow):
         return None
     def _write_edit_lock(self):
         import json, time, os
-        info = {"owner": self._whoami(), "when": time.strftime('%Y-%m-%d %H:%M:%S'), "pid": os.getpid()}
-        try:
-            with open(self._lock_path(), 'w', encoding='utf-8') as f:
-                json.dump(info, f)
-            return True
-        except Exception:
-            return False
+        # When called for acquisition, we want atomic create; when called as heartbeat, we only update if already owner
+        def _write(force=False, exclusive=False):
+            info = {"owner": self._whoami(), "when": time.strftime('%Y-%m-%d %H:%M:%S'), "pid": os.getpid()}
+            p = self._lock_path()
+            try:
+                if exclusive:
+                    # Atomic create: fail if exists
+                    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+                    with os.fdopen(os.open(p, flags), 'w', encoding='utf-8') as f:
+                        json.dump(info, f)
+                    return True
+                else:
+                    # Update only if we are current owner unless force=True (used for stale takeover)
+                    try:
+                        cur = None
+                        if os.path.exists(p):
+                            cur = json.load(open(p, 'r', encoding='utf-8'))
+                    except Exception:
+                        cur = None
+                    if force or (isinstance(cur, dict) and cur.get('owner') == info['owner']):
+                        with open(p, 'w', encoding='utf-8') as f:
+                            json.dump(info, f)
+                        return True
+                    return False
+            except Exception:
+                return False
+        # Default behavior: heartbeat update (non-exclusive)
+        return _write(force=False, exclusive=False)
     def _get_lock_settings(self):
         # Returns (stale_minutes:int, prompt_takeover:bool)
         try:
@@ -5413,7 +5491,15 @@ class MainWindow(QMainWindow):
                         m.setDefaultButton(QMessageBox.No)
                         choice = m.exec_()
                         if choice == QMessageBox.Yes:
-                            ok = self._write_edit_lock()
+                            # Forcefully take over (overwrite existing)
+                            try:
+                                import json, time, os
+                                info = {"owner": self._whoami(), "when": time.strftime('%Y-%m-%d %H:%M:%S'), "pid": os.getpid()}
+                                with open(self._lock_path(), 'w', encoding='utf-8') as f:
+                                    json.dump(info, f)
+                                ok = True
+                            except Exception:
+                                ok = False
                             if ok:
                                 self._own_lock = True
                                 self._update_lock_status()
@@ -5423,7 +5509,26 @@ class MainWindow(QMainWindow):
             self._own_lock = False
             self._update_lock_status(existing)
             return False
-        ok = self._write_edit_lock()
+        # Try atomic create to avoid races between two editors
+        try:
+            ok = False
+            # Use the internal writer with exclusive create path
+            import types
+            # Recreate the inner function call path
+            import json, time, os
+            info = {"owner": self._whoami()}
+            # attempt exclusive create by emulating the helper
+            p = self._lock_path()
+            try:
+                flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+                with os.fdopen(os.open(p, flags), 'w', encoding='utf-8') as f:
+                    info.update({"when": time.strftime('%Y-%m-%d %H:%M:%S'), "pid": os.getpid()})
+                    json.dump(info, f)
+                ok = True
+            except Exception:
+                ok = False
+        except Exception:
+            ok = False
         if ok:
             self._own_lock = True
             self._update_lock_status()
@@ -5468,6 +5573,34 @@ class MainWindow(QMainWindow):
                 if self._lock_tick >= 10 and getattr(self, '_own_lock', False):
                     self._lock_tick = 0
                     self._write_edit_lock()
+            except Exception:
+                pass
+            # If another user holds a fresh lock and we're in editing mode, switch to read-only
+            try:
+                info = self._read_edit_lock() or {}
+                owner = info.get('owner')
+                if owner and owner != self._whoami() and not self._is_lock_stale(info):
+                    if not bool(getattr(self.model, 'read_only', False)):
+                        # Flip to read-only and reflect in UI
+                        self.model.read_only = True
+                        try:
+                            if hasattr(self, '_act_toggle_ro'):
+                                self._act_toggle_ro.blockSignals(True)
+                                self._act_toggle_ro.setChecked(True)
+                                self._act_toggle_ro.blockSignals(False)
+                        except Exception:
+                            pass
+                        try:
+                            if hasattr(self, 'database_view') and hasattr(self.database_view, 'set_read_only'):
+                                self.database_view.set_read_only(True)
+                        except Exception:
+                            pass
+                        try:
+                            self._update_read_only_indicator()
+                        except Exception:
+                            pass
+                        if self.statusBar():
+                            self.statusBar().showMessage("Another user acquired the edit lock — switching to Read-Only", 3500)
             except Exception:
                 pass
             # Periodically refresh code sync label (every ~5 ticks)
