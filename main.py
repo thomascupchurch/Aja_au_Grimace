@@ -158,6 +158,47 @@ class ExportSettingsDialog(QDialog):
             pass
         return super().accept()
 
+class PricingSettingsDialog(QDialog):
+    """Dialog to configure pricing guidance: target margin and default labor rates."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from PyQt5.QtWidgets import QFormLayout, QDialogButtonBox, QDoubleSpinBox
+        from PyQt5.QtCore import QSettings
+        self.setWindowTitle("Pricing Settings")
+        self.resize(360, 180)
+        form = QFormLayout(self)
+        def mkspin(minv, maxv, step, dec=1, suffix=""):
+            sb = QDoubleSpinBox(); sb.setRange(minv,maxv); sb.setDecimals(dec); sb.setSingleStep(step)
+            if suffix: sb.setSuffix(" "+suffix)
+            return sb
+        self.target_margin = mkspin(0, 95, 1, 1, "%")
+        self.labor_rate = mkspin(0, 1000, 5, 2, "$ /h")
+        self.install_labor_rate = mkspin(0, 1000, 5, 2, "$ /h")
+        form.addRow("Target Margin %", self.target_margin)
+        form.addRow("Fabrication Labor Rate", self.labor_rate)
+        form.addRow("Install Labor Rate", self.install_labor_rate)
+        s = QSettings("LSI","ProjectPlanner")
+        try:
+            self.target_margin.setValue(float(s.value("Pricing/target_margin", 35)))
+            self.labor_rate.setValue(float(s.value("Pricing/labor_rate", 55)))
+            self.install_labor_rate.setValue(float(s.value("Pricing/install_labor_rate", 65)))
+        except Exception:
+            pass
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        form.addWidget(buttons)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+    def accept(self):
+        from PyQt5.QtCore import QSettings
+        try:
+            s = QSettings("LSI","ProjectPlanner")
+            s.setValue("Pricing/target_margin", float(self.target_margin.value()))
+            s.setValue("Pricing/labor_rate", float(self.labor_rate.value()))
+            s.setValue("Pricing/install_labor_rate", float(self.install_labor_rate.value()))
+        except Exception:
+            pass
+        return super().accept()
+
 # --- First Run / Empty DB Onboarding Dialog ---
 class FirstRunDialog(QDialog):
     def __init__(self, parent=None):
@@ -283,7 +324,28 @@ class ProjectDataModel:
         "Actual Start Date",      # Set when Status transitions to In Progress
         "Actual Finish Date",     # Set when Status transitions to Done
         "Baseline Start Date",    # Captured first time valid start/duration appear
-        "Baseline End Date"       # Derived from baseline start + duration (working days not yet applied)
+        "Baseline End Date",      # Derived from baseline start + duration (working days not yet applied)
+        # Cost tracking fields
+        "Production Cost",        # Internal estimated production cost (materials + fabrication labor)
+        "Installation Cost",      # Internal estimated install cost (crew labor + equipment)
+        "Production Price",       # Decimal number (price to be charged for production)
+        "Installation Price",     # Decimal number (price to be charged for installation)
+        # Extended cost breakdown (append-only)
+        "Material Cost",          # Materials-only direct cost
+        "Fabrication Labor Hours",# Hours for shop fabrication
+        "Installation Labor Hours",# Hours for field install
+        "Labor Rate",             # Default blended labor rate (can be overridden per row)
+        "Install Labor Rate"      # Field install labor rate
+        ,"Equipment Cost"         # Lift / crane / equipment rental cost
+        ,"Permit/Eng Cost"        # Permitting or engineering fees
+        ,"Contingency %"          # Applied percentage buffer (on cost basis)
+        ,"Warranty Reserve %"     # Percentage of price allocated to warranty reserve
+        ,"Risk Level"             # Low | Medium | High affects margin target (future)
+        ,"Quote Version"          # Current working quote version label
+        ,"Frozen Production Cost" # Snapshot baseline cost
+        ,"Frozen Installation Cost"
+        ,"Frozen Production Price"
+        ,"Frozen Installation Price"
     ]
     DB_FILE = "project_data.db"
 
@@ -421,6 +483,12 @@ class ProjectDataModel:
                 # Decide type based on semantic
                 if col == "% Complete":
                     col_type = "INTEGER"
+                elif col in ("Production Price", "Installation Price", "Production Cost", "Installation Cost", "Material Cost", "Labor Rate", "Install Labor Rate", "Equipment Cost", "Permit/Eng Cost", "Frozen Production Cost", "Frozen Installation Cost", "Frozen Production Price", "Frozen Installation Price"):
+                    col_type = "REAL"
+                elif col in ("Fabrication Labor Hours", "Installation Labor Hours"):
+                    col_type = "REAL"
+                elif col in ("Contingency %", "Warranty Reserve %"):
+                    col_type = "REAL"
                 elif col == "Attachments":
                     col_type = "TEXT"  # JSON list of relative paths
                 else:
@@ -439,6 +507,23 @@ class ProjectDataModel:
                         start_date TEXT,
                         end_date TEXT,
                         PRIMARY KEY (baseline_name, part_name)
+                    )
+                    """
+                )
+            except Exception:
+                pass
+            # Quote versions table for frozen pricing snapshots
+            try:
+                c.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS quote_versions (
+                        version_name TEXT NOT NULL,
+                        part_name TEXT NOT NULL,
+                        production_cost REAL,
+                        installation_cost REAL,
+                        production_price REAL,
+                        installation_price REAL,
+                        PRIMARY KEY (version_name, part_name)
                     )
                     """
                 )
@@ -647,6 +732,67 @@ class ProjectDataModel:
                 except Exception:
                     pass
             conn.commit()
+
+    # --- Quote Versioning API ---
+    def save_quote_version(self, version_name: str):
+        if not version_name:
+            return
+        import os
+        if not os.path.exists(self.DB_FILE):
+            return
+        with self._connect() as conn:
+            cur = conn.cursor()
+            for r in self.rows:
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO quote_versions (version_name, part_name, production_cost, installation_cost, production_price, installation_price)
+                        VALUES (?,?,?,?,?,?)
+                        ON CONFLICT(version_name, part_name) DO UPDATE SET
+                          production_cost=excluded.production_cost,
+                          installation_cost=excluded.installation_cost,
+                          production_price=excluded.production_price,
+                          installation_price=excluded.installation_price
+                        """,
+                        (
+                            version_name,
+                            r.get('Project Part',''),
+                            float(r.get('Production Cost') or 0),
+                            float(r.get('Installation Cost') or 0),
+                            float(r.get('Production Price') or 0),
+                            float(r.get('Installation Price') or 0)
+                        )
+                    )
+                except Exception:
+                    pass
+            conn.commit()
+
+    def list_quote_versions(self):
+        import os
+        if not os.path.exists(self.DB_FILE):
+            return []
+        with self._connect() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT DISTINCT version_name FROM quote_versions ORDER BY version_name")
+                return [r[0] for r in cur.fetchall()]
+            except Exception:
+                return []
+
+    def load_quote_version_map(self, version_name: str):
+        import os
+        if not version_name or not os.path.exists(self.DB_FILE):
+            return {}
+        with self._connect() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT part_name, production_cost, installation_cost, production_price, installation_price FROM quote_versions WHERE version_name=?", (version_name,))
+                out = {}
+                for part, pc, ic, pp, ip in cur.fetchall():
+                    out[part] = (pc or 0.0, ic or 0.0, pp or 0.0, ip or 0.0)
+                return out
+            except Exception:
+                return {}
 
     def load_baseline_map(self, name: str):
         import sqlite3, os
@@ -961,6 +1107,486 @@ class ProgressDashboard(QWidget):
             f"Critical Leaf Tasks: {m['critical_leaf_count']}"
         )
         self.summary_label.setText(text)
+
+class CostEstimatesView(QWidget):
+    """Enhanced cost & margin estimation view.
+    Columns:
+      Project Part | Parent | Prod Cost | Inst Cost | Total Cost | Prod Price | Inst Price | Total Price | Profit $ | Margin % | % of Total Price
+    Features:
+      - Aggregated totals (leaf-only or all rows)
+      - Filtering (name substring, internal/external, min total price)
+      - Highlight top-N expensive parts & low/negative margins
+      - CSV export
+    """
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        from PyQt5.QtWidgets import QVBoxLayout, QTableWidget, QTableWidgetItem, QLabel, QPushButton, QHBoxLayout, QLineEdit, QComboBox, QSpinBox, QFileDialog, QCheckBox
+        self.vbox = QVBoxLayout(self)
+        # --- Header / controls ---
+        header = QHBoxLayout()
+        title = QLabel("Cost & Margin Estimates")
+        title.setStyleSheet("font-weight:600; font-size:15px")
+        header.addWidget(title)
+        header.addStretch(1)
+        self.le_filter = QLineEdit(); self.le_filter.setPlaceholderText("Filter name…")
+        self.le_filter.textChanged.connect(self.refresh)
+        header.addWidget(self.le_filter)
+        self.combo_int_ext = QComboBox(); self.combo_int_ext.addItems(["All","Internal","External"]); self.combo_int_ext.currentIndexChanged.connect(self.refresh)
+        header.addWidget(self.combo_int_ext)
+        self.min_price_spin = QSpinBox(); self.min_price_spin.setRange(0, 10_000_000); self.min_price_spin.setPrefix(">$ "); self.min_price_spin.setSingleStep(500)
+        self.min_price_spin.setToolTip("Minimum total price filter")
+        self.min_price_spin.valueChanged.connect(self.refresh)
+        header.addWidget(self.min_price_spin)
+        self.chk_leaf_only = QCheckBox("Leaf Only")
+        self.chk_leaf_only.setToolTip("Show leaf rows only (exclude parent aggregators)")
+        self.chk_leaf_only.stateChanged.connect(self.refresh)
+        header.addWidget(self.chk_leaf_only)
+        self.chk_rollup = QCheckBox("Roll-up Parents")
+        self.chk_rollup.setToolTip("Aggregate descendant costs & prices into parent rows (shown even if leaf-only mode).")
+        self.chk_rollup.stateChanged.connect(self.refresh)
+        header.addWidget(self.chk_rollup)
+        self.chk_compact = QCheckBox("Compact")
+        self.chk_compact.stateChanged.connect(self._apply_compact_mode)
+        header.addWidget(self.chk_compact)
+        export_btn = QPushButton("Export CSV")
+        export_btn.clicked.connect(self._export_csv)
+        header.addWidget(export_btn)
+        export_pdf_btn = QPushButton("Export PDF/PNG")
+        export_pdf_btn.setToolTip("Export this cost table to PDF or PNG with header/footer")
+        export_pdf_btn.clicked.connect(self._export_render)
+        header.addWidget(export_pdf_btn)
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self.refresh)
+        header.addWidget(refresh_btn)
+        self.vbox.addLayout(header)
+        # Table
+        # Version comparison controls
+        self.version_combo = QComboBox(); self.version_combo.addItem("<None>")
+        self.version_combo.setToolTip("Select a saved quote version to compare deltas")
+        self.version_combo.currentIndexChanged.connect(self.refresh)
+        self.freeze_btn = QPushButton("Freeze Version…")
+        def do_freeze():
+            from PyQt5.QtWidgets import QInputDialog, QMessageBox
+            name, ok = QInputDialog.getText(self, "Freeze Quote Version", "Version name:")
+            if ok and name.strip():
+                try:
+                    self.model.save_quote_version(name.strip())
+                    self._reload_versions()
+                    self.version_combo.setCurrentText(name.strip())
+                    if self.parent() and self.parent().window().statusBar():
+                        self.parent().window().statusBar().showMessage(f"Quote version '{name.strip()}' saved", 3000)
+                except Exception as e:
+                    QMessageBox.critical(self, "Freeze Failed", str(e))
+        self.freeze_btn.clicked.connect(do_freeze)
+        header.addWidget(self.version_combo)
+        header.addWidget(self.freeze_btn)
+        self.table = QTableWidget(0, 14)
+        self.table.setHorizontalHeaderLabels([
+            "Project Part","Parent","Prod Cost","Inst Cost","Total Cost","Prod Price","Inst Price","Total Price","Profit $","Margin %","Δ Price %","Δ Margin pts","% of Total Price","Internal/External"
+        ])
+        self.table.setEditTriggers(self.table.NoEditTriggers)
+        self.table.setSelectionBehavior(self.table.SelectRows)
+        self.table.setAlternatingRowColors(True)
+        self.vbox.addWidget(self.table, 1)
+        # Totals footer
+        self.totals_label = QLabel()
+        self.totals_label.setStyleSheet("font-family:Consolas,monospace; font-size:12px; margin-top:4px")
+        self.vbox.addWidget(self.totals_label)
+        self.refresh()
+
+    def _num(self, v):
+        try:
+            if v is None: return 0.0
+            if isinstance(v,(int,float)): return float(v)
+            s=str(v).strip().replace('$','').replace(',','')
+            return float(s) if s else 0.0
+        except Exception:
+            return 0.0
+
+    def _is_leaf(self, row):
+        name = row.get("Project Part","")
+        return not any(r.get("Parent") == name for r in self.model.rows if r is not row)
+
+    def _apply_compact_mode(self):
+        try:
+            if self.chk_compact.isChecked():
+                self.table.verticalHeader().setDefaultSectionSize(18)
+                self.table.setStyleSheet("QTableWidget { font-size:11px; }")
+            else:
+                self.table.verticalHeader().setDefaultSectionSize(24)
+                self.table.setStyleSheet("")
+        except Exception:
+            pass
+
+    def _export_csv(self):
+        from PyQt5.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getSaveFileName(self, "Export Cost Table", "cost_estimates.csv", "CSV Files (*.csv)")
+        if not path:
+            return
+        import csv
+        try:
+            with open(path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                headers = [self.table.horizontalHeaderItem(i).text() for i in range(self.table.columnCount())]
+                writer.writerow(headers)
+                for r in range(self.table.rowCount()):
+                    writer.writerow([self.table.item(r,c).text() if self.table.item(r,c) else '' for c in range(self.table.columnCount())])
+            print(f"Exported CSV -> {path}")
+        except Exception as e:
+            print(f"CSV export failed: {e}")
+
+    def _export_render(self):
+        """Render the QTableWidget to PDF or PNG using export settings & header/footer branding."""
+        from PyQt5.QtCore import QSettings, QRectF
+        from PyQt5.QtWidgets import QFileDialog, QApplication
+        from PyQt5.QtGui import QPixmap, QPainter
+        import os
+        s = QSettings('LSI','ProjectPlanner')
+        fmt = s.value('Export/format','PDF')
+        include_header = s.value('Export/include_header', True)
+        if isinstance(include_header, str): include_header = include_header.lower() in ('1','true','yes','on')
+        ml = float(s.value('Export/margin_left_mm',8.0)); mt = float(s.value('Export/margin_top_mm',8.0)); mr = float(s.value('Export/margin_right_mm',8.0)); mb = float(s.value('Export/margin_bottom_mm',8.0))
+        init_name = f"cost_estimates.{ 'pdf' if fmt=='PDF' else 'png'}"
+        filters = 'PDF Files (*.pdf);;PNG Files (*.png)' if fmt=='PDF' else 'PNG Files (*.png);;PDF Files (*.pdf)'
+        path, chosen = QFileDialog.getSaveFileName(self, 'Export Cost Estimates', init_name, filters)
+        if not path: return
+        is_pdf = path.lower().endswith('.pdf') or (chosen and 'PDF' in chosen and not path.lower().endswith('.png'))
+        if is_pdf and not path.lower().endswith('.pdf'): path += '.pdf'
+        if (not is_pdf) and not path.lower().endswith('.png'): path += '.png'
+        # Ensure columns sized to contents for export
+        try: self.table.resizeColumnsToContents()
+        except Exception: pass
+        # Compute total table size (sum of column widths + header height + row heights)
+        h_header = self.table.horizontalHeader(); v_header = self.table.verticalHeader()
+        width = sum(self.table.columnWidth(c) for c in range(self.table.columnCount())) + v_header.width()
+        height = h_header.height() + sum(self.table.rowHeight(r) for r in range(self.table.rowCount()))
+        if width <=0 or height <=0:
+            print('Empty table; abort export.')
+            return
+        header_path = resolve_resource_path('header.png')
+        header_pix = QPixmap(header_path) if os.path.exists(header_path) else None
+        svg_path = resolve_resource_path('header.svg')
+        header_is_svg=False; header_svg_renderer=None
+        try:
+            if os.path.exists(svg_path):
+                from PyQt5.QtSvg import QSvgRenderer
+                r = QSvgRenderer(svg_path)
+                if r.isValid(): header_is_svg=True; header_svg_renderer=r
+        except Exception:
+            pass
+        footer_text = "© 2025 LSI – For Internal Use Only"
+        if is_pdf:
+            from PyQt5.QtPrintSupport import QPrinter
+            from PyQt5.QtCore import QMarginsF
+            printer = QPrinter(QPrinter.HighResolution)
+            printer.setOutputFileName(path)
+            printer.setOutputFormat(QPrinter.PdfFormat)
+            page_size = s.value('Export/page_size','A4'); orientation = s.value('Export/orientation','Portrait')
+            size_map={'A4':QPrinter.A4,'Letter':QPrinter.Letter,'Legal':QPrinter.Legal,'Tabloid':QPrinter.Tabloid}
+            printer.setPaperSize(size_map.get(page_size, QPrinter.A4))
+            printer.setOrientation(QPrinter.Portrait if orientation=='Portrait' else QPrinter.Landscape)
+            try: printer.setPageMargins(QMarginsF(ml,mt,mr,mb))
+            except Exception: pass
+            painter = QPainter(printer)
+            page_rect = printer.pageRect()
+            # Header height determination
+            def _svg_h(renderer, tw, default_ratio=0.12, min_h=40):
+                try:
+                    ds=renderer.defaultSize(); w,h=ds.width(), ds.height()
+                    if w<=0 or h<=0:
+                        vb=renderer.viewBoxF(); w,h=vb.width(), vb.height()
+                    if w>0 and h>0 and tw>0:
+                        return int(round(h*(tw/float(w))))
+                except Exception:
+                    pass
+                return max(min_h, int(round(tw*default_ratio))) if tw>0 else None
+            y_offset=0
+            if include_header:
+                if header_is_svg and header_svg_renderer:
+                    hh=_svg_h(header_svg_renderer, page_rect.width())
+                    if hh: header_svg_renderer.render(painter, QRectF(0,0,page_rect.width(),hh)); y_offset=hh+8
+                elif header_pix and not header_pix.isNull():
+                    sh=header_pix.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); y_offset=sh.height()+8
+            # Pagination: draw rows until page full, then newPage
+            cur_y = y_offset
+            from PyQt5.QtGui import QFont
+            font = painter.font(); fm = painter.fontMetrics()
+            row_h = fm.height()+4
+            # Draw header row
+            def draw_header(y):
+                painter.save(); painter.setFont(font)
+                x=0
+                for c in range(self.table.columnCount()):
+                    w = self.table.columnWidth(c)
+                    txt = self.table.horizontalHeaderItem(c).text()
+                    painter.drawText(x+2, y+fm.ascent()+2, txt)
+                    x += w
+                painter.restore()
+            def draw_row(r, y):
+                painter.save(); x=0
+                for c in range(self.table.columnCount()):
+                    w = self.table.columnWidth(c)
+                    it = self.table.item(r,c)
+                    txt = it.text() if it else ''
+                    align_right = (c>=2 and c not in (9,11))
+                    if align_right:
+                        tw = fm.width(txt); painter.drawText(x+w-tw-2, y+fm.ascent()+2, txt)
+                    else:
+                        painter.drawText(x+2, y+fm.ascent()+2, txt)
+                    x += w
+                painter.restore()
+            draw_header(cur_y); cur_y += row_h
+            for r in range(self.table.rowCount()):
+                if cur_y + row_h + 24 > page_rect.height():  # leave room for footer
+                    # footer before new page
+                    try:
+                        painter.save(); f=QFont(font); f.setPointSizeF(f.pointSizeF()*0.85); painter.setFont(f)
+                        painter.drawText(QRectF(0,page_rect.height()-18,page_rect.width(),16), Qt.AlignCenter, footer_text)
+                        painter.restore()
+                    except Exception: pass
+                    printer.newPage(); cur_y=0
+                    if include_header:
+                        if header_is_svg and header_svg_renderer:
+                            hh=_svg_h(header_svg_renderer, page_rect.width())
+                            if hh: header_svg_renderer.render(painter, QRectF(0,0,page_rect.width(),hh)); cur_y=hh+8
+                        elif header_pix and not header_pix.isNull():
+                            sh=header_pix.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); cur_y=sh.height()+8
+                    draw_header(cur_y); cur_y += row_h
+                draw_row(r, cur_y); cur_y += row_h
+            # Final footer
+            try:
+                painter.save(); f=QFont(font); f.setPointSizeF(f.pointSizeF()*0.85); painter.setFont(f)
+                painter.drawText(QRectF(0,page_rect.height()-18,page_rect.width(),16), Qt.AlignCenter, footer_text)
+                painter.restore()
+            except Exception: pass
+            painter.end(); print(f'Exported PDF -> {path}'); return
+        # PNG branch: render full table to pixmap (single tall image)
+        screen = QApplication.primaryScreen(); dpi = screen.logicalDotsPerInch() if screen else 96.0
+        def mm_to_px(mm): return int(round((mm/25.4)*dpi))
+        pad_l,pad_t,pad_r,pad_b=[mm_to_px(v) for v in (ml,mt,mr,mb)]
+        table_pix = QPixmap(width+pad_l+pad_r, height+pad_t+pad_b); table_pix.fill()
+        painter = QPainter(table_pix)
+        painter.translate(pad_l, pad_t)
+        # Manual paint (similar to PDF)
+        from PyQt5.QtGui import QFont
+        font = painter.font(); fm = painter.fontMetrics(); row_h = fm.height()+4
+        x=0
+        for c in range(self.table.columnCount()):
+            w=self.table.columnWidth(c)
+            txt=self.table.horizontalHeaderItem(c).text()
+            painter.drawText(x+2,fm.ascent()+2,txt)
+            x+=w
+        y=row_h
+        for r in range(self.table.rowCount()):
+            x=0
+            for c in range(self.table.columnCount()):
+                w=self.table.columnWidth(c); it=self.table.item(r,c); txt=it.text() if it else ''
+                align_right = (c>=2 and c not in (9,11))
+                if align_right:
+                    tw=fm.width(txt); painter.drawText(x+w-tw-2, y+fm.ascent()+2, txt)
+                else:
+                    painter.drawText(x+2, y+fm.ascent()+2, txt)
+                x+=w
+            y+=row_h
+        painter.end()
+        if not include_header:
+            table_pix.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
+        # With header/footer
+        if header_is_svg and header_svg_renderer:
+            def _svg_h(renderer, tw, default_ratio=0.12, min_h=40):
+                try:
+                    ds=renderer.defaultSize(); w,h=ds.width(), ds.height()
+                    if w<=0 or h<=0:
+                        vb=renderer.viewBoxF(); w,h=vb.width(), vb.height()
+                    if w>0 and h>0 and tw>0:
+                        return int(round(h*(tw/float(w))))
+                except Exception:
+                    pass
+                return max(min_h, int(round(tw*default_ratio))) if tw>0 else None
+            tw=table_pix.width(); hh=_svg_h(header_svg_renderer, tw)
+            combo = QPixmap(tw, hh+table_pix.height()); combo.fill(); painter=QPainter(combo)
+            header_svg_renderer.render(painter, QRectF(0,0,tw,hh)); painter.drawPixmap(0,hh,table_pix)
+            try:
+                from PyQt5.QtGui import QFont
+                f=QFont(); f.setPointSizeF(f.pointSizeF()*0.85); painter.setFont(f)
+                painter.drawText(0, hh+table_pix.height()-18, tw, 16, Qt.AlignCenter, footer_text)
+            except Exception: pass
+            painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
+        if header_pix and not header_pix.isNull():
+            cw=max(header_pix.width(), table_pix.width()); combo=QPixmap(cw, header_pix.height()+table_pix.height()); combo.fill(); painter=QPainter(combo)
+            painter.drawPixmap((cw-header_pix.width())//2,0, header_pix); painter.drawPixmap(0, header_pix.height(), table_pix)
+            try:
+                from PyQt5.QtGui import QFont
+                f=QFont(); f.setPointSizeF(f.pointSizeF()*0.85); painter.setFont(f)
+                painter.drawText(0, header_pix.height()+table_pix.height()-18, cw, 16, Qt.AlignCenter, footer_text)
+            except Exception: pass
+            painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
+        # Footer only
+        painter = QPainter(table_pix)
+        try:
+            from PyQt5.QtGui import QFont
+            f=QFont(); f.setPointSizeF(f.pointSizeF()*0.85); painter.setFont(f)
+            painter.drawText(0, table_pix.height()-18, table_pix.width(), 16, Qt.AlignCenter, footer_text)
+        except Exception: pass
+        painter.end(); table_pix.save(path,'PNG'); print(f'Exported PNG -> {path}')
+
+    def refresh(self):
+        rows = getattr(self.model,'rows', [])
+        # Version map
+        selected_version = self.version_combo.currentText() if hasattr(self, 'version_combo') else '<None>'
+        version_map = {}
+        if selected_version and selected_version not in ("<None>", ""):
+            try:
+                version_map = self.model.load_quote_version_map(selected_version)
+            except Exception:
+                version_map = {}
+        name_filter = (self.le_filter.text() or '').strip().lower()
+        int_ext_filter = self.combo_int_ext.currentText()
+        min_price = float(self.min_price_spin.value())
+        leaf_only = self.chk_leaf_only.isChecked()
+        rollup = self.chk_rollup.isChecked()
+        data = []
+        total_cost = total_price = total_profit = 0.0
+        # Pre-build child mapping for rollups
+        children_map = {}
+        if rollup:
+            for r in rows:
+                p = (r.get('Parent') or '').strip()
+                if p:
+                    children_map.setdefault(p, []).append(r)
+        # Helper to accumulate descendants
+        def accumulate(row):
+            stack = [row]; cost_prod = cost_inst = price_prod = price_inst = 0.0
+            while stack:
+                cur = stack.pop()
+                pcost = self._num(cur.get('Production Cost',0))
+                icost = self._num(cur.get('Installation Cost',0))
+                pprice = self._num(cur.get('Production Price',0))
+                iprice = self._num(cur.get('Installation Price',0))
+                cost_prod += pcost; cost_inst += icost; price_prod += pprice; price_inst += iprice
+                for ch in children_map.get(cur.get('Project Part',''), []):
+                    stack.append(ch)
+            return cost_prod, cost_inst, price_prod, price_inst
+        # Build data
+        for r in rows:
+            if leaf_only and not self._is_leaf(r):
+                # If rollup enabled and parent row: still include using aggregated numbers
+                if not rollup:
+                    continue
+            name = r.get('Project Part','')
+            if name_filter and name_filter not in name.lower():
+                continue
+            ie = r.get('Internal/External','') or ''
+            if int_ext_filter != 'All' and ie != int_ext_filter:
+                continue
+            if rollup:
+                pcost, icost, pprice, iprice = accumulate(r)
+            else:
+                pcost = self._num(r.get('Production Cost',0))
+                icost = self._num(r.get('Installation Cost',0))
+                pprice = self._num(r.get('Production Price',0))
+                iprice = self._num(r.get('Installation Price',0))
+            tcost = pcost + icost
+            tprice = pprice + iprice
+            if tprice < min_price:
+                continue
+            profit = tprice - tcost
+            margin_pct = (profit / tprice * 100.0) if tprice > 0 else 0.0
+            data.append((name, r.get('Parent','') or '', pcost, icost, tcost, pprice, iprice, tprice, profit, margin_pct, ie))
+            total_cost += tcost
+            total_price += tprice
+            total_profit += profit
+        pct_base = total_price if total_price>0 else 1.0
+        self.table.setRowCount(len(data))
+        # Determine thresholds for highlighting top-N (top 10% by total price)
+        import math
+        sorted_prices = sorted([d[7] for d in data], reverse=True)
+        top_n = max(1, math.ceil(len(sorted_prices)*0.10)) if sorted_prices else 0
+        top_cut = sorted_prices[top_n-1] if sorted_prices and top_n<=len(sorted_prices) else None
+        for row_idx, (name,parent,pcost,icost,tcost,pprice,iprice,tprice,profit,margin_pct,ie) in enumerate(data):
+            base = version_map.get(name)
+            if base:
+                b_pc, b_ic, b_pp, b_ip = base
+                base_total_price = (b_pp or 0)+(b_ip or 0)
+                cur_total_price = tprice
+                price_delta_pct = ((cur_total_price - base_total_price)/base_total_price*100.0) if base_total_price>0 else 0.0
+                # margin delta
+                base_profit = base_total_price - ((b_pc or 0)+(b_ic or 0))
+                base_margin_pct = (base_profit/base_total_price*100.0) if base_total_price>0 else 0.0
+                margin_delta_pts = margin_pct - base_margin_pct
+            else:
+                price_delta_pct = 0.0; margin_delta_pts = 0.0
+            values = [
+                name, parent,
+                f"{pcost:,.2f}", f"{icost:,.2f}", f"{tcost:,.2f}",
+                f"{pprice:,.2f}", f"{iprice:,.2f}", f"{tprice:,.2f}",
+                f"{profit:,.2f}", f"{margin_pct:,.1f}%", f"{price_delta_pct:,.1f}%", f"{margin_delta_pts:,.1f}", f"{(tprice/pct_base)*100:,.1f}%", ie
+            ]
+            for col_idx, val in enumerate(values):
+                item = QTableWidgetItem(val)
+                if col_idx >=2 and col_idx not in (9,11):  # margin & delta margin are textual with % / pts
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                # Conditional formatting
+                from PyQt5.QtGui import QColor
+                if col_idx == 8:  # profit
+                    if profit < 0:
+                        item.setBackground(QColor(120,0,0))
+                        item.setForeground(QColor('white'))
+                    elif profit == 0:
+                        item.setBackground(QColor(80,80,80))
+                        item.setForeground(QColor('white'))
+                if col_idx == 9:  # margin %
+                    if margin_pct < 5:
+                        item.setBackground(QColor(130,0,0))
+                        item.setForeground(QColor('white'))
+                    elif margin_pct < 15:
+                        item.setBackground(QColor(110,70,0))
+                        item.setForeground(QColor('white'))
+                if col_idx == 10:  # Δ Price % highlight
+                    if price_delta_pct > 0:
+                        item.setForeground(QColor('#3CB371'))
+                    elif price_delta_pct < 0:
+                        item.setForeground(QColor('#FF6347'))
+                if col_idx == 11:  # Δ Margin pts
+                    if margin_delta_pts > 0:
+                        item.setForeground(QColor('#3CB371'))
+                    elif margin_delta_pts < 0:
+                        item.setForeground(QColor('#FF6347'))
+                if top_cut is not None and tprice >= top_cut and col_idx == 7:
+                    item.setBackground(QColor(60,60,0))
+                    item.setForeground(QColor('#FFE066'))
+                self.table.setItem(row_idx, col_idx, item)
+        try:
+            self.table.resizeColumnsToContents()
+        except Exception:
+            pass
+        blended_margin = (total_profit/total_price*100.0) if total_price>0 else 0.0
+        avg_margin = (sum(d[9] for d in data)/len(data)) if data else 0.0
+        self.totals_label.setText(
+            f"Cost: ${total_cost:,.2f}  Price: ${total_price:,.2f}  Profit: ${total_profit:,.2f}  Blended Margin: {blended_margin:,.1f}%  Avg Margin: {avg_margin:,.1f}%  Rows: {len(data)}"
+        )
+        self._apply_compact_mode()
+        self._reload_versions()
+
+    def _reload_versions(self):
+        try:
+            existing = set(self.list_versions_cache) if hasattr(self,'list_versions_cache') else set()
+            versions = self.model.list_quote_versions()
+            if set(versions) != existing:
+                cur = self.version_combo.currentText() if self.version_combo.count() else "<None>"
+                self.version_combo.blockSignals(True)
+                self.version_combo.clear(); self.version_combo.addItem("<None>")
+                for v in versions:
+                    self.version_combo.addItem(v)
+                # restore if possible
+                idx = self.version_combo.findText(cur)
+                if idx >= 0:
+                    self.version_combo.setCurrentIndex(idx)
+                self.version_combo.blockSignals(False)
+                self.list_versions_cache = set(versions)
+        except Exception:
+            pass
 
 class ProjectTreeView(QWidget):
     """Horizontal left-to-right branching tree visualization (graphics based).
@@ -1753,6 +2379,7 @@ class ProjectTreeView(QWidget):
                     header_is_svg=True; header_svg_renderer=r
         except Exception:
             pass
+        footer_text = "© 2025 LSI – For Internal Use Only"
         if is_pdf:
             from PyQt5.QtPrintSupport import QPrinter
             from PyQt5.QtCore import QMarginsF, QRectF
@@ -1802,6 +2429,17 @@ class ProjectTreeView(QWidget):
                 source_x=(col*page_rect.width())/scale
                 scene.render(painter, target=QRectF(0,0,page_rect.width(), rect.height()*scale), source=QRectF(source_x,0,page_rect.width()/scale, rect.height()))
                 painter.restore()
+                # Footer
+                try:
+                    from PyQt5.QtGui import QFont
+                    painter.save()
+                    f = QFont(); f.setPointSizeF(f.pointSizeF()*0.85)
+                    painter.setFont(f)
+                    footer_y = page_rect.height() - 12
+                    painter.drawText(QRectF(0, footer_y, page_rect.width(), 12), Qt.AlignCenter, footer_text)
+                    painter.restore()
+                except Exception:
+                    pass
             painter.end(); print(f'Exported PDF -> {path}'); return
         # PNG branch
         screen = QApplication.primaryScreen(); dpi = screen.logicalDotsPerInch() if screen else 96.0
@@ -1826,11 +2464,37 @@ class ProjectTreeView(QWidget):
             tw = content_pix.width(); hh=_svg_h(header_svg_renderer, tw)
             combo = QPixmap(tw, hh+content_pix.height()); combo.fill(); painter=QPainter(combo)
             from PyQt5.QtCore import QRectF
-            header_svg_renderer.render(painter, QRectF(0,0,tw,hh)); painter.drawPixmap(0,hh,content_pix); painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
+            header_svg_renderer.render(painter, QRectF(0,0,tw,hh)); painter.drawPixmap(0,hh,content_pix);
+            # Footer
+            try:
+                from PyQt5.QtGui import QFont
+                f = QFont(); f.setPointSizeF(f.pointSizeF()*0.85)
+                painter.setFont(f)
+                painter.drawText(0, hh+content_pix.height()-18, tw, 16, Qt.AlignCenter, footer_text)
+            except Exception:
+                pass
+            painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
         if header_pixmap and not header_pixmap.isNull():
             cw = max(header_pixmap.width(), content_pix.width()); combo = QPixmap(cw, header_pixmap.height()+content_pix.height()); combo.fill()
-            painter = QPainter(combo); hx=(cw-header_pixmap.width())//2; painter.drawPixmap(hx,0, header_pixmap); painter.drawPixmap(0, header_pixmap.height(), content_pix); painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
-        content_pix.save(path,'PNG'); print(f'Exported PNG -> {path}')
+            painter = QPainter(combo); hx=(cw-header_pixmap.width())//2; painter.drawPixmap(hx,0, header_pixmap); painter.drawPixmap(0, header_pixmap.height(), content_pix)
+            try:
+                from PyQt5.QtGui import QFont
+                f = QFont(); f.setPointSizeF(f.pointSizeF()*0.85)
+                painter.setFont(f)
+                painter.drawText(0, header_pixmap.height()+content_pix.height()-18, cw, 16, Qt.AlignCenter, footer_text)
+            except Exception:
+                pass
+            painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
+        # Footer only (no header version)
+        painter = QPainter(content_pix)
+        try:
+            from PyQt5.QtGui import QFont
+            f = QFont(); f.setPointSizeF(f.pointSizeF()*0.85)
+            painter.setFont(f)
+            painter.drawText(0, content_pix.height()-18, content_pix.width(), 16, Qt.AlignCenter, footer_text)
+        except Exception:
+            pass
+        painter.end(); content_pix.save(path,'PNG'); print(f'Exported PNG -> {path}')
 
 
 # Add a custom QGraphicsView subclass for zooming
@@ -2023,6 +2687,14 @@ class GanttChartView(QWidget):
         dialog.setWindowTitle(f"Edit Project Part: {row.get('Project Part', '')}")
         layout = QFormLayout(dialog)
         edits = {}
+        # Load pricing settings for suggestions
+        try:
+            from PyQt5.QtCore import QSettings
+            _ps = QSettings('LSI','ProjectPlanner')
+            target_margin = float(_ps.value('Pricing/target_margin', 35.0)) / 100.0
+        except Exception:
+            target_margin = 0.35
+        suggested_prod = None; suggested_inst = None
         for col in self.model.COLUMNS:
             val = row.get(col, "")
             if col in ("Start Date", "Calculated End Date"):
@@ -2096,6 +2768,20 @@ class GanttChartView(QWidget):
                 text.setPlainText(val)
                 edits[col] = text
                 layout.addRow(col, text)
+            elif col in ("Fabrication Labor Hours", "Installation Labor Hours"):
+                from PyQt5.QtWidgets import QDoubleSpinBox
+                hrs = QDoubleSpinBox()
+                hrs.setRange(0.0, 10000.0)
+                hrs.setDecimals(1)
+                hrs.setSingleStep(0.5)
+                try:
+                    hrs.setValue(float(val) if val not in (None, "") else 0.0)
+                except Exception:
+                    hrs.setValue(0.0)
+                hrs.setSuffix(" h")
+                hrs.setToolTip("Estimated {} labor hours".format("fabrication" if col.startswith("Fabrication") else "installation"))
+                edits[col] = hrs
+                layout.addRow(col, hrs)
             elif col == "Images":
                 hbox = QHBoxLayout()
                 img_label = QLabel()
@@ -2142,6 +2828,23 @@ class GanttChartView(QWidget):
                     else:
                         link_label.setText("")
                 link_edit.textChanged.connect(update_link_label)
+            elif col in ("Production Cost", "Installation Cost", "Production Price", "Installation Price", "Material Cost", "Labor Rate", "Install Labor Rate"):
+                from PyQt5.QtWidgets import QDoubleSpinBox
+                sb = QDoubleSpinBox()
+                sb.setRange(0.0, 10_000_000.0)
+                sb.setDecimals(2)
+                sb.setSingleStep(50.0)
+                try:
+                    sb.setValue(float(val) if val not in (None, "") else 0.0)
+                except Exception:
+                    sb.setValue(0.0)
+                sb.setPrefix("$")
+                if col.endswith("Cost"):
+                    sb.setToolTip("Internal estimated {} cost".format("production" if "Production" in col else "installation"))
+                else:
+                    sb.setToolTip("Charge amount for {}".format("production" if "Production" in col else "installation"))
+                edits[col] = sb
+                layout.addRow(col, sb)
             else:
                 # Fallback generic text field; ensure string conversion
                 line = QLineEdit(str(val) if val is not None else "")
@@ -2149,6 +2852,49 @@ class GanttChartView(QWidget):
                 layout.addRow(col, line)
         save_btn = QPushButton("Save")
         cancel_btn = QPushButton("Cancel")
+        # Suggestion row (added just before buttons once widgets exist)
+        def _compute_suggestions():
+            nonlocal suggested_prod, suggested_inst
+            try:
+                prod_cost_w = edits.get('Production Cost')
+                inst_cost_w = edits.get('Installation Cost')
+                pc = float(prod_cost_w.value()) if prod_cost_w else float(row.get('Production Cost') or 0)
+                ic = float(inst_cost_w.value()) if inst_cost_w else float(row.get('Installation Cost') or 0)
+                if pc > 0:
+                    suggested_prod = pc / (1.0 - target_margin)
+                else:
+                    suggested_prod = None
+                if ic > 0:
+                    suggested_inst = ic / (1.0 - target_margin)
+                else:
+                    suggested_inst = None
+                if suggest_label:
+                    txt = []
+                    if suggested_prod is not None:
+                        txt.append(f"Prod Suggest: ${suggested_prod:,.2f}")
+                    if suggested_inst is not None:
+                        txt.append(f"Inst Suggest: ${suggested_inst:,.2f}")
+                    suggest_label.setText(" | ".join(txt) if txt else "")
+            except Exception:
+                pass
+        from PyQt5.QtWidgets import QLabel, QHBoxLayout
+        suggest_label = QLabel("")
+        suggest_label.setStyleSheet("color:#bbb; font-size:11px")
+        apply_box = QHBoxLayout()
+        apply_prod_btn = QPushButton("Apply Prod Suggest")
+        apply_inst_btn = QPushButton("Apply Inst Suggest")
+        apply_prod_btn.setEnabled(False); apply_inst_btn.setEnabled(False)
+        def _enable_apply():
+            apply_prod_btn.setEnabled(suggested_prod is not None and 'Production Price' in edits)
+            apply_inst_btn.setEnabled(suggested_inst is not None and 'Installation Price' in edits)
+        def _recalc_and_enable():
+            _compute_suggestions(); _enable_apply()
+        apply_prod_btn.clicked.connect(lambda: (edits['Production Price'].setValue(suggested_prod) if suggested_prod and 'Production Price' in edits else None))
+        apply_inst_btn.clicked.connect(lambda: (edits['Installation Price'].setValue(suggested_inst) if suggested_inst and 'Installation Price' in edits else None))
+        apply_box.addWidget(suggest_label)
+        apply_box.addStretch(1)
+        apply_box.addWidget(apply_prod_btn)
+        apply_box.addWidget(apply_inst_btn)
         def save():
             try:
                 for col in self.model.COLUMNS:
@@ -2190,6 +2936,51 @@ class GanttChartView(QWidget):
                             row[col] = 0
                     elif isinstance(widget, QTextEdit):
                         row[col] = widget.toPlainText()
+                    elif hasattr(widget, 'value') and col in ("Fabrication Labor Hours", "Installation Labor Hours"):
+                        try:
+                            row[col] = f"{float(widget.value()):.1f}"
+                        except Exception:
+                            row[col] = "0.0"
+                    elif hasattr(widget, 'value') and col in ("Production Price", "Installation Price", "Production Cost", "Installation Cost", "Material Cost", "Labor Rate", "Install Labor Rate"):
+                        try:
+                            row[col] = f"{float(widget.value()):.2f}"
+                        except Exception:
+                            row[col] = "0.00"
+                # Derive production / installation cost if material & labor hour info present
+                try:
+                    from math import isnan
+                    mat = float(row.get('Material Cost') or 0)
+                    fab_h = float(row.get('Fabrication Labor Hours') or 0)
+                    inst_h = float(row.get('Installation Labor Hours') or 0)
+                    rate = float(row.get('Labor Rate') or 0)
+                    inst_rate = float(row.get('Install Labor Rate') or rate)
+                    if (mat or fab_h or inst_h) and (not row.get('Production Cost') or not row.get('Installation Cost')):
+                        prod_cost_calc = mat + fab_h * rate
+                        inst_cost_calc = inst_h * inst_rate
+                        if not row.get('Production Cost'):
+                            row['Production Cost'] = f"{prod_cost_calc:.2f}"
+                        if not row.get('Installation Cost'):
+                            row['Installation Cost'] = f"{inst_cost_calc:.2f}"
+                except Exception:
+                    pass
+                # Validation: price below cost warning
+                try:
+                    from PyQt5.QtWidgets import QMessageBox as _QB
+                    pcost = float(row.get('Production Cost') or 0)
+                    icost = float(row.get('Installation Cost') or 0)
+                    pprice = float(row.get('Production Price') or 0)
+                    iprice = float(row.get('Installation Price') or 0)
+                    warn_msgs = []
+                    if pprice and pcost and pprice < pcost:
+                        warn_msgs.append(f"Production price ${pprice:,.2f} < cost ${pcost:,.2f}")
+                    if iprice and icost and iprice < icost:
+                        warn_msgs.append(f"Installation price ${iprice:,.2f} < cost ${icost:,.2f}")
+                    if warn_msgs:
+                        resp = _QB.question(dialog, "Below-Cost Pricing", "\n".join(warn_msgs) + "\nContinue anyway?", _QB.Yes | _QB.No, _QB.No)
+                        if resp != _QB.Yes:
+                            return
+                except Exception:
+                    pass
                 self.model.save_to_db()
                 self.render_gantt(self.model)
                 dialog.accept()
@@ -2203,8 +2994,17 @@ class GanttChartView(QWidget):
         btn_hbox = QHBoxLayout()
         btn_hbox.addWidget(save_btn)
         btn_hbox.addWidget(cancel_btn)
+        # Insert suggestion row before buttons
+        layout.addRow(apply_box)
         layout.addRow(btn_hbox)
         dialog.setLayout(layout)
+        # Initial suggestion compute after dialog constructed
+        _recalc_and_enable()
+        # Recompute on cost field edits
+        for key in ('Production Cost','Installation Cost'):
+            w = edits.get(key)
+            if w and hasattr(w,'valueChanged'):
+                w.valueChanged.connect(_recalc_and_enable)
         dialog.exec_()
     def highlight_group(self, part_name):
         # Find parent and children for the given part_name
@@ -4597,6 +5397,8 @@ class MainWindow(QMainWindow):
             self.database_view.refresh_table()
         elif index == 5 and hasattr(self, 'progress_dashboard'):
             self.progress_dashboard.refresh()
+        elif index == 6 and hasattr(self, 'cost_estimates_view'):
+            self.cost_estimates_view.refresh()
     def _on_jump_to_gantt_from_tree(self, part_name):
         try:
             # Switch to Gantt tab
@@ -4803,6 +5605,26 @@ class MainWindow(QMainWindow):
                 act_reload = tmenu.addAction("Reload Data")
                 act_reload.triggered.connect(do_reload)
                 tmenu.addSeparator()
+                # Onboarding settings toggle
+                from PyQt5.QtCore import QSettings
+                s_on = QSettings('LSI','ProjectApp')
+                hide_flag = s_on.value('Onboarding/hide_empty_dialog', False)
+                if isinstance(hide_flag, str):
+                    hide_flag = hide_flag.lower() in ('1','true','yes','on')
+                act_onboarding = tmenu.addAction("Show First-Run Dialog on Empty DB")
+                act_onboarding.setCheckable(True)
+                act_onboarding.setChecked(not bool(hide_flag))
+                def toggle_onboarding():
+                    try:
+                        new_show = act_onboarding.isChecked()
+                        # store inverse (hide flag)
+                        s_on.setValue('Onboarding/hide_empty_dialog', not new_show)
+                        if self.statusBar():
+                            self.statusBar().showMessage("First-run dialog {}".format("enabled" if new_show else "disabled"), 2500)
+                    except Exception:
+                        pass
+                act_onboarding.toggled.connect(toggle_onboarding)
+                
                 act_open_folder = tmenu.addAction("Open Data Folder")
                 act_open_folder.triggered.connect(self.open_data_folder)
                 act_manage_holidays = tmenu.addAction("Manage Holidays…")
@@ -5213,7 +6035,8 @@ class MainWindow(QMainWindow):
                 "Calendar",
                 "Project Timeline",
                 "Database",
-                "Progress Dashboard"
+                "Progress Dashboard",
+                "Cost Estimates"
             ])
 
             # Stacked widget for views
@@ -5268,6 +6091,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             self.progress_dashboard = ProgressDashboard(self.model)
+            self.cost_estimates_view = CostEstimatesView(self.model)
 
             self.views = QStackedWidget()
             self.views.addWidget(self.project_tree_view)
@@ -5276,6 +6100,7 @@ class MainWindow(QMainWindow):
             self.views.addWidget(self.timeline_view)
             self.views.addWidget(self.database_view)
             self.views.addWidget(self.progress_dashboard)
+            self.views.addWidget(self.cost_estimates_view)
 
             # --- Global Preview Panel setting (applies to all views with preview labels) ---
             def _read_preview_setting_default_true():
@@ -5452,6 +6277,14 @@ class MainWindow(QMainWindow):
             act.triggered.connect(self.open_data_folder)
             act2 = tools_menu.addAction("Manage Holidays…")
             act2.triggered.connect(self._open_holidays_manager)
+            act_pricing = tools_menu.addAction("Pricing Settings…")
+            def _open_pricing_settings():
+                try:
+                    dlg = PricingSettingsDialog(self)
+                    dlg.exec_()
+                except Exception as e:
+                    print(f"Pricing settings dialog failed: {e}")
+            act_pricing.triggered.connect(_open_pricing_settings)
             # Sample Data action (available anytime)
             act_sample = tools_menu.addAction("Create Sample Data…")
             def do_sample():

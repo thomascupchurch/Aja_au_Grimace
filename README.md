@@ -11,6 +11,7 @@ A desktop project planning & visualization tool built with PyQt5 + QGraphicsScen
 | Calendar | Month-style placement of items | NO | Read-only snapshot |
 | Project Timeline | Linear condensed horizontal timeline | NO | White text theme |
 | Progress Dashboard | Aggregated metrics (% complete, risk counts, etc.) | NO | Auto-derived rollups |
+| Cost Estimates | Summarize production & installation pricing with totals | NO | Read-only cost rollups |
 
 ## Key Features
 
@@ -77,6 +78,21 @@ A desktop project planning & visualization tool built with PyQt5 + QGraphicsScen
 - Actual Start / Finish Dates (set on status transitions)
 - Baseline Start / End Dates (captured automatically once)
 - Images (relative path stored; copied into `images/` on upload)
+- Production Price (decimal – amount to charge for production work for this part)
+- Installation Price (decimal – amount to charge for installation for this part)
+
+### Cost Tracking
+
+Add production and installation pricing per project part in the Project Tree (Edit dialog). The Cost Estimates view (sidebar) aggregates:
+
+- Per-part Production, Installation, and Total ($)
+- Percentage contribution of each part to the grand total
+- Grand totals for Production, Installation, and combined
+
+Notes:
+- Values are stored as text/REAL in SQLite; schema migration adds the columns automatically on first launch after upgrade.
+- Parent/child relationships are not auto-summed; the view lists each part’s direct values as entered (leaves typically carry amounts). You can use naming conventions or filters to segment cost groups.
+- Empty / invalid numbers default to 0.00.
 
 ## Installation
 
