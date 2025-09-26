@@ -269,6 +269,39 @@ Recovery / stale locks:
 - If someone crashes or loses power, you may see a stale lock. Coordinate with your teammate first. If confirmed stale, the file `<database>.lock.json` can be deleted to clear the lock.
 - There is no forced takeover in-app by design—this keeps the workflow polite and explicit for shared OneDrive folders.
 
+## First-Time Co‑Worker Setup (Onboarding)
+
+When a teammate runs the desktop app and the active database contains no tasks, an onboarding dialog appears (unless they previously chose to hide it). It offers three actions:
+
+1. Create Sample Project – Inserts a small hierarchical set of example tasks demonstrating parents, durations, status values, and progress roll‑ups.
+2. Switch Data File… – Opens a file picker to point the app at an existing shared `project_data.db` (e.g., inside a OneDrive folder someone else prepared).
+3. Open Data Folder – Opens the folder that currently holds (or will hold) the active `project_data.db`, so the user can inspect or drop in a database.
+
+Hide option:
+- A checkbox ("Don't show this again on empty databases") suppresses the dialog for future launches when empty. You can re‑enable it by deleting the `Onboarding/hide_empty_dialog` key from your system's QSettings store (or resetting application settings) or simply by using the built‑in Tools → Create Sample Data… action whenever needed.
+
+Manual sample data creation:
+- At any time, use the (hidden menubar) Tools → Create Sample Data… action (or unhide the menubar temporarily) to append the sample hierarchy to your current dataset. If rows already exist you'll be prompted to confirm.
+
+Recommended teammate first run:
+1. Pull / copy the application (or run the packaged build) locally—not from the OneDrive shared data folder.
+2. Launch the app. If the onboarding dialog appears:
+   - Choose Switch Data File… and select the shared `project_data.db`, OR
+   - Generate sample data if they just want to explore the UI first.
+3. If they’re only reviewing, enable Tools → Read-Only Mode (should be on by default if another user holds the edit lock).
+4. Use Tools → Reload Data periodically (or rely on auto-reload when in read-only) to see incoming changes from collaborators.
+
+What gets persisted:
+- The selected DB path (via `db_path.txt` and QSettings) so subsequent launches go straight to the shared data.
+- The hide-onboarding preference.
+- Read-Only Mode flag, zoom levels, preview/minimap toggles, and filter selections.
+
+To reset onboarding for a user:
+- Remove `db_path.txt` (so a new empty local DB is used), and clear the Onboarding QSettings key, or launch with a fresh profile.
+
+Security / integrity note:
+- The sample data routine merely inserts tasks; it does not alter existing data other than appending new rows. Always keep backups (Tools → Backup Database…) before large experimental imports.
+
 ## Shortcuts & Navigation
 
 - Zoom: Ctrl + Mouse Wheel, or keyboard +/‑ (Zoom In/Out)
