@@ -11,7 +11,7 @@ A desktop project planning & visualization tool built with PyQt5 + QGraphicsScen
 | Calendar | Month-style placement of items | NO | Read-only snapshot |
 | Project Timeline | Linear condensed horizontal timeline | NO | White text theme |
 | Progress Dashboard | Aggregated metrics (% complete, risk counts, etc.) | NO | Auto-derived rollups |
-| Cost Estimates | Summarize production & installation pricing with totals + deltas vs. saved quote version | NO | Roll-ups, filters, version deltas |
+| Cost Estimates | Summarize production & installation pricing with totals + deltas vs. saved quote version | NO | Roll-ups, filters, version deltas, column layouts, XLSX export |
 
 ## Key Features
 
@@ -131,6 +131,17 @@ Quote Versioning & Deltas:
 Exports:
 - CSV export: raw table as currently filtered/sorted.
 - PDF/PNG export: formatted table with optional header banner (`header.svg` preferred, falls back to `header.png`) and standardized footer “© 2025 LSI – For Internal Use Only”. Pagination supported for PDF.
+- XLSX export: honors current filters and only includes currently visible columns (after applying a column layout). Adds a `_Meta` worksheet capturing timestamp, selected quote version, and active filters. Numeric cells are written as numbers (margin % stored as decimal fraction for Excel formatting).
+ - XLSX export: honors current filters and only includes currently visible columns (after applying a column layout). Adds a `_Meta` worksheet capturing timestamp, selected quote version, and active filters. Numeric cells are written as numbers (margin % stored as decimal fraction, currency columns tagged with a USD format, percentages with `0.0%`).
+
+Column Visibility & Order Layouts:
+- Use the Columns… button in the Cost Estimates view to open the management dialog.
+- Toggle individual column visibility with the checkboxes (applies immediately).
+- Columns can be drag-reordered directly in the table header; the order is captured when you Save Layout.
+- Save Layout stores visibility + order under a name (persisted via QSettings, JSON-encoded).
+- Apply Layout restores both visibility and order (with a compatibility check on column count).
+- Delete Layout removes a saved pattern.
+- The last applied layout name is remembered and re-applied automatically on next launch.
 
 Notes:
 - Values stored as REAL/text; schema adds missing columns automatically on upgrade (append-only, safe for existing DBs).
@@ -330,23 +341,20 @@ Recovery / stale locks:
 
 ## First-Time Co‑Worker Setup (Onboarding)
 
-When a teammate runs the desktop app and the active database contains no tasks, an onboarding dialog appears (unless they previously chose to hide it). It offers three actions:
+When a teammate runs the desktop app and the active database contains no tasks, an onboarding dialog appears (unless they previously chose to hide it). It now offers two focused actions (sample generation removed to avoid accidental seeding of production DBs):
 
-1. Create Sample Project – Inserts a small hierarchical set of example tasks demonstrating parents, durations, status values, and progress roll‑ups.
-2. Switch Data File… – Opens a file picker to point the app at an existing shared `project_data.db` (e.g., inside a OneDrive folder someone else prepared).
-3. Open Data Folder – Opens the folder that currently holds (or will hold) the active `project_data.db`, so the user can inspect or drop in a database.
+1. Switch Data File… – Open a file picker to point the app at an existing shared `project_data.db` (e.g., inside a OneDrive folder someone else prepared).
+2. Open Data Folder – Open the folder that currently holds (or will hold) the active `project_data.db`, so the user can inspect or drop in a database.
 
 Hide option:
 - A checkbox ("Don't show this again on empty databases") suppresses the dialog for future launches when empty. You can re‑enable it by deleting the `Onboarding/hide_empty_dialog` key from your system's QSettings store (or resetting application settings) or simply by using the built‑in Tools → Create Sample Data… action whenever needed.
 
 Manual sample data creation:
-- At any time, use the (hidden menubar) Tools → Create Sample Data… action (or unhide the menubar temporarily) to append the sample hierarchy to your current dataset. If rows already exist you'll be prompted to confirm.
+- Use Tools → Generate Sample Data… to append a small illustrative hierarchy. If rows already exist you'll be prompted to confirm to avoid polluting production data. The action derives costs/prices minimally; you can later adjust or delete sample parts.
 
 Recommended teammate first run:
 1. Pull / copy the application (or run the packaged build) locally—not from the OneDrive shared data folder.
-2. Launch the app. If the onboarding dialog appears:
-   - Choose Switch Data File… and select the shared `project_data.db`, OR
-   - Generate sample data if they just want to explore the UI first.
+2. Launch the app. If the onboarding dialog appears choose Switch Data File… and select the shared `project_data.db` (or Open Data Folder to inspect where local data would live).
 3. If they’re only reviewing, enable Tools → Read-Only Mode (should be on by default if another user holds the edit lock).
 4. Use Tools → Reload Data periodically (or rely on auto-reload when in read-only) to see incoming changes from collaborators.
 

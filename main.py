@@ -208,19 +208,18 @@ class FirstRunDialog(QDialog):
         self.setModal(True)
         self.resize(520, 320)
         lay = QVBoxLayout(self)
-        msg = QLabel("It looks like this database is empty. Choose a starting action:")
+        msg = QLabel("It looks like this database is empty. Choose how you'd like to proceed.")
         msg.setWordWrap(True)
         lay.addWidget(msg)
         # Action buttons row
         def mkbtn(text, tooltip):
             b = QPushButton(text); b.setToolTip(tooltip); b.setMinimumHeight(46); return b
-        self.btn_sample = mkbtn("Create Sample Project", "Populate with a small demo hierarchy you can explore")
         self.btn_switch = mkbtn("Switch to Existing DB…", "Select another SQLite file (shared or local)")
         self.btn_open   = mkbtn("Open Data Folder", "Open the current working folder in your file browser")
-        for b in (self.btn_sample, self.btn_switch, self.btn_open):
+        for b in (self.btn_switch, self.btn_open):
             lay.addWidget(b)
         # Read-only tip
-        tip = QLabel("Tip: Use Tools → Read-Only Mode to safely view a shared DB. Disable it to edit (acquiring the edit lock).")
+        tip = QLabel("Tip: Use Tools → Read-Only Mode to safely view a shared DB. Disable it to edit (acquiring the edit lock). You can generate sample data later via Tools → Generate Sample Data if needed.")
         tip.setWordWrap(True)
         tip.setStyleSheet("color:#bbb; font-size:11px; margin-top:8px;")
         lay.addWidget(tip)
@@ -233,8 +232,7 @@ class FirstRunDialog(QDialog):
         row.addWidget(self.btn_close)
         lay.addLayout(row)
         self.btn_close.clicked.connect(self.accept)
-        self.selected_action = None  # 'sample' | 'switch' | 'open'
-        self.btn_sample.clicked.connect(lambda: self._choose('sample'))
+        self.selected_action = None  # 'switch' | 'open'
         self.btn_switch.clicked.connect(lambda: self._choose('switch'))
         self.btn_open.clicked.connect(lambda: self._choose('open'))
     def _choose(self, which):
@@ -1173,6 +1171,11 @@ class CostEstimatesView(QWidget):
         export_pdf_btn.setToolTip("Export this cost table to PDF or PNG with header/footer")
         export_pdf_btn.clicked.connect(self._export_render)
         header.addWidget(export_pdf_btn)
+        # Column visibility / layouts button
+        self.columns_btn = QPushButton("Columns…")
+        self.columns_btn.setToolTip("Show/hide columns and manage saved visibility layouts")
+        self.columns_btn.clicked.connect(self._open_columns_dialog)
+        header.addWidget(self.columns_btn)
         refresh_btn = QPushButton("Refresh")
         refresh_btn.clicked.connect(self.refresh)
         header.addWidget(refresh_btn)
@@ -1184,16 +1187,29 @@ class CostEstimatesView(QWidget):
         self.version_combo.currentIndexChanged.connect(self.refresh)
         self.freeze_btn = QPushButton("Freeze Version…")
         self.delete_version_btn = QPushButton("Delete Version")
+        self.rename_version_btn = QPushButton("Rename Version")
         def do_freeze():
             from PyQt5.QtWidgets import QInputDialog, QMessageBox
             name, ok = QInputDialog.getText(self, "Freeze Quote Version", "Version name:")
             if ok and name.strip():
                 try:
-                    self.model.save_quote_version(name.strip())
+                    ver_name = name.strip()
+                    existing = set(self.model.list_quote_versions())
+                    if ver_name in existing:
+                        resp = QMessageBox.question(self, "Overwrite Version?", f"A version named '{ver_name}' already exists. Overwrite it?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                        if resp != QMessageBox.Yes:
+                            return
+                        # Delete existing first so save acts like replace
+                        try:
+                            self.model.delete_quote_version(ver_name)
+                        except Exception:
+                            pass
+                    self.model.save_quote_version(ver_name)
                     self._reload_versions()
-                    self.version_combo.setCurrentText(name.strip())
+                    self.version_combo.setCurrentText(ver_name)
                     if self.parent() and self.parent().window().statusBar():
-                        self.parent().window().statusBar().showMessage(f"Quote version '{name.strip()}' saved", 3000)
+                        action = "overwritten" if ver_name in existing else "saved"
+                        self.parent().window().statusBar().showMessage(f"Quote version '{ver_name}' {action}", 3000)
                 except Exception as e:
                     QMessageBox.critical(self, "Freeze Failed", str(e))
         self.freeze_btn.clicked.connect(do_freeze)
@@ -1211,9 +1227,38 @@ class CostEstimatesView(QWidget):
                 else:
                     QMessageBox.critical(self, "Delete Failed", f"Could not delete version '{ver}'.")
         self.delete_version_btn.clicked.connect(do_delete_version)
+        def do_rename_version():
+            from PyQt5.QtWidgets import QInputDialog, QMessageBox
+            cur = self.version_combo.currentText()
+            if not cur or cur in ("<None>", ""):
+                return
+            new_name, ok = QInputDialog.getText(self, "Rename Quote Version", f"Rename '{cur}' to:")
+            if not ok or not new_name.strip() or new_name.strip() == cur:
+                return
+            new_name = new_name.strip()
+            # If destination exists ask to overwrite via delete+rename path
+            existing = set(self.model.list_quote_versions())
+            if new_name in existing:
+                resp = QMessageBox.question(self, "Overwrite Existing?", f"A version named '{new_name}' exists. Overwrite it with '{cur}'?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if resp != QMessageBox.Yes:
+                    return
+                # Delete new_name then rename
+                try:
+                    self.model.delete_quote_version(new_name)
+                except Exception:
+                    pass
+            if self.model.rename_quote_version(cur, new_name):
+                self._reload_versions()
+                self.version_combo.setCurrentText(new_name)
+                if self.parent() and self.parent().window().statusBar():
+                    self.parent().window().statusBar().showMessage(f"Renamed version '{cur}' → '{new_name}'", 4000)
+            else:
+                QMessageBox.critical(self, "Rename Failed", f"Could not rename '{cur}' to '{new_name}'.")
+        self.rename_version_btn.clicked.connect(do_rename_version)
         header.addWidget(self.version_combo)
         header.addWidget(self.freeze_btn)
         header.addWidget(self.delete_version_btn)
+        header.addWidget(self.rename_version_btn)
         self.table = QTableWidget(0, 14)
         self.table.setHorizontalHeaderLabels([
             "Project Part","Parent","Prod Cost","Inst Cost","Total Cost","Prod Price","Inst Price","Total Price","Profit $","Margin %","Δ Price %","Δ Margin pts","% of Total Price","Internal/External"
@@ -1221,11 +1266,18 @@ class CostEstimatesView(QWidget):
         self.table.setEditTriggers(self.table.NoEditTriggers)
         self.table.setSelectionBehavior(self.table.SelectRows)
         self.table.setAlternatingRowColors(True)
+        try:
+            self.table.horizontalHeader().setSectionsMovable(True)
+            self.table.horizontalHeader().setSectionsClickable(True)
+        except Exception:
+            pass
         self.vbox.addWidget(self.table, 1)
         # Totals footer
         self.totals_label = QLabel()
         self.totals_label.setStyleSheet("font-family:Consolas,monospace; font-size:12px; margin-top:4px")
         self.vbox.addWidget(self.totals_label)
+        # Restore previously used column layout if any
+        self._apply_last_layout()
         self.refresh()
 
     def _num(self, v):
@@ -1468,6 +1520,8 @@ class CostEstimatesView(QWidget):
         try:
             from openpyxl import Workbook
             from openpyxl.styles import Font, Alignment, PatternFill
+            from openpyxl.utils import get_column_letter
+            from openpyxl.styles import numbers
         except Exception as e:
             from PyQt5.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Missing Dependency", "openpyxl not installed. Please install requirements.")
@@ -1489,6 +1543,8 @@ class CostEstimatesView(QWidget):
             cell.alignment = Alignment(horizontal='center')
             cell.fill = PatternFill(start_color='FFD9D9D9', end_color='FFD9D9D9', fill_type='solid')
         # Rows
+        currency_cols = set()
+        percent_cols = set()
         for r in range(self.table.rowCount()):
             row_vals = []
             for c in visible_cols:
@@ -1500,6 +1556,7 @@ class CostEstimatesView(QWidget):
                     try:
                         val = float(raw[:-1]) / 100.0
                         row_vals.append(val)
+                        percent_cols.add(len(row_vals))  # 1-based within written row
                         continue
                     except Exception:
                         pass
@@ -1507,20 +1564,34 @@ class CostEstimatesView(QWidget):
                     if raw:
                         val = float(raw)
                         row_vals.append(val)
+                        # Heuristic: treat price/cost/profit columns as currency if header matches
+                        hdr = headers[len(row_vals)-1].lower()
+                        if any(k in hdr for k in ["cost","price","profit"]):
+                            currency_cols.add(len(row_vals))
                         continue
                 except Exception:
                     pass
                 row_vals.append(txt)
             ws.append(row_vals)
-        # Autosize columns
-        for i, col in enumerate(visible_cols, start=1):
+        # Apply number formats (skip header row which is row 1)
+        for row in ws.iter_rows(min_row=2):
+            for idx, cell in enumerate(row, start=1):
+                if idx in currency_cols and isinstance(cell.value,(int,float)):
+                    cell.number_format = numbers.FORMAT_CURRENCY_USD_SIMPLE
+                elif idx in percent_cols and isinstance(cell.value,(int,float)):
+                    cell.number_format = '0.0%'
+        # Autosize columns (simple heuristic)
+        for col_idx in range(1, ws.max_column + 1):
+            letter = get_column_letter(col_idx)
             max_len = 0
-            for cell in ws[get_column_letter := __import__('openpyxl.utils').utils.get_column_letter(i)]:
+            for cell in ws[letter]:
                 v = cell.value
-                if v is None: continue
+                if v is None:
+                    continue
                 l = len(str(v))
-                if l > max_len: max_len = l
-            ws.column_dimensions[__import__('openpyxl.utils').utils.get_column_letter(i)].width = min(60, max_len + 2)
+                if l > max_len:
+                    max_len = l
+            ws.column_dimensions[letter].width = min(60, max_len + 2)
         # Add metadata sheet
         meta = wb.create_sheet('_Meta')
         from datetime import datetime
@@ -1532,6 +1603,258 @@ class CostEstimatesView(QWidget):
             print(f"Exported XLSX -> {path}")
         except Exception as e:
             QMessageBox.critical(self, "Export Failed", str(e))
+
+    # --------------- Column Visibility & Layout Management ---------------
+    def _open_columns_dialog(self):
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QPushButton, QCheckBox, QLineEdit, QLabel, QMessageBox
+        from PyQt5.QtCore import QSettings
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Columns & Layouts")
+        dlg.resize(540, 420)
+        vbox = QVBoxLayout(dlg)
+        # Instruction
+        info = QLabel("Toggle visibility of columns below. Save named layouts for quick recall.")
+        info.setWordWrap(True)
+        vbox.addWidget(info)
+        # Column list with checkboxes
+        from PyQt5.QtWidgets import QWidget, QScrollArea, QGridLayout
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        container = QWidget(); grid = QGridLayout(container)
+        self._col_checkboxes = []
+        for c in range(self.table.columnCount()):
+            name = self.table.horizontalHeaderItem(c).text()
+            cb = QCheckBox(name)
+            cb.setChecked(not self.table.isColumnHidden(c))
+            grid.addWidget(cb, c // 2, c % 2)  # two columns layout
+            self._col_checkboxes.append(cb)
+        scroll.setWidget(container)
+        vbox.addWidget(scroll, 1)
+        # Layout management
+        layout_row = QHBoxLayout()
+        self.layout_name_edit = QLineEdit(); self.layout_name_edit.setPlaceholderText("Layout name…")
+        layout_row.addWidget(self.layout_name_edit, 1)
+        save_btn = QPushButton("Save Layout")
+        apply_btn = QPushButton("Apply Layout")
+        delete_btn = QPushButton("Delete Layout")
+        layout_row.addWidget(save_btn); layout_row.addWidget(apply_btn); layout_row.addWidget(delete_btn)
+        vbox.addLayout(layout_row)
+        # Existing layouts list
+        self.layouts_list = QListWidget()
+        vbox.addWidget(QLabel("Saved Layouts:"))
+        vbox.addWidget(self.layouts_list, 1)
+        # Close row
+        btn_row = QHBoxLayout(); btn_row.addStretch(1)
+        close_btn = QPushButton("Close")
+        btn_row.addWidget(close_btn)
+        vbox.addLayout(btn_row)
+        # Load existing layouts from QSettings
+        s = QSettings("LSI", "ProjectPlanner")
+        raw = s.value("Columns/layouts", "{}")
+        import json
+        try:
+            layouts = json.loads(raw) if raw else {}
+            if not isinstance(layouts, dict):
+                layouts = {}
+        except Exception:
+            layouts = {}
+        def refresh_layout_list():
+            self.layouts_list.clear()
+            for name in sorted(layouts.keys()):
+                item = QListWidgetItem(name)
+                self.layouts_list.addItem(item)
+        refresh_layout_list()
+        # Handlers
+        def _current_order():
+            try:
+                header = self.table.horizontalHeader()
+                order = [header.logicalIndex(i) for i in range(header.count())]
+                return order
+            except Exception:
+                return list(range(self.table.columnCount()))
+        def _apply_order(order_list):
+            try:
+                header = self.table.horizontalHeader()
+                for visual_pos, logical in enumerate(order_list):
+                    cur_logical = header.logicalIndex(visual_pos)
+                    if cur_logical != logical:
+                        header.moveSection(header.visualIndex(logical), visual_pos)
+            except Exception:
+                pass
+        def save_layout():
+            name = self.layout_name_edit.text().strip()
+            if not name:
+                QMessageBox.warning(dlg, "Name Required", "Enter a layout name.")
+                return
+            # Capture visibility: 1 = visible, 0 = hidden
+            vis = [1 if cb.isChecked() else 0 for cb in self._col_checkboxes]
+            order = _current_order()
+            # Store current column header names to allow graceful re-mapping later
+            col_names = [self.table.horizontalHeaderItem(i).text() for i in range(self.table.columnCount())]
+            layouts[name] = {"visibility": vis, "order": order, "columns": col_names, "v": 2}
+            s.setValue("Columns/layouts", json.dumps(layouts))
+            refresh_layout_list()
+            if self.parent() and self.parent().window().statusBar():
+                self.parent().window().statusBar().showMessage(f"Saved layout '{name}'", 3000)
+        def apply_layout():
+            items = self.layouts_list.selectedItems()
+            if not items:
+                QMessageBox.information(dlg, "Select Layout", "Select a saved layout to apply.")
+                return
+            name = items[0].text()
+            cfg = layouts.get(name)
+            if not cfg:
+                QMessageBox.warning(dlg, "Layout Missing", "Layout data not found.")
+                return
+            vis = cfg.get("visibility") if isinstance(cfg, dict) else None
+            order = cfg.get("order") if isinstance(cfg, dict) else None
+            saved_cols = cfg.get("columns") if isinstance(cfg, dict) else None
+            current_cols = [self.table.horizontalHeaderItem(i).text() for i in range(self.table.columnCount())]
+            reindex_map = None
+            if saved_cols and len(saved_cols) != len(current_cols):
+                # Attempt name-based mapping
+                name_to_cur = {n: i for i, n in enumerate(current_cols)}
+                reindex_map = []
+                for saved_idx, saved_name in enumerate(saved_cols):
+                    cur_idx = name_to_cur.get(saved_name)
+                    if cur_idx is not None:
+                        reindex_map.append(cur_idx)
+                # If mapping incomplete, warn but continue with best effort
+                if len(reindex_map) != len(saved_cols):
+                    QMessageBox.information(dlg, "Partial Layout Mapping", "Some columns from this layout are missing or renamed; applying what matches.")
+            # Apply visibility
+            if vis:
+                if reindex_map:  # remap vis sequence to current order
+                    for saved_pos, cur_idx in enumerate(reindex_map):
+                        flag = vis[saved_pos] if saved_pos < len(vis) else 1
+                        self.table.setColumnHidden(cur_idx, flag == 0)
+                        self._col_checkboxes[cur_idx].setChecked(flag == 1)
+                elif len(vis) == len(current_cols):
+                    for idx, flag in enumerate(vis):
+                        self.table.setColumnHidden(idx, flag == 0)
+                        self._col_checkboxes[idx].setChecked(flag == 1)
+                else:
+                    QMessageBox.warning(dlg, "Layout Incompatible", "Cannot apply visibility (size mismatch).")
+            # Apply order only if sizes match exactly and no missing columns
+            if order and len(order) == len(current_cols) and not reindex_map:
+                _apply_order(order)
+            # Persist last used
+            s.setValue("Columns/last_layout", name)
+            self.refresh()  # ensure totals etc recalc if hidden cols influence width
+            if self.parent() and self.parent().window().statusBar():
+                self.parent().window().statusBar().showMessage(f"Applied layout '{name}'", 3000)
+        def delete_layout():
+            items = self.layouts_list.selectedItems()
+            if not items:
+                return
+            name = items[0].text()
+            if name in layouts:
+                del layouts[name]
+                s.setValue("Columns/layouts", json.dumps(layouts))
+                refresh_layout_list()
+                if self.parent() and self.parent().window().statusBar():
+                    self.parent().window().statusBar().showMessage(f"Deleted layout '{name}'", 3000)
+        def checkbox_changed():
+            # Apply immediate visibility changes
+            for idx, cb in enumerate(self._col_checkboxes):
+                self.table.setColumnHidden(idx, not cb.isChecked())
+            self.refresh()
+        for cb in self._col_checkboxes:
+            cb.stateChanged.connect(checkbox_changed)
+        save_btn.clicked.connect(save_layout)
+        apply_btn.clicked.connect(apply_layout)
+        delete_btn.clicked.connect(delete_layout)
+        close_btn.clicked.connect(dlg.accept)
+        dlg.exec_()
+
+    def _apply_last_layout(self):
+        # Called after construction to restore last used layout
+        from PyQt5.QtCore import QSettings
+        import json
+        try:
+            s = QSettings("LSI", "ProjectPlanner")
+            last = s.value("Columns/last_layout", "")
+            if not last:
+                return
+            raw = s.value("Columns/layouts", "{}")
+            layouts = json.loads(raw) if raw else {}
+            cfg = layouts.get(last)
+            if isinstance(cfg, dict):
+                vis = cfg.get("visibility")
+                order = cfg.get("order")
+                # Attempt graceful application on startup (silent if mismatch)
+                if vis and len(vis) == self.table.columnCount():
+                    for idx, flag in enumerate(vis):
+                        self.table.setColumnHidden(idx, flag == 0)
+                if order and len(order) == self.table.columnCount():
+                    # Apply after a short delay if needed to ensure header exists
+                    try:
+                        from PyQt5.QtCore import QTimer
+                        QTimer.singleShot(0, lambda o=order: [self.table.horizontalHeader().moveSection(self.table.horizontalHeader().visualIndex(log), pos) for pos, log in enumerate(o)])
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # --- Programmatic layout API (for tests / automation) ---
+    def save_layout_programmatic(self, name: str):
+        """Save current layout (visibility + order + column names) under name. Returns True if saved."""
+        from PyQt5.QtCore import QSettings
+        import json
+        if not name:
+            return False
+        try:
+            s = QSettings("LSI", "ProjectPlanner")
+            raw = s.value("Columns/layouts", "{}")
+            layouts = json.loads(raw) if raw else {}
+            vis = [0 if self.table.isColumnHidden(i) else 1 for i in range(self.table.columnCount())]
+            header = self.table.horizontalHeader()
+            order = [header.logicalIndex(i) for i in range(header.count())]
+            col_names = [self.table.horizontalHeaderItem(i).text() for i in range(self.table.columnCount())]
+            layouts[name] = {"visibility": vis, "order": order, "columns": col_names, "v": 2}
+            s.setValue("Columns/layouts", json.dumps(layouts))
+            s.setValue("Columns/last_layout", name)
+            return True
+        except Exception:
+            return False
+
+    def apply_layout_programmatic(self, name: str):
+        """Apply a saved layout by name. Returns tuple(success, message)."""
+        from PyQt5.QtCore import QSettings
+        import json
+        try:
+            s = QSettings("LSI", "ProjectPlanner")
+            raw = s.value("Columns/layouts", "{}")
+            layouts = json.loads(raw) if raw else {}
+            cfg = layouts.get(name)
+            if not cfg:
+                return False, "Layout not found"
+            vis = cfg.get("visibility")
+            order = cfg.get("order")
+            saved_cols = cfg.get("columns")
+            current_cols = [self.table.horizontalHeaderItem(i).text() for i in range(self.table.columnCount())]
+            if saved_cols and len(saved_cols) != len(current_cols):
+                # Attempt name-based remap
+                name_to_cur = {n: i for i, n in enumerate(current_cols)}
+                for saved_idx, saved_name in enumerate(saved_cols):
+                    cur_idx = name_to_cur.get(saved_name)
+                    if cur_idx is not None and vis and saved_idx < len(vis):
+                        flag = vis[saved_idx]
+                        self.table.setColumnHidden(cur_idx, flag == 0)
+                # Skip order if mismatch
+                return True, "Applied partial (column count changed)"
+            # Full match
+            if vis and len(vis) == len(current_cols):
+                for idx, flag in enumerate(vis):
+                    self.table.setColumnHidden(idx, flag == 0)
+            if order and len(order) == len(current_cols):
+                header = self.table.horizontalHeader()
+                for visual_pos, logical in enumerate(order):
+                    if header.logicalIndex(visual_pos) != logical:
+                        header.moveSection(header.visualIndex(logical), visual_pos)
+            s.setValue("Columns/last_layout", name)
+            return True, "Applied"
+        except Exception as e:
+            return False, str(e)
 
     def refresh(self):
         rows = getattr(self.model,'rows', [])
@@ -1559,6 +1882,22 @@ class CostEstimatesView(QWidget):
                     children_map.setdefault(p, []).append(r)
         # Helper to accumulate descendants
         def accumulate(row):
+
+    def rename_quote_version(self, old_name: str, new_name: str):
+        if not old_name or not new_name or old_name == new_name:
+            return False
+        try:
+            import sqlite3
+            conn = sqlite3.connect(self.DB_FILE)
+            cur = conn.cursor()
+            # If target exists, abort (caller can decide to overwrite by delete+save)
+            cur.execute("SELECT 1 FROM quote_versions WHERE version_name=? LIMIT 1", (new_name,))
+            if cur.fetchone():
+                conn.close(); return False
+            cur.execute("UPDATE quote_versions SET version_name=? WHERE version_name=?", (new_name, old_name))
+            conn.commit(); conn.close(); return True
+        except Exception:
+            return False
             stack = [row]; cost_prod = cost_inst = price_prod = price_inst = 0.0
             while stack:
                 cur = stack.pop()
