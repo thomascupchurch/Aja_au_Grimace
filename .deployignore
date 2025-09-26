@@ -1,0 +1,41 @@
+# Default deployment exclusions
+# (Patterns use PowerShell -like semantics: * and ? wildcards)
+
+# Python bytecode / caches
+__pycache__/ 
+*.pyc
+*.pyo
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# Build / dist artifacts
+build/
+dist/
+*.spec
+
+# Logs & temporary files
+app.log
+app.log.1
+*.tmp
+*.bak
+
+# SQLite sidecars (copied implicitly with main DB if -IncludeDb specified)
+*.db-shm
+*.db-wal
+
+# Release archives
+release_*.zip
+
+# Node / web build caches (future proofing)
+node_modules/
+.DS_Store
+Thumbs.db
+
+# Exclude database by default (deploy.ps1 already skips unless -IncludeDb); listing here is extra safety
+project_data.db
+
+# Re-include a template seed if you keep one
+!project_data.db.template

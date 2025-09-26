@@ -1,133 +1,208 @@
+<#!
+.SYNOPSIS
+  Incrementally update an existing deployed application folder in OneDrive (or any target path) from the current workspace.
+.DESCRIPTION
+  Compares the local source tree (or a PyInstaller onedir build) with the destination app folder and copies only changed / new files.
+  Can optionally back up changed/removed files into a timestamped zip or folder, perform a dry run, and skip the live database.
+
+.PARAMETER OneDriveAppPath
+  Destination application folder previously deployed (root that contains main.py or dist/ depending on mode).
+.PARAMETER Mode
+  'source' (default) copies tracked source files (.py, assets) OR 'onedir' to sync contents of dist/main (PyInstaller onedir build).
+.PARAMETER BackupDir
+  If specified, create a timestamped backup zip of files that will be overwritten or deleted. If value ends with .zip the backup is a single archive. Otherwise a folder is created under BackupDir with timestamp.
+.PARAMETER IncludeDb
+  Include project_data.db if present (disabled by default to avoid overwriting live DB).
+.PARAMETER IncludeLog
+  Include app.log (excluded by default).
+.PARAMETER Prune
+  Remove destination files that do not exist in the source set (ignores DB/log unless inclusion flags provided). Safe dry run first recommended.
+.PARAMETER DryRun
+  Show planned actions without executing (alias: -WhatIfStyle).
+.PARAMETER OverwriteUnchanged
+  Force copy even if size & last write time suggest file is unchanged.
+.PARAMETER DeployIgnore
+  Optional path to a .deployignore file (defaults to repo root .deployignore if found).
+.PARAMETER VerboseHash
+  Compute SHA256 for more accurate change detection (slower). Without this, uses size+timestamp heuristic unless OverwriteUnchanged.
+.PARAMETER Quiet
+  Minimal console output (errors and summary only).
+
+.EXAMPLE
+  ./update_onedrive.ps1 -OneDriveAppPath "C:\Users\me\OneDrive - Org\PlannerApp" -DryRun
+.EXAMPLE
+  ./update_onedrive.ps1 -OneDriveAppPath "C:\Users\me\OneDrive - Org\PlannerApp" -BackupDir "C:\Backups\Planner" -Prune
+.EXAMPLE
+  ./update_onedrive.ps1 -OneDriveAppPath "C:\Users\me\OneDrive - Org\PlannerApp" -Mode onedir -VerboseHash
+#>
+[CmdletBinding(SupportsShouldProcess=$true)]
 param(
-  [Parameter(Mandatory=$true)]
-  [string]$OneDriveAppPath,
-  [ValidateSet('source','onedir')]
-  [string]$Mode = 'source',
+  [Parameter(Mandatory=$true)][string]$OneDriveAppPath,
+  [ValidateSet('source','onedir')][string]$Mode='source',
+  [string]$BackupDir,
+  [switch]$IncludeDb,
+  [switch]$IncludeLog,
+  [switch]$Prune,
   [switch]$DryRun,
-  [string]$BackupDir = '',
-  [string]$Python = ''
+  [switch]$OverwriteUnchanged,
+  [string]$DeployIgnore,
+  [switch]$VerboseHash,
+  [switch]$Quiet
 )
+$ErrorActionPreference='Stop'
+function W($msg,$color='Gray'){ if(-not $Quiet){ Write-Host $msg -ForegroundColor $color } }
+function Act($msg){ if(-not $Quiet){ Write-Host "[DO] $msg" -ForegroundColor Green } }
+function Skip($msg){ if(-not $Quiet){ Write-Host "[==] $msg" -ForegroundColor DarkYellow } }
+function Del($msg){ if(-not $Quiet){ Write-Host "[DEL] $msg" -ForegroundColor Red } }
+function Err($msg){ Write-Host "[ERR] $msg" -ForegroundColor Red }
 
-# Incrementally update the OneDrive app folder from the current repo
-# - Preserves db_path.txt if present
-# - Skips transient/build folders and venv
-# - Optional backup (pre-sync snapshot)
-# - For 'onedir' mode, rebuilds if dist/main missing or when -Rebuild is provided
+$repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $repoRoot
+if(-not (Test-Path $OneDriveAppPath)){ throw "Destination path not found: $OneDriveAppPath" }
 
-$ErrorActionPreference = 'Stop'
+# Determine source set
+if($Mode -eq 'onedir'){
+  $buildRoot = Join-Path $repoRoot 'dist'
+  if(-not (Test-Path $buildRoot)){ throw "dist/ not found. Build the onedir package first." }
+  $candidates = Get-ChildItem -Path $buildRoot -Recurse -File
+} else {
+  $patterns = @('*.py','*.png','*.jpg','*.jpeg','*.gif','*.svg','*.ico','*.json','*.md','*.txt','*.csv','*.qml','*.ui')
+  $candidates = @()
+  foreach($pat in $patterns){ $candidates += Get-ChildItem -Recurse -File -Filter $pat -ErrorAction SilentlyContinue }
+  # Always include spec files for reference
+  $candidates += Get-ChildItem -Recurse -File -Include *.spec -ErrorAction SilentlyContinue
+}
+$candidates = $candidates | Sort-Object FullName -Unique
 
-function Resolve-Python([string]$Preferred) {
-  if ($Preferred -and (Test-Path $Preferred)) { return $Preferred }
-  $candidates = @(
-    "$PSScriptRoot\.venv\Scripts\python.exe",
-    "py",
-    "python.exe"
-  )
-  foreach ($c in $candidates) {
-    try {
-      if ($c -eq 'py') {
-        $v = & py -3 -c "import sys;print(sys.version)" 2>$null
-        if ($LASTEXITCODE -eq 0 -and $v) { return 'py' }
-      } else {
-        $v = & $c -c "import sys;print(sys.version)" 2>$null
-        if ($LASTEXITCODE -eq 0 -and $v) { return $c }
-      }
-    } catch {}
+# Load .deployignore
+if(-not $DeployIgnore){ $DeployIgnore = Join-Path $repoRoot '.deployignore' }
+$ignorePatterns=@(); $negatePatterns=@()
+if($DeployIgnore -and (Test-Path $DeployIgnore)){
+  Get-Content $DeployIgnore | ForEach-Object {
+    $l=$_.Trim(); if(-not $l -or $l.StartsWith('#')){ return }
+    if($l.StartsWith('!')){ $negatePatterns += $l.Substring(1); return }
+    $ignorePatterns += $l
   }
-  throw 'No Python interpreter found.'
+}
+function MatchPattern($rel){ foreach($p in $ignorePatterns){ if($rel -like $p){ return $true } } return $false }
+function Negated($rel){ foreach($p in $negatePatterns){ if($rel -like $p){ return $true } } return $false }
+
+$dbName='project_data.db'; $logName='app.log'
+$sourceFiles = @()
+foreach($f in $candidates){
+  $rel = Resolve-Path -Relative $f.FullName
+  $relUnix = $rel -replace '\\','/'
+  $leaf = Split-Path $rel -Leaf
+  if(MatchPattern $relUnix){ if(Negated $relUnix){ } else { Skip "$rel (ignored)"; continue } }
+  if($leaf -eq $dbName -and -not $IncludeDb){ Skip "$rel (db excluded)"; continue }
+  if($leaf -eq $logName -and -not $IncludeLog){ Skip "$rel (log excluded)"; continue }
+  $sourceFiles += [pscustomobject]@{Rel=$relUnix; Full=$f.FullName }
 }
 
-function New-Timestamp { (Get-Date).ToString('yyyyMMdd_HHmmss') }
+# Change detection helpers
+function GetHashFast($path){ if($VerboseHash){ return (Get-FileHash -Algorithm SHA256 -Path $path).Hash } else { return '' } }
+$destRoot = (Resolve-Path $OneDriveAppPath).Path
+$destFilesIndex = @{}
+Get-ChildItem -Path $destRoot -Recurse -File | ForEach-Object {
+  $rel = $_.FullName.Substring($destRoot.Length)
+  # Normalize leading separators (handle both Windows and potential mixed separators)
+  while($rel.StartsWith('\') -or $rel.StartsWith('/')){ $rel = $rel.Substring(1) }
+  $rel = $rel -replace '\\','/'
+  if(-not $rel){ return }
+  $destFilesIndex[$rel] = $_
+}
 
-function Copy-Incremental($src, $dst, $include, $exclude, [switch]$WhatIf) {
-  if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Force -Path $dst | Out-Null }
-  $srcResolved = (Resolve-Path $src).Path
-  if (-not $srcResolved.EndsWith('\')) { $srcResolved += '\' }
-  $filterScript = {
-    param($path)
-    foreach ($pat in $exclude) { if ($path -like $pat) { return $false } }
-    if ($include.Count -eq 0) { return $true }
-    foreach ($pat in $include) { if ($path -like $pat) { return $true } }
-    return $false
-  }
-  Get-ChildItem -Path $srcResolved -Recurse -Force | ForEach-Object {
-    $rel = $_.FullName.Substring($srcResolved.Length)
-    $rel = $rel.TrimStart([char[]]"\\/")
-    if (& $filterScript $rel) {
-      $target = Join-Path $dst $rel
-      if ($_.PSIsContainer) {
-        if (-not (Test-Path $target)) {
-          if ($WhatIf) { Write-Host "[DRY] mkdir $target" }
-          else { New-Item -ItemType Directory -Force -Path $target | Out-Null }
-        }
+$copyPlan=@(); $skipPlan=@(); $overwritePlan=@(); $hashCache=@{}
+foreach($sf in $sourceFiles){
+  $rel = $sf.Rel
+  $destPath = Join-Path $destRoot $rel
+  $needCopy=$true
+  if(Test-Path $destPath){
+    if(-not $OverwriteUnchanged){
+      $srcInfo = Get-Item $sf.Full
+      $dstInfo = Get-Item $destPath
+      if($VerboseHash){
+        $srcH = GetHashFast $sf.Full
+        $dstH = GetHashFast $destPath
+        if($srcH -eq $dstH){ $needCopy=$false; $skipPlan += $rel }
       } else {
-        $doCopy = $true
-        if (Test-Path $target) {
-          $srcInfo = Get-Item $_.FullName
-          $dstInfo = Get-Item $target
-          if ($srcInfo.Length -eq $dstInfo.Length -and $srcInfo.LastWriteTimeUtc -eq $dstInfo.LastWriteTimeUtc) { $doCopy = $false }
-        }
-        if ($doCopy) {
-          if ($WhatIf) { Write-Host "[DRY] copy $rel" }
-          else { Copy-Item $_.FullName -Destination $target -Force }
-        }
+        if($srcInfo.Length -eq $dstInfo.Length -and $srcInfo.LastWriteTimeUtc -le $dstInfo.LastWriteTimeUtc){ $needCopy=$false; $skipPlan += $rel }
       }
+    }
+    if($needCopy){ $overwritePlan += $rel }
+  }
+  if($needCopy){ $copyPlan += $rel }
+}
+
+# Prune plan
+$prunePlan=@()
+if($Prune){
+  foreach($existingRel in $destFilesIndex.Keys){
+    if(-not ($sourceFiles.Rel -contains $existingRel)){
+      $leaf = Split-Path $existingRel -Leaf
+      if(($leaf -eq $dbName -and -not $IncludeDb) -or ($leaf -eq $logName -and -not $IncludeLog)) { continue }
+      $prunePlan += $existingRel
     }
   }
 }
 
-if (-not (Test-Path $OneDriveAppPath)) { throw "OneDrive app path not found: $OneDriveAppPath" }
-
-# Preserve db_path.txt if present
-$dbPathFile = Join-Path $OneDriveAppPath 'db_path.txt'
-$dbPathVal = ''
-if (Test-Path $dbPathFile) { $dbPathVal = (Get-Content $dbPathFile -ErrorAction SilentlyContinue | Select-Object -First 1).Trim() }
-
-# Optional backup
-if ($BackupDir) {
-  $stamp = New-Timestamp
-  $backup = Join-Path $BackupDir ("onedrive_app_backup_$stamp.zip")
-  if ($DryRun) { Write-Host "[DRY] backup -> $backup" }
-  else {
-    if (-not (Test-Path $BackupDir)) { New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null }
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [System.IO.Compression.ZipFile]::CreateFromDirectory($OneDriveAppPath, $backup)
-    Write-Host "[backup] $backup" -ForegroundColor Yellow
+# Backup if requested
+$backupTarget=''
+if($BackupDir){
+  $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+  if($BackupDir.ToLower().EndsWith('.zip')){
+    $backupTarget = $BackupDir
+  } else {
+    if(-not (Test-Path $BackupDir)){ if(-not $DryRun){ New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null } }
+    $backupTarget = Join-Path $BackupDir "update_backup_$timestamp.zip"
   }
+  W "Planned backup archive: $backupTarget" Cyan
 }
 
-$srcRoot = $PSScriptRoot
-$exclude = @(
-  'dist*','build*','.venv*','__pycache__*','*.pyc','*.pyo','.git*','release_*.zip','*.sha256','*.spec' # include main.spec via list below
-)
-$include = @(
-  'main.py','README.md','requirements.txt','header.png','header.svg','main.spec','quickstart.ps1','quickstart.sh','run_app.ps1','run_from_onedrive.ps1','deploy_onedrive.ps1','update_onedrive.ps1','shared_template*','web*','images*','VERSION','project_data.db'
-)
+W "Source files: $($sourceFiles.Count)" Cyan
+W "Will copy: $($copyPlan.Count) (overwrite: $($overwritePlan.Count))" Cyan
+if($Prune){ W "Will prune: $($prunePlan.Count)" Cyan }
+if($DryRun){ W "Dry run only (no changes)." Yellow }
 
-if ($Mode -eq 'source') {
-  Write-Host "[sync] Updating source files -> $OneDriveAppPath" -ForegroundColor Cyan
-  Copy-Incremental -src $srcRoot -dst $OneDriveAppPath -include $include -exclude $exclude -WhatIf:$DryRun
-  if ($dbPathVal) { Set-Content -Path $dbPathFile -Value $dbPathVal -Encoding UTF8 }
-  Write-Host "[done]" -ForegroundColor Green
+if(-not $DryRun -and $BackupDir){
+  W "Creating backup..." Cyan
+  if(Test-Path $backupTarget){ Remove-Item -Force $backupTarget }
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ("upd_" + [guid]::NewGuid())
+  New-Item -ItemType Directory -Path $tmpDir | Out-Null
+  try {
+    foreach($rel in ($overwritePlan + $prunePlan | Sort-Object -Unique)){
+      $srcItem = $destFilesIndex[$rel]
+      if(-not $srcItem){ continue }
+      $outPath = Join-Path $tmpDir $rel
+      $outDir = Split-Path -Parent $outPath
+      if(-not (Test-Path $outDir)){ New-Item -ItemType Directory -Force -Path $outDir | Out-Null }
+      Copy-Item -Force $srcItem.FullName $outPath
+    }
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($tmpDir, $backupTarget)
+    W "Backup archived: $backupTarget" Green
+  }
+  finally { Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue }
+}
+
+if(-not $DryRun){
+  foreach($rel in $copyPlan){
+    $srcFull = ($sourceFiles | Where-Object { $_.Rel -eq $rel }).Full
+    $destPath = Join-Path $destRoot $rel
+    $destDir = Split-Path -Parent $destPath
+    if(-not (Test-Path $destDir)){ New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+    Copy-Item -Force $srcFull $destPath
+    Act $rel
+  }
+  if($Prune){
+    foreach($rel in $prunePlan){
+      $full = Join-Path $destRoot $rel
+      if(Test-Path $full){ Remove-Item -Force $full; Del $rel }
+    }
+  }
 } else {
-  # onedir: ensure dist/main exists; build if needed
-  $exe = Join-Path $srcRoot 'dist\main\main.exe'
-  if (-not (Test-Path $exe)) {
-    Write-Host "[build] Creating onedir build via main.spec" -ForegroundColor Yellow
-    $py = Resolve-Python $Python
-    if ($py -eq 'py') { py -3 -m PyInstaller (Join-Path $srcRoot 'main.spec') } else { & $py -m PyInstaller (Join-Path $srcRoot 'main.spec') }
-  }
-  if (-not (Test-Path $exe)) { throw 'PyInstaller build not found after attempt.' }
-  $destApp = Join-Path $OneDriveAppPath 'main'
-  if ($DryRun) { Write-Host "[DRY] replace $destApp with dist/main" }
-  else {
-    if (Test-Path $destApp) { Remove-Item -Recurse -Force $destApp }
-    Copy-Item (Join-Path $srcRoot 'dist\main') $OneDriveAppPath -Recurse -Force
-  }
-  # Also copy launcher if present
-  $launcher = Join-Path $srcRoot 'run_app.ps1'
-  if (Test-Path $launcher) { Copy-Item $launcher $OneDriveAppPath -Force }
-  # Restore db_path.txt
-  if ($dbPathVal) { Set-Content -Path $dbPathFile -Value $dbPathVal -Encoding UTF8 }
-  Write-Host "[done]" -ForegroundColor Green
+  foreach($rel in $copyPlan){ Act "(dry) $rel" }
+  foreach($rel in $prunePlan){ Del "(dry) $rel" }
 }
+
+W "Update complete." Green

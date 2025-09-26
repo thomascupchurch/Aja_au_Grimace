@@ -8,6 +8,73 @@ from PyQt5.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButt
 from PyQt5.QtWidgets import QTreeWidgetItem
 import os
 from PyQt5.QtGui import QPixmap
+
+# --- Central JSON lines logger -------------------------------------------------
+# Lightweight, dependency-free structured logging. Writes JSON objects one per
+# line to app.log (sibling to the active DB file). Rotates when file exceeds
+# ~1MB (simple single-level rotation). Safe for concurrent appenders on local/
+# network FS (best-effort; no hard locking). Use log_event(category, event, **kv)
+def log_event(category: str, event: str, **fields):
+    try:
+        import os, json, datetime, socket, getpass, threading
+        ts = datetime.datetime.utcnow().isoformat(timespec='seconds') + 'Z'
+        try:
+            user = getpass.getuser()
+        except Exception:
+            user = 'unknown'
+        try:
+            host = socket.gethostname()
+        except Exception:
+            host = 'host'
+        base_dir = None
+        # Attempt to colocate with DB if model global exists later; fallback to script dir
+        try:
+            # Lazy import of __main__ to introspect model if already created
+            import __main__ as _m
+            if hasattr(_m, 'model') and getattr(_m, 'model') and hasattr(getattr(_m, 'model'), 'DB_FILE'):
+                base_dir = os.path.dirname(os.path.abspath(getattr(_m.model, 'DB_FILE')))
+        except Exception:
+            base_dir = None
+        if not base_dir:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+        log_path = os.path.join(base_dir, 'app.log')
+        # Simple rotation
+        try:
+            if os.path.exists(log_path) and os.path.getsize(log_path) > 1_000_000:
+                bak = log_path + '.1'
+                try:
+                    if os.path.exists(bak):
+                        os.remove(bak)
+                except Exception:
+                    pass
+                try:
+                    os.replace(log_path, bak)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        rec = {
+            'ts': ts,
+            'pid': os.getpid(),
+            'thread': threading.current_thread().name,
+            'user': user,
+            'host': host,
+            'category': category,
+            'event': event,
+        }
+        # Merge user fields (stringify anything not JSON-serializable)
+        for k, v in fields.items():
+            try:
+                json.dumps(v)
+                rec[k] = v
+            except Exception:
+                rec[k] = repr(v)
+        line = json.dumps(rec, ensure_ascii=False)
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(line + '\n')
+    except Exception:
+        # Never raise from logger
+        pass
 import shutil
 
 # --- Resource path resolution helper ---
@@ -467,6 +534,10 @@ class ProjectDataModel:
         import sqlite3, os
         if not os.path.exists(self.DB_FILE):
             # Table will be created later in create_table()
+            try:
+                log_event('schema','db_missing', path=self.DB_FILE)
+            except Exception:
+                pass
             return
         with self._connect() as conn:
             c = conn.cursor()
@@ -474,6 +545,10 @@ class ProjectDataModel:
             try:
                 c.execute("PRAGMA table_info(project_parts)")
                 existing = [row[1] for row in c.fetchall()]  # name in 2nd column
+                try:
+                    log_event('schema','existing_columns', count=len(existing))
+                except Exception:
+                    pass
             except Exception:
                 existing = []
             to_add = [col for col in self.COLUMNS if col not in existing]
@@ -493,6 +568,17 @@ class ProjectDataModel:
                     col_type = "TEXT"
                 try:
                     c.execute(f'ALTER TABLE project_parts ADD COLUMN "{col}" {col_type}')
+                except Exception:
+                    pass
+            # Add optimistic concurrency columns if missing
+            if 'row_version' not in existing:
+                try:
+                    c.execute('ALTER TABLE project_parts ADD COLUMN row_version INTEGER DEFAULT 0')
+                except Exception:
+                    pass
+            if 'last_modified_utc' not in existing:
+                try:
+                    c.execute('ALTER TABLE project_parts ADD COLUMN last_modified_utc TEXT DEFAULT ""')
                 except Exception:
                     pass
             # Baselines table for named snapshots
@@ -527,7 +613,28 @@ class ProjectDataModel:
                 )
             except Exception:
                 pass
+            # Changes audit log table
+            try:
+                c.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS changes (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        when_utc TEXT NOT NULL,
+                        user TEXT,
+                        part_name TEXT NOT NULL,
+                        field TEXT NOT NULL,
+                        old_value TEXT,
+                        new_value TEXT
+                    )
+                    """
+                )
+            except Exception:
+                pass
             conn.commit()
+        try:
+            log_event('schema','ensure_schema_complete', added=to_add, has_row_version=('row_version' in existing), has_last_modified=('last_modified_utc' in existing))
+        except Exception:
+            pass
 
     def add_row(self, data, parent=None):
         row = {col: val for col, val in zip(self.COLUMNS, data)}
@@ -536,8 +643,69 @@ class ProjectDataModel:
         return len(self.rows) - 1
 
     def update_row(self, idx, data):
+        # Legacy in-memory update (used before persistence commit); does not apply concurrency logic.
         for i, col in enumerate(self.COLUMNS):
             self.rows[idx][col] = data[i]
+
+    def update_part_values(self, part_name: str, new_values: dict, expected_version: int):
+        """Optimistic concurrency update by Project Part name.
+        new_values: dict of column->value (must be subset of self.COLUMNS)
+        expected_version: caller's last known row_version
+        Returns (True, new_version) on success; (False, reason) on conflict/error."""
+        import datetime, os
+        if not part_name or not new_values:
+            try: log_event('concurrency','update_invalid_params', part=part_name)
+            except Exception: pass
+            return False, "Invalid parameters"
+        if not os.path.exists(self.DB_FILE):
+            try: log_event('concurrency','update_db_missing', part=part_name)
+            except Exception: pass
+            return False, "DB missing"
+        # Sanitize keys
+        valid = {k: v for k, v in new_values.items() if k in self.COLUMNS}
+        if not valid:
+            try: log_event('concurrency','update_no_valid_fields', part=part_name)
+            except Exception: pass
+            return False, "No valid fields"
+        # Build SQL
+        set_fragments = []
+        params = []
+        for k, v in valid.items():
+            set_fragments.append(f'"{k}"=?')
+            params.append(v)
+        set_fragments.append('last_modified_utc=?')
+        now_iso = datetime.datetime.utcnow().isoformat(timespec='seconds')
+        params.append(now_iso)
+        set_fragments.append('row_version = row_version + 1')
+        sql = f'UPDATE project_parts SET {", ".join(set_fragments)} WHERE "Project Part"=? AND row_version=?'
+        params.extend([part_name, expected_version])
+        try:
+            with self._connect() as conn:
+                cur = conn.cursor()
+                cur.execute('BEGIN IMMEDIATE')
+                cur.execute(sql, params)
+                if cur.rowcount == 0:
+                    try: log_event('concurrency','conflict', part=part_name, expected=expected_version)
+                    except Exception: pass
+                    return False, "Conflict"
+                # Fetch new version
+                cur.execute('SELECT row_version FROM project_parts WHERE "Project Part"=?', (part_name,))
+                new_ver = cur.fetchone()[0]
+                conn.commit()
+            # Update in-memory copy
+            for r in self.rows:
+                if r.get('Project Part') == part_name:
+                    r.update(valid)
+                    r['row_version'] = new_ver
+                    r['last_modified_utc'] = now_iso
+                    break
+            try: log_event('concurrency','update_success', part=part_name, new_version=new_ver, fields=list(valid.keys()))
+            except Exception: pass
+            return True, new_ver
+        except Exception as e:
+            try: log_event('concurrency','update_exception', part=part_name, error=str(e))
+            except Exception: pass
+            return False, str(e)
 
     def delete_row(self, idx):
         # Remove children recursively
@@ -574,9 +742,27 @@ class ProjectDataModel:
             c = conn.cursor()
             # Build quoted column list without nested f-strings/backslashes (macOS Python parser-safe)
             cols_quoted = ", ".join(['"{}"'.format(col) for col in self.COLUMNS])
-            c.execute(f"SELECT {cols_quoted} FROM project_parts")
+            # Also pull concurrency columns if they exist
+            try:
+                c.execute('PRAGMA table_info(project_parts)')
+                existing_cols = [r[1] for r in c.fetchall()]
+            except Exception:
+                existing_cols = []
+            concurrency_select = []
+            if 'row_version' in existing_cols:
+                concurrency_select.append('row_version')
+            if 'last_modified_utc' in existing_cols:
+                concurrency_select.append('last_modified_utc')
+            extra_sql = (', ' + ', '.join(concurrency_select)) if concurrency_select else ''
+            c.execute(f"SELECT {cols_quoted}{extra_sql} FROM project_parts")
             for row in c.fetchall():
-                row_dict = {col: val for col, val in zip(self.COLUMNS, row)}
+                base_part = row[:len(self.COLUMNS)]
+                row_dict = {col: val for col, val in zip(self.COLUMNS, base_part)}
+                if concurrency_select:
+                    # Append concurrency fields by order appended
+                    tail = row[len(self.COLUMNS):]
+                    for name, val in zip(concurrency_select, tail):
+                        row_dict[name] = val
                 # Default missing progress fields (older rows) if any are absent or None
                 if row_dict.get("% Complete") in (None, ""):
                     row_dict["% Complete"] = 0
@@ -600,6 +786,36 @@ class ProjectDataModel:
         # After loading & computing end dates, establish baseline if missing
         self.capture_missing_baselines()
 
+    def get_row_snapshot(self, part_name: str):
+        """Return a fresh DB snapshot dict for the given part including row_version/last_modified if present, or None."""
+        if not part_name:
+            return None
+        import os, sqlite3
+        if not os.path.exists(self.DB_FILE):
+            return None
+        with self._connect() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute('PRAGMA table_info(project_parts)')
+                cols = [r[1] for r in cur.fetchall()]
+            except Exception:
+                cols = []
+            select_cols = list(self.COLUMNS)
+            if 'row_version' in cols:
+                select_cols.append('row_version')
+            if 'last_modified_utc' in cols:
+                select_cols.append('last_modified_utc')
+            quoted = ', '.join(['"{}"'.format(c) for c in select_cols])
+            try:
+                cur.execute(f'SELECT {quoted} FROM project_parts WHERE "Project Part"=? LIMIT 1', (part_name,))
+                res = cur.fetchone()
+                if not res:
+                    return None
+                snap = {c: v for c, v in zip(select_cols, res)}
+                return snap
+            except Exception:
+                return None
+
     def capture_missing_baselines(self):
         import datetime
         for r in self.rows:
@@ -621,6 +837,8 @@ class ProjectDataModel:
         import sqlite3, os, socket, getpass, json
         if getattr(self, 'read_only', False):
             # Skip save in read-only mode (collaborative viewer)
+            try: log_event('db','save_skipped_read_only')
+            except Exception: pass
             return
         # Enforce single-editor lock: if a lock file exists and we are not the owner, prevent writes
         try:
@@ -641,6 +859,8 @@ class ProjectDataModel:
                     if owner and owner != me:
                         # Hard block to guarantee only the lock owner can write
                         print(f"Save blocked: edit lock held by {owner}")
+                        try: log_event('db','save_blocked_lock', owner=owner)
+                        except Exception: pass
                         return
         except Exception:
             pass
@@ -648,20 +868,41 @@ class ProjectDataModel:
         # Roll-ups before save to persist auto-calculated parent progress
         self.rollup_progress()
         self.create_table()
+        # Full rewrite (legacy). Preserve row_version/last_modified_utc if present in table.
         with self._connect() as conn:
             c = conn.cursor()
             try:
-                # Acquire an immediate transaction lock to avoid mid-write conflicts
                 c.execute("BEGIN IMMEDIATE")
             except Exception:
                 pass
+            # Determine if concurrency columns exist
+            try:
+                c.execute('PRAGMA table_info(project_parts)')
+                cols_exist = [r[1] for r in c.fetchall()]
+            except Exception:
+                cols_exist = []
+            has_rv = 'row_version' in cols_exist
+            has_lm = 'last_modified_utc' in cols_exist
             c.execute("DELETE FROM project_parts")
+            base_cols = [col for col in self.COLUMNS]
+            extra_cols = []
+            if has_rv:
+                extra_cols.append('row_version')
+            if has_lm:
+                extra_cols.append('last_modified_utc')
+            all_cols = base_cols + extra_cols
+            columns_sql = ", ".join(['"{}"'.format(col) for col in all_cols])
+            placeholders = ", ".join(["?" for _ in all_cols])
             for row in self.rows:
-                values = [row.get(col, "") for col in self.COLUMNS]
-                placeholders = ", ".join(["?" for _ in self.COLUMNS])
-                columns_sql = ", ".join(['"{}"'.format(col) for col in self.COLUMNS])
-                c.execute(f"INSERT INTO project_parts ({columns_sql}) VALUES ({placeholders})", values)
+                vals = [row.get(c, "") for c in base_cols]
+                if has_rv:
+                    vals.append(row.get('row_version', 0))
+                if has_lm:
+                    vals.append(row.get('last_modified_utc', ''))
+                c.execute(f"INSERT INTO project_parts ({columns_sql}) VALUES ({placeholders})", vals)
             conn.commit()
+        try: log_event('db','save_complete', rows=len(self.rows))
+        except Exception: pass
 
     def create_table(self):
         import sqlite3
@@ -787,6 +1028,26 @@ class ProjectDataModel:
                 cur.execute("DELETE FROM quote_versions WHERE version_name=?", (version_name,))
                 conn.commit()
                 return True
+            except Exception:
+                return False
+
+    def rename_quote_version(self, old_name: str, new_name: str):
+        """Rename a quote version label. Returns True on success.
+        Fails (returns False) if destination already exists or source missing."""
+        import os
+        if (not old_name or not new_name or old_name == new_name or
+                not os.path.exists(self.DB_FILE)):
+            return False
+        with self._connect() as conn:
+            cur = conn.cursor()
+            try:
+                # Abort if destination exists
+                cur.execute("SELECT 1 FROM quote_versions WHERE version_name=? LIMIT 1", (new_name,))
+                if cur.fetchone():
+                    return False
+                cur.execute("UPDATE quote_versions SET version_name=? WHERE version_name=?", (new_name, old_name))
+                conn.commit()
+                return cur.rowcount > 0
             except Exception:
                 return False
 
@@ -1119,6 +1380,106 @@ class ProgressDashboard(QWidget):
         )
         self.summary_label.setText(text)
 
+# --- Conflict Resolution Dialog -------------------------------------------------
+class ConflictResolutionDialog(QDialog):
+    """Dialog shown when an optimistic concurrency update detects a conflict.
+
+    Presents side-by-side comparison of each changed field:
+      - Local Pending (user edits)
+      - Remote Current (fresh DB snapshot)
+      - Original Local (value before edit, if supplied)
+
+    Actions:
+      - Keep Remote (discard local pending)
+      - Overwrite Remote (force save local pending using new expected version)
+      - Merge Field-by-Field (user selects which side per field) then save
+    """
+    def __init__(self, part_name: str, original: dict, pending: dict, remote: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Conflict – {part_name}")
+        self.part_name = part_name
+        self.original = original or {}
+        self.pending = pending or {}
+        self.remote = remote or {}
+        self.merged = dict(self.remote)  # start from remote baseline
+        from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QWidget, QGridLayout, QRadioButton, QButtonGroup
+        layout = QVBoxLayout(self)
+        info = QLabel("Another user modified this row before your save completed. Resolve each differing field.")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+        # Scrollable area for fields
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        container = QWidget(); grid = QGridLayout(container)
+        headers = ["Field","Original","Remote","Pending","Use"]
+        for c,h in enumerate(headers):
+            lbl = QLabel(f"<b>{h}</b>")
+            grid.addWidget(lbl,0,c)
+        self._choice_groups = {}
+        diff_fields = sorted(set(list(self.pending.keys()) + list(self.remote.keys())))
+        row_idx = 1
+        for field in diff_fields:
+            if field == 'Project Part':
+                continue
+            orig_v = self.original.get(field)
+            remote_v = self.remote.get(field)
+            pend_v = self.pending.get(field)
+            # Only show if there is a meaningful difference
+            if str(remote_v) == str(pend_v):
+                continue
+            grid.addWidget(QLabel(field), row_idx, 0)
+            grid.addWidget(QLabel(str(orig_v) if orig_v not in (None,'') else '—'), row_idx, 1)
+            grid.addWidget(QLabel(str(remote_v) if remote_v not in (None,'') else '—'), row_idx, 2)
+            grid.addWidget(QLabel(str(pend_v) if pend_v not in (None,'') else '—'), row_idx, 3)
+            grp = QButtonGroup(self)
+            r_remote = QRadioButton("Remote")
+            r_local = QRadioButton("Local")
+            r_remote.setChecked(True)
+            grp.addButton(r_remote, 0); grp.addButton(r_local, 1)
+            hl = QHBoxLayout(); hl.addWidget(r_remote); hl.addWidget(r_local); hl.addStretch(1)
+            cell = QWidget(); cell.setLayout(hl)
+            grid.addWidget(cell, row_idx, 4)
+            self._choice_groups[field] = grp
+            row_idx += 1
+        if row_idx == 1:
+            # No differing fields – fallback simple notice
+            grid.addWidget(QLabel("No differing fields – you can keep remote copy."), row_idx, 0, 1, 5)
+        scroll.setWidget(container)
+        layout.addWidget(scroll,1)
+        # Buttons
+        btn_row = QHBoxLayout()
+        self.btn_keep = QPushButton("Keep Remote")
+        self.btn_overwrite = QPushButton("Overwrite Remote")
+        self.btn_merge = QPushButton("Merge & Save")
+        self.btn_cancel = QPushButton("Cancel")
+        btn_row.addWidget(self.btn_keep)
+        btn_row.addWidget(self.btn_overwrite)
+        btn_row.addWidget(self.btn_merge)
+        btn_row.addStretch(1)
+        btn_row.addWidget(self.btn_cancel)
+        layout.addLayout(btn_row)
+        self.choice = None  # 'keep' | 'overwrite' | 'merge'
+        self.btn_keep.clicked.connect(self._keep)
+        self.btn_overwrite.clicked.connect(self._overwrite)
+        self.btn_merge.clicked.connect(self._merge)
+        self.btn_cancel.clicked.connect(self.reject)
+        self.setMinimumSize(760, 420)
+    def _keep(self):
+        self.choice = 'keep'
+        self.accept()
+    def _overwrite(self):
+        self.choice = 'overwrite'
+        self.accept()
+    def _merge(self):
+        # Build merged dict starting from remote + field-level picks
+        merged = dict(self.remote)
+        for field, grp in self._choice_groups.items():
+            sel = grp.checkedId()  # 0 remote, 1 local
+            if sel == 1:  # local/pending
+                merged[field] = self.pending.get(field)
+        self.merged = merged
+        self.choice = 'merge'
+        self.accept()
+
 class CostEstimatesView(QWidget):
     """Enhanced cost & margin estimation view.
     Columns:
@@ -1160,17 +1521,14 @@ class CostEstimatesView(QWidget):
         self.chk_compact = QCheckBox("Compact")
         self.chk_compact.stateChanged.connect(self._apply_compact_mode)
         header.addWidget(self.chk_compact)
-        export_btn = QPushButton("Export CSV")
-        export_btn.clicked.connect(self._export_csv)
+        export_btn = QPushButton("Export…")
+        export_btn.setToolTip("Open unified export dialog (CSV / XLSX / PDF / PNG)")
+        export_btn.clicked.connect(self._open_export_dialog)
         header.addWidget(export_btn)
-        export_xlsx_btn = QPushButton("Export XLSX")
-        export_xlsx_btn.setToolTip("Export current cost table (visible columns) to Excel workbook")
-        export_xlsx_btn.clicked.connect(self._export_xlsx)
-        header.addWidget(export_xlsx_btn)
-        export_pdf_btn = QPushButton("Export PDF/PNG")
-        export_pdf_btn.setToolTip("Export this cost table to PDF or PNG with header/footer")
-        export_pdf_btn.clicked.connect(self._export_render)
-        header.addWidget(export_pdf_btn)
+        self.chk_selected_only = QCheckBox("Selected Only")
+        self.chk_selected_only.setToolTip("When checked, only selected table rows are exported (CSV/XLSX/PDF/PNG). If none selected, falls back to all.")
+        header.addWidget(self.chk_selected_only)
+    # (Legacy individual export buttons removed in favor of unified dialog)
         # Column visibility / layouts button
         self.columns_btn = QPushButton("Columns…")
         self.columns_btn.setToolTip("Show/hide columns and manage saved visibility layouts")
@@ -1315,11 +1673,62 @@ class CostEstimatesView(QWidget):
                 writer = csv.writer(f)
                 headers = [self.table.horizontalHeaderItem(i).text() for i in range(self.table.columnCount())]
                 writer.writerow(headers)
-                for r in range(self.table.rowCount()):
+                selected_rows = set()
+                if hasattr(self, 'chk_selected_only') and self.chk_selected_only.isChecked():
+                    selected_rows = {idx.row() for idx in self.table.selectionModel().selectedRows()}
+                # Fallback to all rows if none selected
+                if selected_rows:
+                    row_iter = sorted(selected_rows)
+                else:
+                    row_iter = range(self.table.rowCount())
+                for r in row_iter:
                     writer.writerow([self.table.item(r,c).text() if self.table.item(r,c) else '' for c in range(self.table.columnCount())])
             print(f"Exported CSV -> {path}")
         except Exception as e:
             print(f"CSV export failed: {e}")
+
+    def _open_export_dialog(self):
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QCheckBox, QComboBox, QFileDialog, QMessageBox
+        dlg = QDialog(self); dlg.setWindowTitle("Export Cost Data")
+        v = QVBoxLayout(dlg)
+        v.addWidget(QLabel("Choose an export format. Options honor current filters, visible columns, and (optionally) selected rows."))
+        # Format choices
+        fmt_row = QHBoxLayout(); v.addLayout(fmt_row)
+        fmt_label = QLabel("Format:"); fmt_row.addWidget(fmt_label)
+        fmt_combo = QComboBox(); fmt_combo.addItems(["CSV","XLSX","PDF","PNG"]); fmt_row.addWidget(fmt_combo,1)
+        # Selected only toggle mirrors main checkbox
+        sel_chk = QCheckBox("Selected Only")
+        sel_chk.setChecked(hasattr(self,'chk_selected_only') and self.chk_selected_only.isChecked())
+        v.addWidget(sel_chk)
+        # Include header (only relevant for PDF/PNG)
+        hdr_chk = QCheckBox("Include Header Banner (PDF/PNG)")
+        hdr_chk.setChecked(True)
+        v.addWidget(hdr_chk)
+        # Buttons
+        btn_row = QHBoxLayout(); v.addLayout(btn_row)
+        export_btn = QPushButton("Export")
+        cancel_btn = QPushButton("Cancel")
+        btn_row.addStretch(1); btn_row.addWidget(export_btn); btn_row.addWidget(cancel_btn)
+        cancel_btn.clicked.connect(dlg.reject)
+        def do_export():
+            fmt = fmt_combo.currentText()
+            # propagate selection choice back to main toggle for reuse in lower-level exporters
+            if hasattr(self,'chk_selected_only'):
+                self.chk_selected_only.setChecked(sel_chk.isChecked())
+            if fmt == 'CSV':
+                dlg.accept(); self._export_csv(); return
+            if fmt == 'XLSX':
+                dlg.accept(); self._export_xlsx(); return
+            if fmt in ('PDF','PNG'):
+                # Temporarily set export format preferences via QSettings so _export_render uses them
+                from PyQt5.QtCore import QSettings
+                s = QSettings('LSI','ProjectPlanner')
+                s.setValue('Export/format', fmt)
+                s.setValue('Export/include_header', hdr_chk.isChecked())
+                dlg.accept(); self._export_render(); return
+            QMessageBox.warning(self, 'Unsupported', f'Format {fmt} not implemented.')
+        export_btn.clicked.connect(do_export)
+        dlg.setLayout(v); dlg.exec_()
 
     def _export_render(self):
         """Render the QTableWidget to PDF or PNG using export settings & header/footer branding."""
@@ -1345,7 +1754,18 @@ class CostEstimatesView(QWidget):
         # Compute total table size (sum of column widths + header height + row heights)
         h_header = self.table.horizontalHeader(); v_header = self.table.verticalHeader()
         width = sum(self.table.columnWidth(c) for c in range(self.table.columnCount())) + v_header.width()
-        height = h_header.height() + sum(self.table.rowHeight(r) for r in range(self.table.rowCount()))
+        # Determine row set (Selected Only logic)
+        selected_rows = set()
+        if hasattr(self, 'chk_selected_only') and self.chk_selected_only.isChecked():
+            try:
+                selected_rows = {idx.row() for idx in self.table.selectionModel().selectedRows()}
+            except Exception:
+                selected_rows = set()
+        if selected_rows:
+            row_iter = sorted(selected_rows)
+        else:
+            row_iter = range(self.table.rowCount())
+        height = h_header.height() + sum(self.table.rowHeight(r) for r in row_iter)
         if width <=0 or height <=0:
             print('Empty table; abort export.')
             return
@@ -1422,7 +1842,7 @@ class CostEstimatesView(QWidget):
                     x += w
                 painter.restore()
             draw_header(cur_y); cur_y += row_h
-            for r in range(self.table.rowCount()):
+            for r in row_iter:
                 if cur_y + row_h + 24 > page_rect.height():  # leave room for footer
                     # footer before new page
                     try:
@@ -1463,7 +1883,7 @@ class CostEstimatesView(QWidget):
             painter.drawText(x+2,fm.ascent()+2,txt)
             x+=w
         y=row_h
-        for r in range(self.table.rowCount()):
+        for r in row_iter:
             x=0
             for c in range(self.table.columnCount()):
                 w=self.table.columnWidth(c); it=self.table.item(r,c); txt=it.text() if it else ''
@@ -1545,7 +1965,14 @@ class CostEstimatesView(QWidget):
         # Rows
         currency_cols = set()
         percent_cols = set()
-        for r in range(self.table.rowCount()):
+        selected_rows = set()
+        if hasattr(self,'chk_selected_only') and self.chk_selected_only.isChecked():
+            selected_rows = {idx.row() for idx in self.table.selectionModel().selectedRows()}
+        if selected_rows:
+            row_range = sorted(selected_rows)
+        else:
+            row_range = range(self.table.rowCount())
+        for r in row_range:
             row_vals = []
             for c in visible_cols:
                 it = self.table.item(r,c)
@@ -1597,7 +2024,9 @@ class CostEstimatesView(QWidget):
         from datetime import datetime
         meta.append(["Generated", datetime.now().isoformat(timespec='seconds')])
         meta.append(["Version Selected", self.version_combo.currentText() if hasattr(self,'version_combo') else ''])
-        meta.append(["Filters", f"Name='{self.le_filter.text()}', Int/Ext='{self.combo_int_ext.currentText()}', MinPrice>{self.min_price_spin.value()}" ])
+        subset = "Selected" if selected_rows else "All"
+        meta.append(["Filters", f"Name='{self.le_filter.text()}', Int/Ext='{self.combo_int_ext.currentText()}', MinPrice>{self.min_price_spin.value()}"])
+        meta.append(["Subset", subset])
         try:
             wb.save(path)
             print(f"Exported XLSX -> {path}")
@@ -1882,31 +2311,16 @@ class CostEstimatesView(QWidget):
                     children_map.setdefault(p, []).append(r)
         # Helper to accumulate descendants
         def accumulate(row):
-
-    def rename_quote_version(self, old_name: str, new_name: str):
-        if not old_name or not new_name or old_name == new_name:
-            return False
-        try:
-            import sqlite3
-            conn = sqlite3.connect(self.DB_FILE)
-            cur = conn.cursor()
-            # If target exists, abort (caller can decide to overwrite by delete+save)
-            cur.execute("SELECT 1 FROM quote_versions WHERE version_name=? LIMIT 1", (new_name,))
-            if cur.fetchone():
-                conn.close(); return False
-            cur.execute("UPDATE quote_versions SET version_name=? WHERE version_name=?", (new_name, old_name))
-            conn.commit(); conn.close(); return True
-        except Exception:
-            return False
-            stack = [row]; cost_prod = cost_inst = price_prod = price_inst = 0.0
+            stack = [row]
+            cost_prod = cost_inst = price_prod = price_inst = 0.0
             while stack:
                 cur = stack.pop()
-                pcost = self._num(cur.get('Production Cost',0))
-                icost = self._num(cur.get('Installation Cost',0))
-                pprice = self._num(cur.get('Production Price',0))
-                iprice = self._num(cur.get('Installation Price',0))
+                pcost = self._num(cur.get('Production Cost', 0))
+                icost = self._num(cur.get('Installation Cost', 0))
+                pprice = self._num(cur.get('Production Price', 0))
+                iprice = self._num(cur.get('Installation Price', 0))
                 cost_prod += pcost; cost_inst += icost; price_prod += pprice; price_inst += iprice
-                for ch in children_map.get(cur.get('Project Part',''), []):
+                for ch in children_map.get(cur.get('Project Part', ''), []):
                     stack.append(ch)
             return cost_prod, cost_inst, price_prod, price_inst
         # Build data
@@ -5758,13 +6172,62 @@ class DatabaseView(QWidget):
     def dropdown_changed(self, row, col, value):
         colname = ProjectDataModel.COLUMNS[col]
         try:
-            self.model.rows[row][colname] = value
-            self.table.blockSignals(True)
-            self.table.setItem(row, col, QTableWidgetItem(value))
-            self.table.blockSignals(False)
-            # Save & propagate roll-ups
-            self.model.save_to_db()
-            # Refresh to update parent rows (Children column / roll-ups)
+            part_name = self.model.rows[row].get('Project Part','')
+            # Prepare optimistic update
+            expected_version = self.model.rows[row].get('row_version', 0)
+            new_values = {colname: value}
+            ok, info = self.model.update_part_values(part_name, new_values, expected_version)
+            if not ok and info == 'Conflict':
+                try:
+                    log_event('conflict','detected', part=part_name, field=colname)
+                except Exception:
+                    pass
+                remote = self.model.get_row_snapshot(part_name) or {}
+                original = dict(self.model.rows[row])
+                dlg = ConflictResolutionDialog(part_name, original=original, pending=new_values, remote=remote, parent=self)
+                if dlg.exec_():
+                    if dlg.choice == 'keep':
+                        try: log_event('conflict','keep_remote', part=part_name)
+                        except Exception: pass
+                        # Reload remote into memory row
+                        if remote:
+                            self.model.rows[row].update(remote)
+                    elif dlg.choice == 'overwrite':
+                        # Overwrite: use latest remote version as expected
+                        latest_ver = remote.get('row_version', expected_version)
+                        force_values = dict(new_values)
+                        # Attempt forced update with new version
+                        ok2, info2 = self.model.update_part_values(part_name, force_values, latest_ver)
+                        try: log_event('conflict','overwrite_attempt', part=part_name, success=ok2)
+                        except Exception: pass
+                        if not ok2:
+                            # Could still race; just refresh row
+                            fresh = self.model.get_row_snapshot(part_name)
+                            if fresh:
+                                self.model.rows[row].update(fresh)
+                    elif dlg.choice == 'merge':
+                        merged = dlg.merged
+                        latest_ver = remote.get('row_version', expected_version)
+                        # Remove concurrency keys
+                        merged_clean = {k:v for k,v in merged.items() if k in self.model.COLUMNS and k != 'Project Part'}
+                        ok2, info2 = self.model.update_part_values(part_name, merged_clean, latest_ver)
+                        try: log_event('conflict','merge_attempt', part=part_name, success=ok2, fields=list(merged_clean.keys()))
+                        except Exception: pass
+                        if not ok2:
+                            fresh = self.model.get_row_snapshot(part_name)
+                            if fresh:
+                                self.model.rows[row].update(fresh)
+                else:
+                    # Cancel: discard local change and refresh
+                    fresh = self.model.get_row_snapshot(part_name)
+                    if fresh:
+                        self.model.rows[row].update(fresh)
+            elif not ok:
+                try: log_event('conflict','other_update_failure', part=part_name, reason=info)
+                except Exception: pass
+            else:
+                # Successful optimistic update; update in-memory version already done by method
+                pass
             self.refresh_table()
             if self.on_data_changed:
                 self.on_data_changed()
@@ -5774,16 +6237,44 @@ class DatabaseView(QWidget):
         colname = ProjectDataModel.COLUMNS[col]
         min_blank = QDate(1753, 1, 1)
         try:
-            if qdate == min_blank:
-                self.model.rows[row][colname] = ""
-                date_val = ""
-            else:
-                date_val = qdate.toString("MM-dd-yyyy")
-                self.model.rows[row][colname] = date_val
-            self.table.blockSignals(True)
-            self.table.setItem(row, col, QTableWidgetItem(date_val))
-            self.table.blockSignals(False)
-            self.model.save_to_db()
+            part_name = self.model.rows[row].get('Project Part','')
+            date_val = "" if qdate == min_blank else qdate.toString("MM-dd-yyyy")
+            expected_version = self.model.rows[row].get('row_version', 0)
+            ok, info = self.model.update_part_values(part_name, {colname: date_val}, expected_version)
+            if not ok and info == 'Conflict':
+                try: log_event('conflict','detected', part=part_name, field=colname)
+                except Exception: pass
+                remote = self.model.get_row_snapshot(part_name) or {}
+                original = dict(self.model.rows[row])
+                dlg = ConflictResolutionDialog(part_name, original=original, pending={colname: date_val}, remote=remote, parent=self)
+                if dlg.exec_():
+                    if dlg.choice == 'keep':
+                        if remote:
+                            self.model.rows[row].update(remote)
+                            try: log_event('conflict','keep_remote', part=part_name)
+                            except Exception: pass
+                    elif dlg.choice == 'overwrite':
+                        latest_ver = remote.get('row_version', expected_version)
+                        ok2, info2 = self.model.update_part_values(part_name, {colname: date_val}, latest_ver)
+                        try: log_event('conflict','overwrite_attempt', part=part_name, success=ok2)
+                        except Exception: pass
+                        if not ok2 and remote:
+                            self.model.rows[row].update(remote)
+                    elif dlg.choice == 'merge':
+                        # For date single-field merge same as overwrite local selection outcome
+                        latest_ver = remote.get('row_version', expected_version)
+                        ok2, info2 = self.model.update_part_values(part_name, {colname: date_val}, latest_ver)
+                        try: log_event('conflict','merge_attempt', part=part_name, success=ok2, fields=[colname])
+                        except Exception: pass
+                        if not ok2 and remote:
+                            self.model.rows[row].update(remote)
+                else:
+                    # Cancel -> leave remote
+                    if remote:
+                        self.model.rows[row].update(remote)
+            elif not ok:
+                try: log_event('conflict','other_update_failure', part=part_name, reason=info)
+                except Exception: pass
             self.refresh_table()
             if self.on_data_changed:
                 self.on_data_changed()
@@ -5793,17 +6284,52 @@ class DatabaseView(QWidget):
     # --- Progress field handlers ---
     def percent_changed(self, row, col, value):
         try:
-            self.model.rows[row]["% Complete"] = int(value)
-            # Auto-mark Done if 100%
+            part_name = self.model.rows[row].get('Project Part','')
+            updates = {"% Complete": int(value)}
             if int(value) >= 100 and self.model.rows[row].get("Status") != "Done":
-                self.model.rows[row]["Status"] = "Done"
-                # Set Actual Finish Date if missing
+                updates["Status"] = "Done"
                 import datetime
                 if not self.model.rows[row].get("Actual Finish Date"):
-                    self.model.rows[row]["Actual Finish Date"] = datetime.datetime.today().strftime("%m-%d-%Y")
+                    updates["Actual Finish Date"] = datetime.datetime.today().strftime("%m-%d-%Y")
                 if not self.model.rows[row].get("Actual Start Date"):
-                    self.model.rows[row]["Actual Start Date"] = datetime.datetime.today().strftime("%m-%d-%Y")
-            self.model.save_to_db()
+                    updates["Actual Start Date"] = datetime.datetime.today().strftime("%m-%d-%Y")
+            expected_version = self.model.rows[row].get('row_version', 0)
+            ok, info = self.model.update_part_values(part_name, updates, expected_version)
+            if not ok and info == 'Conflict':
+                try: log_event('conflict','detected', part=part_name, field='% Complete')
+                except Exception: pass
+                remote = self.model.get_row_snapshot(part_name) or {}
+                original = dict(self.model.rows[row])
+                dlg = ConflictResolutionDialog(part_name, original=original, pending=updates, remote=remote, parent=self)
+                if dlg.exec_():
+                    choice_fields = updates.keys()
+                    if dlg.choice == 'keep':
+                        if remote:
+                            self.model.rows[row].update(remote)
+                            try: log_event('conflict','keep_remote', part=part_name)
+                            except Exception: pass
+                    elif dlg.choice == 'overwrite':
+                        latest_ver = remote.get('row_version', expected_version)
+                        ok2, info2 = self.model.update_part_values(part_name, updates, latest_ver)
+                        try: log_event('conflict','overwrite_attempt', part=part_name, success=ok2)
+                        except Exception: pass
+                        if not ok2 and remote:
+                            self.model.rows[row].update(remote)
+                    elif dlg.choice == 'merge':
+                        merged = dlg.merged
+                        latest_ver = remote.get('row_version', expected_version)
+                        merged_clean = {k:v for k,v in merged.items() if k in self.model.COLUMNS and k != 'Project Part'}
+                        ok2, info2 = self.model.update_part_values(part_name, merged_clean, latest_ver)
+                        try: log_event('conflict','merge_attempt', part=part_name, success=ok2, fields=list(merged_clean.keys()))
+                        except Exception: pass
+                        if not ok2 and remote:
+                            self.model.rows[row].update(remote)
+                else:
+                    if remote:
+                        self.model.rows[row].update(remote)
+            elif not ok:
+                try: log_event('conflict','other_update_failure', part=part_name, reason=info)
+                except Exception: pass
             self.refresh_table()
             if self.on_data_changed:
                 self.on_data_changed()
@@ -5812,23 +6338,55 @@ class DatabaseView(QWidget):
 
     def status_changed(self, row, col, value):
         try:
-            prev = self.model.rows[row].get("Status")
-            self.model.rows[row]["Status"] = value
+            part_name = self.model.rows[row].get('Project Part','')
             import datetime
             today_str = datetime.datetime.today().strftime("%m-%d-%Y")
+            updates = {"Status": value}
             if value == "In Progress":
                 if not self.model.rows[row].get("Actual Start Date"):
-                    self.model.rows[row]["Actual Start Date"] = today_str
-                # If % Complete is 0, maybe bump to 1 for visibility? (skip for now)
+                    updates["Actual Start Date"] = today_str
             elif value == "Done":
-                # Ensure 100% and finish date
-                self.model.rows[row]["% Complete"] = 100
+                updates["% Complete"] = 100
                 if not self.model.rows[row].get("Actual Start Date"):
-                    self.model.rows[row]["Actual Start Date"] = today_str
+                    updates["Actual Start Date"] = today_str
                 if not self.model.rows[row].get("Actual Finish Date"):
-                    self.model.rows[row]["Actual Finish Date"] = today_str
-            # Do not clear actual dates if reverting; keep historical record
-            self.model.save_to_db()
+                    updates["Actual Finish Date"] = today_str
+            expected_version = self.model.rows[row].get('row_version', 0)
+            ok, info = self.model.update_part_values(part_name, updates, expected_version)
+            if not ok and info == 'Conflict':
+                try: log_event('conflict','detected', part=part_name, field='Status')
+                except Exception: pass
+                remote = self.model.get_row_snapshot(part_name) or {}
+                original = dict(self.model.rows[row])
+                dlg = ConflictResolutionDialog(part_name, original=original, pending=updates, remote=remote, parent=self)
+                if dlg.exec_():
+                    if dlg.choice == 'keep':
+                        if remote:
+                            self.model.rows[row].update(remote)
+                            try: log_event('conflict','keep_remote', part=part_name)
+                            except Exception: pass
+                    elif dlg.choice == 'overwrite':
+                        latest_ver = remote.get('row_version', expected_version)
+                        ok2, info2 = self.model.update_part_values(part_name, updates, latest_ver)
+                        try: log_event('conflict','overwrite_attempt', part=part_name, success=ok2)
+                        except Exception: pass
+                        if not ok2 and remote:
+                            self.model.rows[row].update(remote)
+                    elif dlg.choice == 'merge':
+                        merged = dlg.merged
+                        latest_ver = remote.get('row_version', expected_version)
+                        merged_clean = {k:v for k,v in merged.items() if k in self.model.COLUMNS and k != 'Project Part'}
+                        ok2, info2 = self.model.update_part_values(part_name, merged_clean, latest_ver)
+                        try: log_event('conflict','merge_attempt', part=part_name, success=ok2, fields=list(merged_clean.keys()))
+                        except Exception: pass
+                        if not ok2 and remote:
+                            self.model.rows[row].update(remote)
+                else:
+                    if remote:
+                        self.model.rows[row].update(remote)
+            elif not ok:
+                try: log_event('conflict','other_update_failure', part=part_name, reason=info)
+                except Exception: pass
             self.refresh_table()
             if self.on_data_changed:
                 self.on_data_changed()
@@ -6207,9 +6765,18 @@ class MainWindow(QMainWindow):
                             src = base + ext
                             if os.path.exists(src):
                                 shutil.copy2(src, dest + ext)
+                        try:
+                            # Record last backup time in QSettings and log
+                            from PyQt5.QtCore import QSettings
+                            QSettings('LSI','ProjectApp').setValue('Backup/last_backup_utc', datetime.datetime.utcnow().isoformat(timespec='seconds')+'Z')
+                            log_event('backup','manual_backup', dest=dest)
+                        except Exception:
+                            pass
                         if self.statusBar():
                             self.statusBar().showMessage(f"Backup created: {dest}", 3000)
                     except Exception as e:
+                        try: log_event('backup','backup_failed', error=str(e))
+                        except Exception: pass
                         print(f"Backup failed: {e}")
                 act_backup_db.triggered.connect(do_backup_db)
                 # Create Shared Folder (OneDrive template)
@@ -6837,6 +7404,55 @@ class MainWindow(QMainWindow):
             act_sample.triggered.connect(do_sample)
             try:
                 mb.setVisible(False)
+            except Exception:
+                pass
+
+            # --- Integrity check and backup reminder timers ---
+            try:
+                from PyQt5.QtCore import QTimer, QSettings
+                # Perform a quick integrity check shortly after startup (asynchronous so UI shows quickly)
+                def run_integrity_check():
+                    try:
+                        import sqlite3
+                        with self.model._connect() as _c:
+                            cur = _c.cursor()
+                            cur.execute('PRAGMA quick_check')
+                            rows = cur.fetchall()
+                            ok = all(r[0] == 'ok' for r in rows)
+                            log_event('integrity','quick_check_result', ok=ok, details=[r[0] for r in rows])
+                            if not ok and self.statusBar():
+                                self.statusBar().showMessage('DB integrity issues detected – consider restoring a backup', 8000)
+                    except Exception as e:
+                        try: log_event('integrity','quick_check_error', error=str(e))
+                        except Exception: pass
+                QTimer.singleShot(3000, run_integrity_check)
+                # Daily reminder (every 6 hours tick) if last backup older than 7 days
+                def backup_reminder_tick():
+                    try:
+                        s = QSettings('LSI','ProjectApp')
+                        last = s.value('Backup/last_backup_utc', '')
+                        import datetime
+                        stale = True
+                        if last:
+                            try:
+                                # Accept both with/without trailing Z
+                                if last.endswith('Z'): last = last[:-1]
+                                dt = datetime.datetime.fromisoformat(last)
+                                age_days = (datetime.datetime.utcnow() - dt).days
+                                stale = age_days >= 7
+                            except Exception:
+                                stale = True
+                        if stale and self.statusBar():
+                            self.statusBar().showMessage('No recent backup (>=7 days) – use Tools → Backup Database…', 10000)
+                            log_event('backup','reminder_shown')
+                    except Exception:
+                        pass
+                self._backup_reminder_timer = QTimer(self)
+                self._backup_reminder_timer.setInterval(6 * 3600 * 1000)  # 6 hours
+                self._backup_reminder_timer.timeout.connect(backup_reminder_tick)
+                self._backup_reminder_timer.start()
+                # Run first reminder check after 10s
+                QTimer.singleShot(10000, backup_reminder_tick)
             except Exception:
                 pass
 
