@@ -11,7 +11,7 @@ A desktop project planning & visualization tool built with PyQt5 + QGraphicsScen
 | Calendar | Month-style placement of items | NO | Read-only snapshot |
 | Project Timeline | Linear condensed horizontal timeline | NO | White text theme |
 | Progress Dashboard | Aggregated metrics (% complete, risk counts, etc.) | NO | Auto-derived rollups |
-| Cost Estimates | Summarize production & installation pricing with totals | NO | Read-only cost rollups |
+| Cost Estimates | Summarize production & installation pricing with totals + deltas vs. saved quote version | NO | Roll-ups, filters, version deltas |
 
 ## Key Features
 
@@ -81,18 +81,61 @@ A desktop project planning & visualization tool built with PyQt5 + QGraphicsScen
 - Production Price (decimal – amount to charge for production work for this part)
 - Installation Price (decimal – amount to charge for installation for this part)
 
-### Cost Tracking
+### Cost Tracking & Pricing Intelligence
 
-Add production and installation pricing per project part in the Project Tree (Edit dialog). The Cost Estimates view (sidebar) aggregates:
+Add production and installation pricing per project part in the Project Tree (Edit dialog). The Cost Estimates view (sidebar) aggregates and analyzes:
 
 - Per-part Production, Installation, and Total ($)
-- Percentage contribution of each part to the grand total
-- Grand totals for Production, Installation, and combined
+- Profit $, Margin %, price share (% of total)
+- Optional parent roll-up (aggregate descendants into parents)
+- Delta Price % and Delta Margin points vs. a selected saved Quote Version
+- Highlight of top 10% price contributors
+- CSV or PDF/PNG export with header/footer branding
+
+Extended internal cost & pricing model (all appended non-destructively):
+
+| Field | Purpose |
+|-------|---------|
+| Material Cost | Direct materials only |
+| Fabrication Labor Hours | Shop hours for production |
+| Installation Labor Hours | Field hours for installation |
+| Labor Rate | Fabrication blended rate (defaults from Pricing Settings) |
+| Install Labor Rate | Field labor rate (defaults from Pricing Settings) |
+| Equipment Cost | Equipment / rental allocation |
+| Permit/Eng Cost | Permitting or engineering fees |
+| Contingency % | Buffer applied to internal cost before margin target pricing suggestion |
+| Warranty Reserve % | Portion of price earmarked; affects effective margin shown in suggestions |
+| Risk Level | Qualitative (Low / Medium / High) placeholder for future margin adjustments |
+| Production Cost | Internal production cost (auto-derived if blank and material + labor provided) |
+| Installation Cost | Internal install cost (auto-derived if blank and install hours + equipment/permit provided) |
+| Production Price | Charge amount (can apply suggested value) |
+| Installation Price | Charge amount |
+| Frozen Production/Installation Cost/Price | Snapshot values captured in a Quote Version |
+| Quote Version | Current working version label (read-only per row) |
+
+Pricing Suggestions:
+- Configured via Tools → Pricing Settings (Target Margin %, Fabrication Labor Rate, Install Labor Rate).
+- When editing a part, suggested Production / Installation Prices are computed as: (Internal Cost * (1 + Contingency %)) / (1 - Target Margin).
+- If Production or Installation Cost is zero, the app derives it from Material Cost + (Labor Hours * Rate) (+ Equipment + Permit for installation) before suggesting.
+- Effective margin after Warranty Reserve % is displayed to show impact on profit.
+- Apply buttons let you copy suggested values into the price fields.
+ - Risk Level adjusts target margin before suggestion: Low = target −2 pts, High = target +3 pts (clamped 1–95%), with a Risk Adj badge shown when applied.
+
+Quote Versioning & Deltas:
+- Use the “Freeze Version…” button in Cost Estimates to snapshot all per-part internal costs & prices (stored in `quote_versions`).
+- Select a version from the dropdown to view Δ Price % and Δ Margin pts columns comparing current values to the frozen baseline.
+- Multiple versions can be saved; selecting <None> hides deltas.
+- Frozen columns in the Edit dialog display per-row snapshot values when present (read-only).
+ - Remove an obsolete snapshot with the Delete Version button (action is irreversible).
+
+Exports:
+- CSV export: raw table as currently filtered/sorted.
+- PDF/PNG export: formatted table with optional header banner (`header.svg` preferred, falls back to `header.png`) and standardized footer “© 2025 LSI – For Internal Use Only”. Pagination supported for PDF.
 
 Notes:
-- Values are stored as text/REAL in SQLite; schema migration adds the columns automatically on first launch after upgrade.
-- Parent/child relationships are not auto-summed; the view lists each part’s direct values as entered (leaves typically carry amounts). You can use naming conventions or filters to segment cost groups.
-- Empty / invalid numbers default to 0.00.
+- Values stored as REAL/text; schema adds missing columns automatically on upgrade (append-only, safe for existing DBs).
+- Roll-up mode aggregates descendants into parents while preserving leaf-only filter option.
+- Empty / invalid numeric inputs are treated as 0.00.
 
 ## Installation
 

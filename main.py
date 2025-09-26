@@ -779,6 +779,19 @@ class ProjectDataModel:
             except Exception:
                 return []
 
+    def delete_quote_version(self, version_name: str):
+        import os
+        if not version_name or not os.path.exists(self.DB_FILE):
+            return False
+        with self._connect() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute("DELETE FROM quote_versions WHERE version_name=?", (version_name,))
+                conn.commit()
+                return True
+            except Exception:
+                return False
+
     def load_quote_version_map(self, version_name: str):
         import os
         if not version_name or not os.path.exists(self.DB_FILE):
@@ -1152,6 +1165,10 @@ class CostEstimatesView(QWidget):
         export_btn = QPushButton("Export CSV")
         export_btn.clicked.connect(self._export_csv)
         header.addWidget(export_btn)
+        export_xlsx_btn = QPushButton("Export XLSX")
+        export_xlsx_btn.setToolTip("Export current cost table (visible columns) to Excel workbook")
+        export_xlsx_btn.clicked.connect(self._export_xlsx)
+        header.addWidget(export_xlsx_btn)
         export_pdf_btn = QPushButton("Export PDF/PNG")
         export_pdf_btn.setToolTip("Export this cost table to PDF or PNG with header/footer")
         export_pdf_btn.clicked.connect(self._export_render)
@@ -1166,6 +1183,7 @@ class CostEstimatesView(QWidget):
         self.version_combo.setToolTip("Select a saved quote version to compare deltas")
         self.version_combo.currentIndexChanged.connect(self.refresh)
         self.freeze_btn = QPushButton("Freeze Version…")
+        self.delete_version_btn = QPushButton("Delete Version")
         def do_freeze():
             from PyQt5.QtWidgets import QInputDialog, QMessageBox
             name, ok = QInputDialog.getText(self, "Freeze Quote Version", "Version name:")
@@ -1179,8 +1197,23 @@ class CostEstimatesView(QWidget):
                 except Exception as e:
                     QMessageBox.critical(self, "Freeze Failed", str(e))
         self.freeze_btn.clicked.connect(do_freeze)
+        def do_delete_version():
+            from PyQt5.QtWidgets import QMessageBox
+            ver = self.version_combo.currentText()
+            if not ver or ver in ("<None>",""):
+                return
+            resp = QMessageBox.question(self, "Delete Quote Version", f"Delete version '{ver}'? This cannot be undone.", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if resp == QMessageBox.Yes:
+                if self.model.delete_quote_version(ver):
+                    if self.parent() and self.parent().window().statusBar():
+                        self.parent().window().statusBar().showMessage(f"Deleted quote version '{ver}'",3000)
+                    self._reload_versions()
+                else:
+                    QMessageBox.critical(self, "Delete Failed", f"Could not delete version '{ver}'.")
+        self.delete_version_btn.clicked.connect(do_delete_version)
         header.addWidget(self.version_combo)
         header.addWidget(self.freeze_btn)
+        header.addWidget(self.delete_version_btn)
         self.table = QTableWidget(0, 14)
         self.table.setHorizontalHeaderLabels([
             "Project Part","Parent","Prod Cost","Inst Cost","Total Cost","Prod Price","Inst Price","Total Price","Profit $","Margin %","Δ Price %","Δ Margin pts","% of Total Price","Internal/External"
@@ -1430,6 +1463,75 @@ class CostEstimatesView(QWidget):
             painter.drawText(0, table_pix.height()-18, table_pix.width(), 16, Qt.AlignCenter, footer_text)
         except Exception: pass
         painter.end(); table_pix.save(path,'PNG'); print(f'Exported PNG -> {path}')
+
+    def _export_xlsx(self):
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, Alignment, PatternFill
+        except Exception as e:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Missing Dependency", "openpyxl not installed. Please install requirements.")
+            return
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        path, _ = QFileDialog.getSaveFileName(self, "Export Cost Table (XLSX)", "cost_estimates.xlsx", "Excel Workbook (*.xlsx)")
+        if not path:
+            return
+        if not path.lower().endswith('.xlsx'):
+            path += '.xlsx'
+        wb = Workbook(); ws = wb.active; ws.title = 'Costs'
+        # Gather headers & data (only visible columns)
+        visible_cols = [c for c in range(self.table.columnCount()) if not self.table.isColumnHidden(c)]
+        headers = [self.table.horizontalHeaderItem(c).text() for c in visible_cols]
+        ws.append(headers)
+        bold = Font(bold=True)
+        for cell in ws[1]:
+            cell.font = bold
+            cell.alignment = Alignment(horizontal='center')
+            cell.fill = PatternFill(start_color='FFD9D9D9', end_color='FFD9D9D9', fill_type='solid')
+        # Rows
+        for r in range(self.table.rowCount()):
+            row_vals = []
+            for c in visible_cols:
+                it = self.table.item(r,c)
+                txt = it.text() if it else ''
+                # Numeric detection (strip %,$, commas)
+                raw = txt.replace(',','').replace('$','').strip()
+                if raw.endswith('%'):
+                    try:
+                        val = float(raw[:-1]) / 100.0
+                        row_vals.append(val)
+                        continue
+                    except Exception:
+                        pass
+                try:
+                    if raw:
+                        val = float(raw)
+                        row_vals.append(val)
+                        continue
+                except Exception:
+                    pass
+                row_vals.append(txt)
+            ws.append(row_vals)
+        # Autosize columns
+        for i, col in enumerate(visible_cols, start=1):
+            max_len = 0
+            for cell in ws[get_column_letter := __import__('openpyxl.utils').utils.get_column_letter(i)]:
+                v = cell.value
+                if v is None: continue
+                l = len(str(v))
+                if l > max_len: max_len = l
+            ws.column_dimensions[__import__('openpyxl.utils').utils.get_column_letter(i)].width = min(60, max_len + 2)
+        # Add metadata sheet
+        meta = wb.create_sheet('_Meta')
+        from datetime import datetime
+        meta.append(["Generated", datetime.now().isoformat(timespec='seconds')])
+        meta.append(["Version Selected", self.version_combo.currentText() if hasattr(self,'version_combo') else ''])
+        meta.append(["Filters", f"Name='{self.le_filter.text()}', Int/Ext='{self.combo_int_ext.currentText()}', MinPrice>{self.min_price_spin.value()}" ])
+        try:
+            wb.save(path)
+            print(f"Exported XLSX -> {path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", str(e))
 
     def refresh(self):
         rows = getattr(self.model,'rows', [])
@@ -2828,7 +2930,7 @@ class GanttChartView(QWidget):
                     else:
                         link_label.setText("")
                 link_edit.textChanged.connect(update_link_label)
-            elif col in ("Production Cost", "Installation Cost", "Production Price", "Installation Price", "Material Cost", "Labor Rate", "Install Labor Rate"):
+            elif col in ("Production Cost", "Installation Cost", "Production Price", "Installation Price", "Material Cost", "Labor Rate", "Install Labor Rate", "Equipment Cost", "Permit/Eng Cost"):
                 from PyQt5.QtWidgets import QDoubleSpinBox
                 sb = QDoubleSpinBox()
                 sb.setRange(0.0, 10_000_000.0)
@@ -2839,12 +2941,46 @@ class GanttChartView(QWidget):
                 except Exception:
                     sb.setValue(0.0)
                 sb.setPrefix("$")
-                if col.endswith("Cost"):
-                    sb.setToolTip("Internal estimated {} cost".format("production" if "Production" in col else "installation"))
+                if col in ("Production Cost","Installation Cost","Material Cost","Equipment Cost","Permit/Eng Cost"):
+                    if col == "Production Cost":
+                        sb.setToolTip("Internal production cost (auto-derived if Material + Labor provided)")
+                    elif col == "Installation Cost":
+                        sb.setToolTip("Internal install cost (labor + equipment + permit/eng if provided)")
+                    elif col == "Material Cost":
+                        sb.setToolTip("Direct materials cost")
+                    elif col == "Equipment Cost":
+                        sb.setToolTip("Equipment rental or usage cost")
+                    elif col == "Permit/Eng Cost":
+                        sb.setToolTip("Permitting or engineering fees")
                 else:
                     sb.setToolTip("Charge amount for {}".format("production" if "Production" in col else "installation"))
                 edits[col] = sb
                 layout.addRow(col, sb)
+            elif col in ("Contingency %","Warranty Reserve %"):
+                from PyQt5.QtWidgets import QDoubleSpinBox
+                sb = QDoubleSpinBox(); sb.setRange(0.0,100.0); sb.setDecimals(1); sb.setSingleStep(1.0); sb.setSuffix(" %")
+                try:
+                    sb.setValue(float(val) if val not in (None,"") else 0.0)
+                except Exception:
+                    sb.setValue(0.0)
+                if col == "Contingency %":
+                    sb.setToolTip("Percentage buffer applied to internal cost before margin calc for suggestions")
+                else:
+                    sb.setToolTip("Percentage of price reserved (reduces effective profit)")
+                edits[col]=sb; layout.addRow(col,sb)
+            elif col == "Risk Level":
+                combo = QComboBox(); combo.addItems(["Low","Medium","High"])
+                if val: combo.setCurrentText(str(val))
+                combo.setToolTip("Qualitative risk indicator")
+                edits[col]=combo; layout.addRow(col, combo)
+            elif col == "Quote Version":
+                from PyQt5.QtWidgets import QLineEdit as _QLE
+                le=_QLE(str(val) if val else ""); le.setReadOnly(True); le.setStyleSheet("QLineEdit { background:#222; color:#bbb; }")
+                edits[col]=le; layout.addRow(col, le)
+            elif col.startswith("Frozen "):
+                from PyQt5.QtWidgets import QLineEdit as _QLE
+                le=_QLE(str(val) if val else ""); le.setReadOnly(True); le.setStyleSheet("QLineEdit { background:#222; color:#777; }")
+                edits[col]=le; layout.addRow(col, le)
             else:
                 # Fallback generic text field; ensure string conversion
                 line = QLineEdit(str(val) if val is not None else "")
@@ -2856,24 +2992,76 @@ class GanttChartView(QWidget):
         def _compute_suggestions():
             nonlocal suggested_prod, suggested_inst
             try:
-                prod_cost_w = edits.get('Production Cost')
-                inst_cost_w = edits.get('Installation Cost')
+                prod_cost_w = edits.get('Production Cost'); inst_cost_w = edits.get('Installation Cost')
                 pc = float(prod_cost_w.value()) if prod_cost_w else float(row.get('Production Cost') or 0)
                 ic = float(inst_cost_w.value()) if inst_cost_w else float(row.get('Installation Cost') or 0)
+                # Derive production cost if zero using material + fab labor
+                try:
+                    if pc == 0:
+                        mat = float(edits.get('Material Cost').value()) if 'Material Cost' in edits else float(row.get('Material Cost') or 0)
+                        fab_hrs = float(edits.get('Fabrication Labor Hours').value()) if 'Fabrication Labor Hours' in edits else float(row.get('Fabrication Labor Hours') or 0)
+                        labor_rate = float(edits.get('Labor Rate').value()) if 'Labor Rate' in edits else float(row.get('Labor Rate') or 0)
+                        pc = mat + fab_hrs * labor_rate
+                except Exception:
+                    pass
+                # Derive installation cost if zero using install hours + rate + equipment + permit/eng
+                try:
+                    if ic == 0:
+                        inst_hrs = float(edits.get('Installation Labor Hours').value()) if 'Installation Labor Hours' in edits else float(row.get('Installation Labor Hours') or 0)
+                        inst_rate = float(edits.get('Install Labor Rate').value()) if 'Install Labor Rate' in edits else float(row.get('Install Labor Rate') or 0)
+                        equip = float(edits.get('Equipment Cost').value()) if 'Equipment Cost' in edits else float(row.get('Equipment Cost') or 0)
+                        permit = float(edits.get('Permit/Eng Cost').value()) if 'Permit/Eng Cost' in edits else float(row.get('Permit/Eng Cost') or 0)
+                        ic = inst_hrs * inst_rate + equip + permit
+                except Exception:
+                    pass
+                contingency_pct = 0.0
+                try:
+                    contingency_pct = float(edits.get('Contingency %').value())/100.0 if 'Contingency %' in edits else float(row.get('Contingency %') or 0)/100.0
+                except Exception:
+                    contingency_pct = 0.0
+                # Risk-based margin adjustment (Low: -2 pts, Medium: baseline, High: +3 pts)
+                try:
+                    risk = edits.get('Risk Level').currentText() if 'Risk Level' in edits else (row.get('Risk Level') or '')
+                except Exception:
+                    risk = ''
+                adj_margin = target_margin
+                try:
+                    if isinstance(risk, str):
+                        if risk.lower().startswith('low'):
+                            adj_margin = max(0.01, target_margin - 0.02)
+                        elif risk.lower().startswith('high'):
+                            adj_margin = min(0.95, target_margin + 0.03)
+                except Exception:
+                    pass
                 if pc > 0:
-                    suggested_prod = pc / (1.0 - target_margin)
+                    suggested_prod = (pc * (1.0 + contingency_pct)) / (1.0 - adj_margin)
                 else:
                     suggested_prod = None
                 if ic > 0:
-                    suggested_inst = ic / (1.0 - target_margin)
+                    suggested_inst = (ic * (1.0 + contingency_pct)) / (1.0 - adj_margin)
                 else:
                     suggested_inst = None
                 if suggest_label:
-                    txt = []
-                    if suggested_prod is not None:
-                        txt.append(f"Prod Suggest: ${suggested_prod:,.2f}")
-                    if suggested_inst is not None:
-                        txt.append(f"Inst Suggest: ${suggested_inst:,.2f}")
+                    txt=[]
+                    if suggested_prod is not None: txt.append(f"Prod Suggest: ${suggested_prod:,.2f}")
+                    if suggested_inst is not None: txt.append(f"Inst Suggest: ${suggested_inst:,.2f}")
+                    try:
+                        if adj_margin != target_margin:
+                            delta_pts = (adj_margin - target_margin)*100.0
+                            txt.append(f"Risk Adj: {'+' if delta_pts>=0 else ''}{delta_pts:.1f} pts")
+                    except Exception:
+                        pass
+                    # Effective margin after warranty reserve estimate
+                    try:
+                        warr_pct = float(edits.get('Warranty Reserve %').value())/100.0 if 'Warranty Reserve %' in edits else float(row.get('Warranty Reserve %') or 0)/100.0
+                        if warr_pct>0 and (suggested_prod or 0)+(suggested_inst or 0) > 0 and (pc+ic)>0:
+                            total_price = (suggested_prod or 0)+(suggested_inst or 0)
+                            gross_profit = total_price - ((pc+ic)*(1.0+contingency_pct))
+                            eff_profit = gross_profit - total_price*warr_pct
+                            eff_margin = eff_profit/total_price*100.0 if total_price>0 else 0.0
+                            txt.append(f"Eff Margin(after reserve): {eff_margin:,.1f}%")
+                    except Exception:
+                        pass
                     suggest_label.setText(" | ".join(txt) if txt else "")
             except Exception:
                 pass
@@ -2941,11 +3129,16 @@ class GanttChartView(QWidget):
                             row[col] = f"{float(widget.value()):.1f}"
                         except Exception:
                             row[col] = "0.0"
-                    elif hasattr(widget, 'value') and col in ("Production Price", "Installation Price", "Production Cost", "Installation Cost", "Material Cost", "Labor Rate", "Install Labor Rate"):
+                    elif hasattr(widget, 'value') and col in ("Production Price", "Installation Price", "Production Cost", "Installation Cost", "Material Cost", "Labor Rate", "Install Labor Rate", "Equipment Cost", "Permit/Eng Cost"):
                         try:
                             row[col] = f"{float(widget.value()):.2f}"
                         except Exception:
                             row[col] = "0.00"
+                    elif hasattr(widget,'value') and col in ("Contingency %","Warranty Reserve %"):
+                        try:
+                            row[col] = f"{float(widget.value()):.1f}"
+                        except Exception:
+                            row[col] = "0.0"
                 # Derive production / installation cost if material & labor hour info present
                 try:
                     from math import isnan
@@ -2954,9 +3147,11 @@ class GanttChartView(QWidget):
                     inst_h = float(row.get('Installation Labor Hours') or 0)
                     rate = float(row.get('Labor Rate') or 0)
                     inst_rate = float(row.get('Install Labor Rate') or rate)
+                    equip = float(row.get('Equipment Cost') or 0)
+                    permit = float(row.get('Permit/Eng Cost') or 0)
                     if (mat or fab_h or inst_h) and (not row.get('Production Cost') or not row.get('Installation Cost')):
                         prod_cost_calc = mat + fab_h * rate
-                        inst_cost_calc = inst_h * inst_rate
+                        inst_cost_calc = inst_h * inst_rate + equip + permit
                         if not row.get('Production Cost'):
                             row['Production Cost'] = f"{prod_cost_calc:.2f}"
                         if not row.get('Installation Cost'):
