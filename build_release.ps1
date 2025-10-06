@@ -69,6 +69,18 @@ if (-not $SkipClean) {
   Write-Section "Skip clean (user requested)"
 }
 
+# After determining $pythonExe and before invoking PyInstaller:
+Write-Host "=== Ensure PyInstaller present ==="
+& $pythonExe - <<'PY'
+import importlib, sys
+sys.exit(0 if importlib.util.find_spec("PyInstaller") else 1)
+PY
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "[build] Installing PyInstaller..." -ForegroundColor Cyan
+  & $pythonExe -m pip install --upgrade pip
+  & $pythonExe -m pip install PyInstaller
+}
+
 Write-Section "Run PyInstaller build"
 
 $specFile = if ($OneFile) { 'main_onefile.spec' } else { 'main.spec' }
