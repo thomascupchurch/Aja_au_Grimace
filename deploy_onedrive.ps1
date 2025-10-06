@@ -53,6 +53,7 @@ if ($Mode -eq 'source') {
     $include = @(
         'main.py','README.md','requirements.txt','header.png',
         'main.spec','main_onefile.spec','build_release.ps1','quickstart.ps1',
+        'quickstart.sh',            # ADDED
         'run_from_onedrive.ps1'
     )
     if ($IncludeRunApp -and (Test-Path (Join-Path $PSScriptRoot 'run_app.ps1'))) {
