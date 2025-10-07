@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtCore import QDate
+from PyQt6.QtCore import Qt   # ensure Qt is globally available before any class uses it
 
 
 # Minimal ImageCellWidget for image upload/preview in DatabaseView
@@ -2633,8 +2634,9 @@ class ProjectTreeView(QWidget):
         mini_layout.setContentsMargins(2,2,2,2)
         self._mini_scene = QGraphicsScene()
         self._mini_view = QGraphicsView(self._mini_scene)
-        self._mini_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._mini_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        self._mini_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._mini_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._mini_view.setRenderHints(self._mini_view.renderHints())
         mini_layout.addWidget(self._mini_view)
         layout.addWidget(self._mini_frame)
@@ -3363,7 +3365,7 @@ class ProjectTreeView(QWidget):
 
 # Add a custom QGraphicsView subclass for zooming
 from PyQt6.QtWidgets import QGraphicsView
-from PyQt6.QtCore import Qt
+
 
 class ZoomableGraphicsView(QGraphicsView):
     def __init__(self, *args, **kwargs):
@@ -5819,6 +5821,9 @@ from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem
 from PyQt6.QtWidgets import QDateEdit
 from PyQt6.QtCore import QDate
 
+from PyQt6 import QtCore
+Qt = QtCore.Qt  # if you still rely on Qt alias elsewhere
+
 class DatabaseView(QWidget):
     DATE_FIELDS = {"Start Date", "Calculated End Date"}
     DROPDOWN_FIELDS = {
@@ -5884,7 +5889,7 @@ class DatabaseView(QWidget):
         try:
             from PyQt6.QtWidgets import QAbstractItemView
             if self._read_only:
-                self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+                self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             else:
                 self.table.setEditTriggers(QAbstractItemView.AllEditTriggers)
         except Exception:
@@ -8283,3 +8288,4 @@ if __name__ == "__main__":
         print("FATAL: Unhandled exception during startup:", e)
         traceback.print_exc()
         sys.exit(1)
+

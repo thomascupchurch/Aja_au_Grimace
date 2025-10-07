@@ -1,7 +1,7 @@
 import re, json, pathlib
 
 ROOT = pathlib.Path('.')
-SKIP_DIRS = {'.venv','dist','build','__pycache__'}
+SKIP_DIRS = {'.venv','dist','build','__pycache__','tools'}  # skip tooling scripts themselves
 RESULTS = []
 
 # Patterns target only legacy forms (not already using Enum groups)
@@ -10,7 +10,10 @@ CHECKS = {
     r'(?<!EditTrigger\.)\bNoEditTriggers\b': "Use QAbstractItemView.EditTrigger.NoEditTriggers",
     r'(?<!SelectionBehavior\.)\bSelectRows\b': "Use QAbstractItemView.SelectionBehavior.SelectRows",
     r'(?<!SelectionMode\.)\bSingleSelection\b': "Use QAbstractItemView.SelectionMode.SingleSelection",
-    r'\bexec_\b': "Replace exec_() with exec() (remove comments too)"
+    r'\bexec_\b': "Replace exec_() with exec() (remove comments too)",
+    r'Qt\.ScrollBarAlwaysOff\b': "Use Qt.ScrollBarPolicy.ScrollBarAlwaysOff",
+    r'Qt\.ScrollBarAlwaysOn\b': "Use Qt.ScrollBarPolicy.ScrollBarAlwaysOn",
+    r'Qt\.ScrollBarAsNeeded\b': "Use Qt.ScrollBarPolicy.ScrollBarAsNeeded",
 }
 
 def scan_file(p: pathlib.Path):
