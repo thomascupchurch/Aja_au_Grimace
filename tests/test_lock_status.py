@@ -103,15 +103,23 @@ def test_takeover_prompt_path_simulated():
                 json.dump(info, f)
             # Monkeypatch QMessageBox to auto-Yes
             from PyQt6.QtWidgets import QMessageBox
-            orig = QMessageBox.exec_
+            # PyQt6 uses exec(); keep fallback if shim left a legacy alias
+            orig = getattr(QMessageBox, "exec", None)
             def fake_exec(self):
-                return QMessageBox.Yes
-            QMessageBox.exec_ = fake_exec
+                return QMessageBox.StandardButton.Yes
+            if hasattr(QMessageBox, "exec"):
+                QMessageBox.exec = fake_exec
             try:
                 ok = win._acquire_edit_lock()
                 assert ok
                 assert win.lock_label.text().startswith('Lock:') and '(stale)' not in win.lock_label.text()
             finally:
-                QMessageBox.exec_ = orig
+                if orig is not None:
+                    QMessageBox.exec = orig
         finally:
             win.close()
+
+# Replace all dialog.exec_() / app.exec_() calls:
+# result = dialog.exec()          # instead of dialog.exec_()
+# If you had QApplication instance:
+# code = app.exec()                # instead of app.exec_()

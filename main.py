@@ -1625,7 +1625,9 @@ class CostEstimatesView(QWidget):
             "Project Part","Parent","Prod Cost","Inst Cost","Total Cost","Prod Price","Inst Price","Total Price","Profit $","Margin %","Δ Price %","Δ Margin pts","% of Total Price","Internal/External"
         ])
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(self.table.SelectRows)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        # ensure selection mode explicit (if previously implicit)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setAlternatingRowColors(True)
         try:
             self.table.horizontalHeader().setSectionsMovable(True)
