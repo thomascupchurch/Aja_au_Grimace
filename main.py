@@ -4,7 +4,7 @@
 from PyQt6.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QTextEdit, QComboBox, QDateEdit, QPushButton,
     QFileDialog, QLabel, QHBoxLayout, QAbstractItemView, QGraphicsView,
-    QTableWidget, QTableWidgetItem
+    QTableWidget, QTableWidgetItem, QGraphicsItem  # added QGraphicsItem
 )
 from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtCore import QDate
@@ -2814,7 +2814,7 @@ class ProjectTreeView(QWidget):
                 base_color = QColor('#5f4a23')
             rect_item = self.scene.addRect(x, y, node_w, node_h, QPen(QColor('#888')), QBrush(base_color))
             rect_item.setData(0, name)
-            rect_item.setFlag(rect_item.ItemIsSelectable, True)
+            rect_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
             try:
                 # Ensure hover events fire at scene level
                 rect_item.setAcceptHoverEvents(True)
@@ -4689,7 +4689,7 @@ class GanttChartView(QWidget):
                 self.preview_label = preview_label
                 self.gantt_view = gantt_view
                 self.setAcceptHoverEvents(True)
-                self.setFlag(QGraphicsItem.ItemIsSelectable, True)
+                self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
 
             # --- Attachment utilities ---
             def _attachments_list(self):
@@ -4941,6 +4941,8 @@ class GanttChartView(QWidget):
             rect.setPen(outline_pen)
             self.scene.addItem(rect)
             self._name_to_rect[name] = rect
+            # Ensure selectable flag for bar rectangles
+            rect.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
             try:
                 pc = int(r.get("% Complete") or 0)
             except Exception:
@@ -5026,7 +5028,7 @@ class GanttChartView(QWidget):
         # ---------- Selection handling ----------
         self._bar_rect_to_row = {}
         for rect, r in bar_items:
-            rect.setFlag(QGraphicsItem.ItemIsSelectable, True)
+            rect.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
             self._bar_rect_to_row[rect] = r
         def on_selection_changed():
             selected = [it for it in self.scene.selectedItems() if it in self._bar_rect_to_row]
