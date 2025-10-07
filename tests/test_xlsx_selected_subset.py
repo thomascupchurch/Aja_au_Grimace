@@ -1,4 +1,4 @@
-import os, tempfile
+import os, tempfile, pytest
 from PyQt6.QtWidgets import QApplication
 from main import ProjectDataModel, CostEstimatesView
 
@@ -8,8 +8,12 @@ try:
 except Exception:
     HAVE_OPENPYXL = False
 
-def run_test():
-    app = QApplication.instance() or QApplication([])
+@pytest.fixture(scope="module")
+def qapp():
+    return QApplication.instance() or QApplication([])
+
+@pytest.mark.skipif(not HAVE_OPENPYXL, reason="openpyxl not installed")
+def test_selected_subset_xlsx_export(qapp):
     model = ProjectDataModel()
     model.rows = [
         {"Project Part":"Alpha","Parent":"","Production Cost":100,"Installation Cost":50,"Production Price":200,"Installation Price":80},
@@ -18,13 +22,9 @@ def run_test():
     ]
     view = CostEstimatesView(model)
     view.refresh()
-    # Select two rows
     view.table.selectRow(0)
     view.table.selectRow(2)
     view.chk_selected_only.setChecked(True)
-    if not HAVE_OPENPYXL:
-        print({'skipped': True, 'reason': 'openpyxl not installed'})
-        return
     from PyQt6.QtWidgets import QFileDialog
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx'); tmp.close()
     orig = QFileDialog.getSaveFileName
@@ -33,27 +33,14 @@ def run_test():
         view._export_xlsx()
     finally:
         QFileDialog.getSaveFileName = orig
-    # Inspect workbook
     import openpyxl
     wb = openpyxl.load_workbook(tmp.name, data_only=True)
-    costs = wb['Costs']
-    meta = wb['_Meta']
-    # Header row + two selected rows expected
+    costs = wb['Costs']; meta = wb['_Meta']
     rows_written = costs.max_row - 1
     subset_val = None
     for row in meta.iter_rows(values_only=True):
         if row[0] == 'Subset':
-            subset_val = row[1]
-            break
-    result = {
-        'rows_written': rows_written,
-        'expected_rows': 2,
-        'subset_meta': subset_val,
-        'pass': rows_written == 2 and subset_val == 'Selected'
-    }
-    print(result)
+            subset_val = row[1]; break
     wb.close(); os.unlink(tmp.name)
-    return result
-
-if __name__ == '__main__':
-    run_test()
+    assert rows_written == 2
+    assert subset_val == 'Selected'

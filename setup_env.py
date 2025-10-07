@@ -24,7 +24,8 @@ def install_dependencies():
     
     commands = [
         "pip install --upgrade pip",
-        "pip install PySide6==6.6.3",
+        # Standardize on PyQt5 runtime; shim provides PyQt6 namespace if needed
+        "pip install PyQt5==5.15.11",
         "pip install openpyxl python-dateutil pyinstaller"
     ]
     
@@ -43,15 +44,14 @@ def test_installation():
     
     test_script = """
 try:
-    from PySide6.QtWidgets import QApplication
-    print('[OK] PySide6 working!')
+    from PyQt5.QtWidgets import QApplication
+    print('[OK] PyQt5 working!')
+    # Also verify PyQt6 shim resolves
+    import PyQt6.QtWidgets  # noqa: F401
+    print('[OK] PyQt6 shim available')
 except ImportError:
-    try:
-        from PyQt6.QtWidgets import QApplication
-        print('[OK] PyQt6 working!')
-    except ImportError:
-        print('[ERROR] No Qt binding found')
-        exit(1)
+    print('[ERROR] Qt binding not installed')
+    exit(1)
 """
     
     result = subprocess.run([sys.executable, "-c", test_script], 

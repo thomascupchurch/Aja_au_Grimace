@@ -16,7 +16,7 @@ HOLIDAYS_FILE = "holidays.json"
 
 def _holidays_path():
     try:
-        from PySide6.QtCore import QSettings
+        from PyQt6.QtCore import QSettings
         db_path = QSettings('LSI','ProjectApp').value('DB/path','')
         if db_path:
             return os.path.join(os.path.dirname(os.path.abspath(db_path)), HOLIDAYS_FILE)

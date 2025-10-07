@@ -1,9 +1,8 @@
-from project.qt_bindings import *
-from project.helpers import resolve_resource_path
+from project.qt_bindings import QCalendarWidget, QDate, Qt, QTextCharFormat
 
 class CalendarView(QCalendarWidget):
     def __init__(self, parent=None):
-        super(CalendarView, self).__init__(parent)
+        super().__init__(parent)
         # Set the default view to the month view
         self.setFirstDayOfWeek(Qt.Monday)
         self.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
@@ -15,16 +14,13 @@ class CalendarView(QCalendarWidget):
         self.setCurrentPage(QDate.currentDate().year(), QDate.currentDate().month())
 
     def mousePressEvent(self, event):
-        super(CalendarView, self).mousePressEvent(event)
+        super().mousePressEvent(event)
         if event.button() == Qt.LeftButton:
-            date = self.selectedDate()
-            self.emit_date_clicked(date)
-
-    def emit_date_clicked(self, date):
-        self.dateClicked.emit(date)
+            self.dateClicked.emit(self.selectedDate())
 
     def keyPressEvent(self, event):
-        super(CalendarView, self).keyPressEvent(event)
+        super().keyPressEvent(event)
         if event.key() == Qt.Key_Space:
-            date = self.selectedDate()
-            self.emit_date_clicked(date)
+            self.dateClicked.emit(self.selectedDate())
+
+__all__ = ["CalendarView"]

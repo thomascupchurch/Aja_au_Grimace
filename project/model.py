@@ -1,53 +1,31 @@
-# Paste FULL ProjectDataModel definition (second/full one from main.py) here.
-# Remove any UI imports (QWidgets). Keep only sqlite, datetime, json, etc.
-# Ensure resolve_resource_path / holidays helpers if model uses them OR import from helpers.
+"""Model extraction shim.
 
-import sqlite3
-from datetime import datetime
-import json
+Tests historically imported ProjectDataModel from main.py (monolithic). During
+modularization we provide this thin wrapper that re-exports the full
+ProjectDataModel defined in main.py without duplicating thousands of lines of
+logic. This keeps a single source of truth and preserves the expected no-arg
+constructor used by existing tests (which set DB_FILE manually afterward).
 
-# If the model uses resolve_resource_path or holidays helpers, ensure they are imported
-# from helpers import resolve_resource_path, holidays
+If in the future the large class is relocated into this module permanently,
+simply replace this shim with the actual implementation and remove the import.
+"""
 
-class ProjectDataModel:
-    def __init__(self, db_path):
-        self.db_path = db_path
-        self.connection = None
+from importlib import import_module
 
-    def connect(self):
-        """Establish a database connection."""
-        self.connection = sqlite3.connect(self.db_path)
-        self.connection.row_factory = sqlite3.Row
+_cached_cls = None
 
-    def close(self):
-        """Close the database connection."""
-        if self.connection:
-            self.connection.close()
+def _resolve():  # Lazy to break circular import during main module initialization
+	global _cached_cls
+	if _cached_cls is None:
+		_main = import_module('main')
+		_cached_cls = getattr(_main, 'ProjectDataModel')
+	return _cached_cls
 
-    def fetch_projects(self):
-        """Fetch all projects from the database."""
-        with self.connection:
-            return [dict(row) for row in self.connection.execute("SELECT * FROM projects")]
+class ProjectDataModel:  # type: ignore
+	def __new__(cls, *a, **k):
+		real_cls = _resolve()
+		obj = real_cls.__new__(real_cls)  # noqa: B020
+		real_cls.__init__(obj, *a, **k)
+		return obj
 
-    def add_project(self, project_data):
-        """Add a new project to the database."""
-        with self.connection:
-            self.connection.execute(
-                "INSERT INTO projects (name, start_date, end_date) VALUES (?, ?, ?)",
-                (project_data['name'], project_data['start_date'], project_data['end_date'])
-            )
-
-    def update_project(self, project_id, project_data):
-        """Update an existing project in the database."""
-        with self.connection:
-            self.connection.execute(
-                "UPDATE projects SET name = ?, start_date = ?, end_date = ? WHERE id = ?",
-                (project_data['name'], project_data['start_date'], project_data['end_date'], project_id)
-            )
-
-    def delete_project(self, project_id):
-        """Delete a project from the database."""
-        with self.connection:
-            self.connection.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-
-    # Additional methods for handling project data can be added here
+__all__ = ["ProjectDataModel"]

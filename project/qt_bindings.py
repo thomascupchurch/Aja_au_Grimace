@@ -39,6 +39,8 @@ QMenu           = QtWidgets.QMenu
 QToolButton     = QtWidgets.QToolButton
 QScrollArea     = QtWidgets.QScrollArea
 QCalendarWidget = QtWidgets.QCalendarWidget
+QDialogButtonBox = QtWidgets.QDialogButtonBox
+QCheckBox       = QtWidgets.QCheckBox
 
 # GUI
 QPixmap    = QtGui.QPixmap
@@ -48,6 +50,7 @@ QBrush     = QtGui.QBrush
 QColor     = QtGui.QColor
 QFont      = QtGui.QFont
 QKeySequence = QtGui.QKeySequence
+QTextCharFormat = QtGui.QTextCharFormat
 
 # SVG
 QSvgRenderer = QtSvg.QSvgRenderer
