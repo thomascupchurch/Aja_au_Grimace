@@ -16,7 +16,89 @@ from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButt
 from PyQt6.QtWidgets import QTreeWidgetItem
 import os
 from PyQt6.QtGui import QPixmap
+# PyQt6 Compatibility Layer - add this after imports but before any class definitions
+try:
+    from PyQt6.QtCore import QEvent
+    # Map PyQt5-style constants to PyQt6 enums for backward compatibility
+    if not hasattr(QEvent, 'Wheel'):
+        QEvent.Wheel = QEvent.Type.Wheel
+        QEvent.Resize = QEvent.Type.Resize
+        QEvent.GraphicsSceneMousePress = QEvent.Type.GraphicsSceneMousePress
+        QEvent.GraphicsSceneContextMenu = QEvent.Type.GraphicsSceneContextMenu
+        QEvent.GraphicsSceneHoverMove = QEvent.Type.GraphicsSceneHoverMove
+        QEvent.GraphicsSceneMouseMove = QEvent.Type.GraphicsSceneMouseMove
+        QEvent.GraphicsSceneHoverLeave = QEvent.Type.GraphicsSceneHoverLeave
+    
+    from PyQt6.QtWidgets import QAbstractItemView, QGraphicsView, QGraphicsItem
+    # Map table/view constants
+    if not hasattr(QAbstractItemView, 'NoEditTriggers'):
+        QAbstractItemView.NoEditTriggers = QAbstractItemView.EditTrigger.NoEditTriggers
+        QAbstractItemView.SelectRows = QAbstractItemView.SelectionBehavior.SelectRows
+        QAbstractItemView.SingleSelection = QAbstractItemView.SelectionMode.SingleSelection
+    
+    # Map graphics view constants
+    if not hasattr(QGraphicsView, 'ScrollHandDrag'):
+        QGraphicsView.ScrollHandDrag = QGraphicsView.DragMode.ScrollHandDrag
+    
+    # Map graphics item constants
+    if not hasattr(QGraphicsItem, 'ItemIsSelectable'):
+        QGraphicsItem.ItemIsSelectable = QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+    
+    from PyQt6.QtCore import Qt
+    # Map scroll bar constants
+    if not hasattr(Qt, 'ScrollBarAlwaysOff'):
+        Qt.ScrollBarAlwaysOff = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        Qt.ScrollBarAlwaysOn = Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+        Qt.ScrollBarAsNeeded = Qt.ScrollBarPolicy.ScrollBarAsNeeded
 
+    # Map mouse button constants
+    if not hasattr(Qt, 'NoButton'):
+        Qt.NoButton = Qt.MouseButton.NoButton
+        Qt.LeftButton = Qt.MouseButton.LeftButton
+        Qt.RightButton = Qt.MouseButton.RightButton
+        Qt.MiddleButton = Qt.MouseButton.MiddleButton
+
+except Exception as e:
+    print(f"Warning: PyQt6 compatibility layer setup failed: {e}")
+# PyQt6 Compatibility Layer - add this after imports but before any class definitions
+try:
+    from PyQt6.QtCore import QEvent
+    # Map PyQt5-style constants to PyQt6 enums for backward compatibility
+    if not hasattr(QEvent, 'Wheel'):
+        QEvent.Wheel = QEvent.Type.Wheel
+        QEvent.Resize = QEvent.Type.Resize
+        QEvent.GraphicsSceneMousePress = QEvent.Type.GraphicsSceneMousePress
+        QEvent.GraphicsSceneContextMenu = QEvent.Type.GraphicsSceneContextMenu
+        QEvent.GraphicsSceneHoverMove = QEvent.Type.GraphicsSceneHoverMove
+        QEvent.GraphicsSceneMouseMove = QEvent.Type.GraphicsSceneMouseMove
+        QEvent.GraphicsSceneHoverLeave = QEvent.Type.GraphicsSceneHoverLeave
+    
+    from PyQt6.QtWidgets import QAbstractItemView, QGraphicsView, QGraphicsItem
+    # Map table/view constants
+    if not hasattr(QAbstractItemView, 'NoEditTriggers'):
+        QAbstractItemView.NoEditTriggers = QAbstractItemView.EditTrigger.NoEditTriggers
+        QAbstractItemView.SelectRows = QAbstractItemView.SelectionBehavior.SelectRows
+        QAbstractItemView.SingleSelection = QAbstractItemView.SelectionMode.SingleSelection
+    
+    # Map graphics view constants
+    if not hasattr(QGraphicsView, 'ScrollHandDrag'):
+        QGraphicsView.ScrollHandDrag = QGraphicsView.DragMode.ScrollHandDrag
+    
+    # Map graphics item constants
+    if not hasattr(QGraphicsItem, 'ItemIsSelectable'):
+        QGraphicsItem.ItemIsSelectable = QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+    
+    from PyQt6.QtCore import Qt
+    # Map scroll bar constants
+    if not hasattr(Qt, 'ScrollBarAlwaysOff'):
+        Qt.ScrollBarAlwaysOff = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        Qt.ScrollBarAlwaysOn = Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+        Qt.ScrollBarAsNeeded = Qt.ScrollBarPolicy.ScrollBarAsNeeded
+
+except Exception as e:
+    print(f"Warning: PyQt6 compatibility layer setup failed: {e}")
+
+# ... rest of your existing code ...
 # --- Central JSON lines logger -------------------------------------------------
 # Lightweight, dependency-free structured logging. Writes JSON objects one per
 # line to app.log (sibling to the active DB file). Rotates when file exceeds
@@ -84,7 +166,57 @@ def log_event(category: str, event: str, **fields):
         # Never raise from logger
         pass
 import shutil
+# PyQt6 Compatibility Layer - add this after imports but before any class definitions
+try:
+    from PyQt6.QtCore import QEvent
+    # Map PyQt5-style constants to PyQt6 enums for backward compatibility
+    if not hasattr(QEvent, 'Wheel'):
+        QEvent.Wheel = QEvent.Type.Wheel
+        QEvent.Resize = QEvent.Type.Resize
+        QEvent.GraphicsSceneMousePress = QEvent.Type.GraphicsSceneMousePress
+        QEvent.GraphicsSceneContextMenu = QEvent.Type.GraphicsSceneContextMenu
+        QEvent.GraphicsSceneHoverMove = QEvent.Type.GraphicsSceneHoverMove
+        QEvent.GraphicsSceneMouseMove = QEvent.Type.GraphicsSceneMouseMove
+        QEvent.GraphicsSceneHoverLeave = QEvent.Type.GraphicsSceneHoverLeave
+    
+    from PyQt6.QtWidgets import QAbstractItemView, QGraphicsView, QGraphicsItem
+    # Map table/view constants
+    if not hasattr(QAbstractItemView, 'NoEditTriggers'):
+        QAbstractItemView.NoEditTriggers = QAbstractItemView.EditTrigger.NoEditTriggers
+        QAbstractItemView.SelectRows = QAbstractItemView.SelectionBehavior.SelectRows
+        QAbstractItemView.SingleSelection = QAbstractItemView.SelectionMode.SingleSelection
+    
+    # Map graphics view constants
+    if not hasattr(QGraphicsView, 'ScrollHandDrag'):
+        QGraphicsView.ScrollHandDrag = QGraphicsView.DragMode.ScrollHandDrag
+    
+    # Map graphics item constants
+    if not hasattr(QGraphicsItem, 'ItemIsSelectable'):
+        QGraphicsItem.ItemIsSelectable = QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+    
+    from PyQt6.QtCore import Qt
+    # Map scroll bar constants
+    if not hasattr(Qt, 'ScrollBarAlwaysOff'):
+        Qt.ScrollBarAlwaysOff = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        Qt.ScrollBarAlwaysOn = Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+        Qt.ScrollBarAsNeeded = Qt.ScrollBarPolicy.ScrollBarAsNeeded
 
+    # Map mouse button constants
+    if not hasattr(Qt, 'NoButton'):
+        Qt.NoButton = Qt.MouseButton.NoButton
+        Qt.LeftButton = Qt.MouseButton.LeftButton
+        Qt.RightButton = Qt.MouseButton.RightButton
+        Qt.MiddleButton = Qt.MouseButton.MiddleButton
+
+    # Map pen style constants
+    if not hasattr(Qt, 'DashLine'):
+        Qt.DashLine = Qt.PenStyle.DashLine
+        Qt.SolidLine = Qt.PenStyle.SolidLine
+        Qt.DotLine = Qt.PenStyle.DotLine
+        Qt.NoPen = Qt.PenStyle.NoPen
+
+except Exception as e:
+    print(f"Warning: PyQt6 compatibility layer setup failed: {e}")
 # --- Resource path resolution helper ---
 def resolve_resource_path(path: str) -> str:
     """Return an absolute path to a resource that may live next to the script,
