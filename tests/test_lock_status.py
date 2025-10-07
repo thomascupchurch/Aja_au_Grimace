@@ -100,4 +100,8 @@ def test_takeover_prompt_path_simulated():
         finally:
             win.close()
 
-# Removed legacy exec_ guidance comments to satisfy audit.
+from project import ProjectDataModel
+
+def test_basic_model_instantiation():
+    m = ProjectDataModel()
+    assert isinstance(m.rows, list)

@@ -1,0 +1,50 @@
+# .github/workflows/build.yml
+name: Build Releases
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:  # Allow manual triggers
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'  # Locked to compatible version
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6==6.6.3
+          pip install pyinstaller openpyxl python-dateutil
+      - name: Test Qt installation
+        run: |
+          python -c "from PySide6.QtWidgets import QApplication; print('PySide6 OK')"
+      - name: Build executable
+        run: pyinstaller --onefile --windowed --name ProjectPlanner main.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: dist/ProjectPlanner.exe
+
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'  # Locked to compatible version
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6==6.6.3
+          pip install pyinstaller openpyxl python-dateutil
+      - name: Test Qt installation
+        run: python -c "from PySide6.QtWidgets import QApplication; print('PySide6 OK')"
+      - name: Build executable
+        run: pyinstaller --onefile --windowed --name ProjectPlanner main.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-build
+          path: dist/ProjectPlanner.app

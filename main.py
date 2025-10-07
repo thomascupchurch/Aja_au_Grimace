@@ -1,102 +1,89 @@
-# (PyQt6 Shim removed)
+import sys, types, os
 
-
-from PyQt6.QtWidgets import (
-    QDialog, QFormLayout, QLineEdit, QTextEdit, QComboBox, QDateEdit, QPushButton,
-    QFileDialog, QLabel, QHBoxLayout, QAbstractItemView, QGraphicsView,
-    QTableWidget, QTableWidgetItem, QGraphicsItem  # added QGraphicsItem
+from PySide6 import QtCore, QtGui, QtWidgets, QtSvg, QtSvgWidgets
+from PySide6.QtCore import QDate, Qt, QEvent
+from PySide6.QtWidgets import (
+    QApplication, QDialog, QFormLayout, QLineEdit, QTextEdit, QComboBox, QDateEdit,
+    QPushButton, QFileDialog, QLabel, QHBoxLayout, QAbstractItemView, QGraphicsView,
+    QTableWidget, QTableWidgetItem, QGraphicsItem, QMessageBox, QWidget, QVBoxLayout,
+    QMainWindow, QListWidget, QGraphicsScene, QStackedWidget, QTreeWidget, QTreeWidgetItem
 )
-from PyQt6.QtWidgets import QMessageBox
-from PyQt6.QtCore import QDate
-from PyQt6.QtCore import Qt   # ensure Qt is globally available before any class uses it
+from PySide6.QtGui import (
+    QPixmap, QPainter, QColor, QBrush, QPen, QFont
+)
+from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtSvgWidgets import QSvgWidget
 
+QT_BINDING = "PySide6"
 
-# Minimal ImageCellWidget for image upload/preview in DatabaseView
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFileDialog, QMainWindow, QApplication, QListWidget, QTreeWidget, QGraphicsScene, QStackedWidget, QDialog
-from PyQt6.QtWidgets import QTreeWidgetItem
+# PyQt6 shim so any later 'from PyQt6...' imports map harmlessly to PySide6
+_pyqt6 = types.ModuleType("PyQt6")
+_pyqt6.QtCore = QtCore
+_pyqt6.QtGui = QtGui
+_pyqt6.QtWidgets = QtWidgets
+_pyqt6.QtSvg = QtSvg
+_pyqt6.QtSvgWidgets = QtSvgWidgets
+sys.modules.setdefault("PyQt6", _pyqt6)
+sys.modules.setdefault("PyQt6.QtCore", QtCore)
+sys.modules.setdefault("PyQt6.QtGui", QtGui)
+sys.modules.setdefault("PyQt6.QtWidgets", QtWidgets)
+sys.modules.setdefault("PyQt6.QtSvg", QtSvg)
+sys.modules.setdefault("PyQt6.QtSvgWidgets", QtSvgWidgets)
+
+# Lightweight enum aliasing (covers any legacy expectations)
+if not hasattr(Qt, 'DashLine'):
+    Qt.DashLine = Qt.PenStyle.DashLine
+    Qt.SolidLine = Qt.PenStyle.SolidLine
+    Qt.DotLine = Qt.PenStyle.DotLine
+    Qt.NoPen = Qt.PenStyle.NoPen
+if not hasattr(Qt, 'ScrollBarAlwaysOff'):
+    Qt.ScrollBarAlwaysOff = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    Qt.ScrollBarAlwaysOn = Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+    Qt.ScrollBarAsNeeded = Qt.ScrollBarPolicy.ScrollBarAsNeeded
+
 import os
-from PyQt6.QtGui import QPixmap
-# PyQt6 Compatibility Layer - add this after imports but before any class definitions
-try:
-    from PyQt6.QtCore import QEvent
-    # Map PyQt5-style constants to PyQt6 enums for backward compatibility
-    if not hasattr(QEvent, 'Wheel'):
-        QEvent.Wheel = QEvent.Type.Wheel
-        QEvent.Resize = QEvent.Type.Resize
-        QEvent.GraphicsSceneMousePress = QEvent.Type.GraphicsSceneMousePress
-        QEvent.GraphicsSceneContextMenu = QEvent.Type.GraphicsSceneContextMenu
-        QEvent.GraphicsSceneHoverMove = QEvent.Type.GraphicsSceneHoverMove
-        QEvent.GraphicsSceneMouseMove = QEvent.Type.GraphicsSceneMouseMove
-        QEvent.GraphicsSceneHoverLeave = QEvent.Type.GraphicsSceneHoverLeave
-    
-    from PyQt6.QtWidgets import QAbstractItemView, QGraphicsView, QGraphicsItem
-    # Map table/view constants
-    if not hasattr(QAbstractItemView, 'NoEditTriggers'):
-        QAbstractItemView.NoEditTriggers = QAbstractItemView.EditTrigger.NoEditTriggers
-        QAbstractItemView.SelectRows = QAbstractItemView.SelectionBehavior.SelectRows
-        QAbstractItemView.SingleSelection = QAbstractItemView.SelectionMode.SingleSelection
-    
-    # Map graphics view constants
-    if not hasattr(QGraphicsView, 'ScrollHandDrag'):
-        QGraphicsView.ScrollHandDrag = QGraphicsView.DragMode.ScrollHandDrag
-    
-    # Map graphics item constants
-    if not hasattr(QGraphicsItem, 'ItemIsSelectable'):
-        QGraphicsItem.ItemIsSelectable = QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
-    
-    from PyQt6.QtCore import Qt
-    # Map scroll bar constants
-    if not hasattr(Qt, 'ScrollBarAlwaysOff'):
-        Qt.ScrollBarAlwaysOff = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        Qt.ScrollBarAlwaysOn = Qt.ScrollBarPolicy.ScrollBarAlwaysOn
-        Qt.ScrollBarAsNeeded = Qt.ScrollBarPolicy.ScrollBarAsNeeded
+# ...existing code (top conditional import block retained)...
 
-    # Map mouse button constants
-    if not hasattr(Qt, 'NoButton'):
-        Qt.NoButton = Qt.MouseButton.NoButton
-        Qt.LeftButton = Qt.MouseButton.LeftButton
-        Qt.RightButton = Qt.MouseButton.RightButton
-        Qt.MiddleButton = Qt.MouseButton.MiddleButton
+# REMOVE all duplicated "PyQt6 Compatibility Layer - add this after imports..." blocks below.
+# They are currently executed even when PySide6 is active and trigger failing PyQt6 imports.
 
-except Exception as e:
-    print(f"Warning: PyQt6 compatibility layer setup failed: {e}")
-# PyQt6 Compatibility Layer - add this after imports but before any class definitions
-try:
-    from PyQt6.QtCore import QEvent
-    # Map PyQt5-style constants to PyQt6 enums for backward compatibility
-    if not hasattr(QEvent, 'Wheel'):
-        QEvent.Wheel = QEvent.Type.Wheel
-        QEvent.Resize = QEvent.Type.Resize
-        QEvent.GraphicsSceneMousePress = QEvent.Type.GraphicsSceneMousePress
-        QEvent.GraphicsSceneContextMenu = QEvent.Type.GraphicsSceneContextMenu
-        QEvent.GraphicsSceneHoverMove = QEvent.Type.GraphicsSceneHoverMove
-        QEvent.GraphicsSceneMouseMove = QEvent.Type.GraphicsSceneMouseMove
-        QEvent.GraphicsSceneHoverLeave = QEvent.Type.GraphicsSceneHoverLeave
-    
-    from PyQt6.QtWidgets import QAbstractItemView, QGraphicsView, QGraphicsItem
-    # Map table/view constants
-    if not hasattr(QAbstractItemView, 'NoEditTriggers'):
-        QAbstractItemView.NoEditTriggers = QAbstractItemView.EditTrigger.NoEditTriggers
-        QAbstractItemView.SelectRows = QAbstractItemView.SelectionBehavior.SelectRows
-        QAbstractItemView.SingleSelection = QAbstractItemView.SelectionMode.SingleSelection
-    
-    # Map graphics view constants
-    if not hasattr(QGraphicsView, 'ScrollHandDrag'):
-        QGraphicsView.ScrollHandDrag = QGraphicsView.DragMode.ScrollHandDrag
-    
-    # Map graphics item constants
-    if not hasattr(QGraphicsItem, 'ItemIsSelectable'):
-        QGraphicsItem.ItemIsSelectable = QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
-    
-    from PyQt6.QtCore import Qt
-    # Map scroll bar constants
-    if not hasattr(Qt, 'ScrollBarAlwaysOff'):
-        Qt.ScrollBarAlwaysOff = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        Qt.ScrollBarAlwaysOn = Qt.ScrollBarPolicy.ScrollBarAlwaysOn
-        Qt.ScrollBarAsNeeded = Qt.ScrollBarPolicy.ScrollBarAsNeeded
-
-except Exception as e:
-    print(f"Warning: PyQt6 compatibility layer setup failed: {e}")
+# REPLACE the first remaining compatibility block with this guarded version:
+if QT_BINDING == "PyQt6":
+    try:
+        from PyQt6.QtCore import QEvent, Qt
+        from PyQt6.QtWidgets import QAbstractItemView, QGraphicsView, QGraphicsItem
+        if not hasattr(QEvent, 'Wheel'):
+            QEvent.Wheel = QEvent.Type.Wheel
+            QEvent.Resize = QEvent.Type.Resize
+            QEvent.GraphicsSceneMousePress = QEvent.Type.GraphicsSceneMousePress
+            QEvent.GraphicsSceneContextMenu = QEvent.Type.GraphicsSceneContextMenu
+            QEvent.GraphicsSceneHoverMove = QEvent.Type.GraphicsSceneHoverMove
+            QEvent.GraphicsSceneMouseMove = QEvent.Type.GraphicsSceneMouseMove
+            QEvent.GraphicsSceneHoverLeave = QEvent.Type.GraphicsSceneHoverLeave
+        if not hasattr(QAbstractItemView, 'NoEditTriggers'):
+            QAbstractItemView.NoEditTriggers = QAbstractItemView.EditTrigger.NoEditTriggers
+            QAbstractItemView.SelectRows = QAbstractItemView.SelectionBehavior.SelectRows
+            QAbstractItemView.SingleSelection = QAbstractItemView.SelectionMode.SingleSelection
+        if not hasattr(QGraphicsView, 'ScrollHandDrag'):
+            QGraphicsView.ScrollHandDrag = QGraphicsView.DragMode.ScrollHandDrag
+        if not hasattr(QGraphicsItem, 'ItemIsSelectable'):
+            QGraphicsItem.ItemIsSelectable = QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+        if not hasattr(Qt, 'ScrollBarAlwaysOff'):
+            Qt.ScrollBarAlwaysOff = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            Qt.ScrollBarAlwaysOn = Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+            Qt.ScrollBarAsNeeded = Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        if not hasattr(Qt, 'NoButton'):
+            Qt.NoButton = Qt.MouseButton.NoButton
+            Qt.LeftButton = Qt.MouseButton.LeftButton
+            Qt.RightButton = Qt.MouseButton.RightButton
+            Qt.MiddleButton = Qt.MouseButton.MiddleButton
+        if not hasattr(Qt, 'DashLine'):
+            Qt.DashLine = Qt.PenStyle.DashLine
+            Qt.SolidLine = Qt.PenStyle.SolidLine
+            Qt.DotLine = Qt.PenStyle.DotLine
+            Qt.NoPen = Qt.PenStyle.NoPen
+    except Exception as e:
+        print(f"[Compat] PyQt6 compatibility mapping failed: {e}")
 
 # ... rest of your existing code ...
 # --- Central JSON lines logger -------------------------------------------------
@@ -3496,7 +3483,7 @@ class ProjectTreeView(QWidget):
 
 
 # Add a custom QGraphicsView subclass for zooming
-from PyQt6.QtWidgets import QGraphicsView
+# (QGraphicsView already imported above under the chosen binding)
 
 
 class ZoomableGraphicsView(QGraphicsView):
@@ -8409,17 +8396,14 @@ class MainWindow(QMainWindow):
 # ------------------------------------------------------------
 if __name__ == "__main__":
     try:
-        import sys
-        from PyQt6.QtWidgets import QApplication
         app = QApplication(sys.argv)
         model = ProjectDataModel()
         window = MainWindow(model)
         window.show()
-        exit_code = app.exec()
-        sys.exit(exit_code)
+        sys.exit(app.exec())
     except Exception as e:
-        import traceback, sys
-        print("FATAL: Unhandled exception during startup:", e)
+        import traceback
+        print("FATAL: Startup error:", e)
         traceback.print_exc()
         sys.exit(1)
 
