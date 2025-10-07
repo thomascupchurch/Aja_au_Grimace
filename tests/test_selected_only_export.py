@@ -1,5 +1,5 @@
 import os, tempfile, csv
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 from main import ProjectDataModel, CostEstimatesView
 
 # Simple runtime test (not a formal framework) to validate Selected Only CSV export subset.
@@ -18,7 +18,7 @@ def run_test():
     view.table.selectRow(0)
     view.chk_selected_only.setChecked(True)
     # Monkeypatch file dialog to auto choose temp path
-    from PyQt5.QtWidgets import QFileDialog
+    from PyQt6.QtWidgets import QFileDialog
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.csv'); tmp.close()
     orig = QFileDialog.getSaveFileName
     try:

@@ -38,10 +38,10 @@ _alias(Qt, "PointingHandCursor", "CursorShape.PointingHandCursor")
 # Dialog codes shortcut
 from PyQt6.QtWidgets import QDialog
 if not hasattr(QDialog, "Accepted"):
-    QDialog.Accepted = QDialog.DialogCode.Accepted
-    QDialog.Rejected = QDialog.DialogCode.Rejected
+    QDialog.DialogCode.Accepted = QDialog.DialogCode.Accepted
+    QDialog.DialogCode.Rejected = QDialog.DialogCode.Rejected
 
-# Exec alias (if older code calls .exec_())
+# Exec alias (if older code calls .exec())
 def exec_dialog(dlg):
     return dlg.exec()
 

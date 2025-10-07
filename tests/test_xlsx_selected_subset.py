@@ -1,5 +1,5 @@
 import os, tempfile
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 from main import ProjectDataModel, CostEstimatesView
 
 try:
@@ -25,7 +25,7 @@ def run_test():
     if not HAVE_OPENPYXL:
         print({'skipped': True, 'reason': 'openpyxl not installed'})
         return
-    from PyQt5.QtWidgets import QFileDialog
+    from PyQt6.QtWidgets import QFileDialog
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx'); tmp.close()
     orig = QFileDialog.getSaveFileName
     try:

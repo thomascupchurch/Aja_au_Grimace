@@ -1,5 +1,5 @@
 import sys, os, json
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 
 # Minimal runtime test for layout programmatic API
 # Run: python -m tests.test_layout_roundtrip
@@ -31,7 +31,7 @@ def main():
         'saved_layout_exists': False
     }
     try:
-        from PyQt5.QtCore import QSettings
+        from PyQt6.QtCore import QSettings
         s = QSettings('LSI','ProjectPlanner')
         raw = s.value('Columns/layouts', '{}')
         layouts = json.loads(raw) if raw else {}

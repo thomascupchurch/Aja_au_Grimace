@@ -8,7 +8,7 @@ import contextlib
 # Skip GUI if no display; PyQt5 on Windows usually works headless enough for simple widget instantiation
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 
 app = QApplication.instance() or QApplication([])
 
@@ -94,7 +94,7 @@ def test_takeover_prompt_path_simulated():
         win = main.MainWindow(model)
         try:
             # Configure to prompt takeover
-            from PyQt5.QtCore import QSettings
+            from PyQt6.QtCore import QSettings
             s = QSettings('LSI','ProjectApp'); s.setValue('Lock/prompt_takeover', True); s.setValue('Lock/stale_minutes', 1)
             # Existing stale lock from other user
             lock_path = os.path.abspath(db_path) + '.lock.json'
@@ -102,7 +102,7 @@ def test_takeover_prompt_path_simulated():
             with open(lock_path, 'w', encoding='utf-8') as f:
                 json.dump(info, f)
             # Monkeypatch QMessageBox to auto-Yes
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
             orig = QMessageBox.exec_
             def fake_exec(self):
                 return QMessageBox.Yes

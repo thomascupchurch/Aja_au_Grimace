@@ -1,5 +1,5 @@
 import os, sys, time, tempfile
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 
 # Avoid launching a second QApplication if running inside a test harness
 app = QApplication.instance() or QApplication(sys.argv)
