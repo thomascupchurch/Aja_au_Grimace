@@ -1,7 +1,11 @@
 # (PyQt6 Shim removed)
 
 
-from PyQt6.QtWidgets import QDialog, QFormLayout, QLineEdit, QTextEdit, QComboBox, QDateEdit, QPushButton, QFileDialog, QLabel, QHBoxLayout
+from PyQt6.QtWidgets import (
+    QDialog, QFormLayout, QLineEdit, QTextEdit, QComboBox, QDateEdit, QPushButton,
+    QFileDialog, QLabel, QHBoxLayout, QAbstractItemView, QGraphicsView,
+    QTableWidget, QTableWidgetItem
+)
 from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtCore import QDate
 
@@ -3365,7 +3369,11 @@ class ZoomableGraphicsView(QGraphicsView):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._zoom = 0
-        self.setDragMode(QGraphicsView.ScrollHandDrag)
+        # --- ZoomableGraphicsView __init__ (drag mode) ---
+        try:
+            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        except AttributeError:
+            pass
         self._settings_key = None  # e.g., 'GanttZoom' or 'TimelineZoom'
 
     def wheelEvent(self, event):
