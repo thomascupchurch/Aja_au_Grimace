@@ -1,3 +1,35 @@
+# --- PyQt6 Migration Shim (temporarily allow old PyQt5-style imports) ---
+try:
+    import sys, types
+    from PyQt6 import QtWidgets, QtCore, QtGui
+    try:
+        from PyQt6 import QtSvg
+    except Exception:
+        QtSvg = types.ModuleType("QtSvg")
+    try:
+        from PyQt6 import QtPrintSupport
+    except Exception:
+        QtPrintSupport = types.ModuleType("QtPrintSupport")
+    # Create base PyQt5 namespace if missing
+    if 'PyQt5' not in sys.modules:
+        sys.modules['PyQt5'] = types.ModuleType('PyQt5')
+    sys.modules.setdefault('PyQt5.QtWidgets', QtWidgets)
+    sys.modules.setdefault('PyQt5.QtCore', QtCore)
+    sys.modules.setdefault('PyQt5.QtGui', QtGui)
+    sys.modules.setdefault('PyQt5.QtSvg', QtSvg)
+    sys.modules.setdefault('PyQt5.QtPrintSupport', QtPrintSupport)
+    # Restore deprecated exec_ names used in existing code
+    if not hasattr(QtWidgets.QApplication, 'exec_'):
+        QtWidgets.QApplication.exec_ = QtWidgets.QApplication.exec
+    if not hasattr(QtWidgets.QDialog, 'exec_'):
+        QtWidgets.QDialog.exec_ = QtWidgets.QDialog.exec
+    # Provide Qt alias if code expects from PyQt5.QtCore import Qt
+    Qt = QtCore.Qt
+except Exception:
+    pass
+# --- End PyQt6 Migration Shim ---
+
+
 from PyQt5.QtWidgets import QDialog, QFormLayout, QLineEdit, QTextEdit, QComboBox, QDateEdit, QPushButton, QFileDialog, QLabel, QHBoxLayout
 from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtCore import QDate
@@ -3953,7 +3985,7 @@ class GanttChartView(QWidget):
             w = edits.get(key)
             if w and hasattr(w,'valueChanged'):
                 w.valueChanged.connect(_recalc_and_enable)
-        dialog.exec_()
+        dialog.exec()
     def highlight_group(self, part_name):
         # Find parent and children for the given part_name
         parent = None
