@@ -36,7 +36,8 @@ param(
   [string]$Version = "",
   [int]$Keep = 0,
   [string]$IconSizes = "16,24,32,48,64,128,256",
-  [switch]$ForceIcon
+  [switch]$ForceIcon,
+  [switch]$MacBundle
 )
 $ErrorActionPreference = 'Stop'
 
@@ -207,6 +208,64 @@ if ($IncludeManifest) {
   }
   $json = $manifest | ConvertTo-Json -Depth 4
   $json | Out-File -FilePath (Join-Path $staging 'manifest.json') -Encoding UTF8
+}
+
+# --- Optional macOS .app bundle repackage ------------------------------------
+if ($MacBundle) {
+  Write-Section "macOS Bundle"
+  $isMac = $false
+  try {
+    if ($PSVersionTable.Platform -eq 'Unix') {
+      $uname = (uname 2>$null)
+      if ($uname -match 'Darwin') { $isMac = $true }
+    }
+  } catch {}
+  if (-not $isMac) {
+    Write-Host "[warn] -MacBundle specified but host is not macOS (skipping)." -ForegroundColor Yellow
+  } else {
+    $appName = 'ProjectPlanner'
+    $bundleRoot = Join-Path (Get-Location) "$appName.app"
+    if (Test-Path $bundleRoot) { Remove-Item -Recurse -Force $bundleRoot }
+    $contents = Join-Path $bundleRoot 'Contents'
+    $macosDir = Join-Path $contents 'MacOS'
+    $resources = Join-Path $contents 'Resources'
+    New-Item -ItemType Directory -Path $macosDir,$resources | Out-Null
+    # Choose executable: if one-file build, main.exe in staging; else pick 'main' or first .exe
+    $exeCandidate = Get-ChildItem -Path $staging -File | Where-Object { $_.Name -match 'main(.exe)?' } | Select-Object -First 1
+    if (-not $exeCandidate) { $exeCandidate = Get-ChildItem -Path $staging -File | Select-Object -First 1 }
+    if (-not $exeCandidate) { throw 'No executable found in staging to place inside .app bundle.' }
+    Copy-Item $exeCandidate.FullName (Join-Path $macosDir $appName) -Force
+    # Copy resources (everything else) simplistic approach
+    Get-ChildItem -Path $staging | Where-Object { $_.FullName -ne $exeCandidate.FullName } | ForEach-Object {
+      if ($_.PSIsContainer) {
+        Copy-Item $_.FullName (Join-Path $resources $_.Name) -Recurse -Force
+      } else {
+        Copy-Item $_.FullName (Join-Path $resources $_.Name) -Force
+      }
+    }
+    $plist = @(
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+      '<plist version="1.0">',
+      '<dict>',
+      '  <key>CFBundleName</key><string>' + $appName + '</string>',
+      '  <key>CFBundleExecutable</key><string>' + $appName + '</string>',
+      '  <key>CFBundleIdentifier</key><string>com.lsi.' + $appName.ToLower() + '</string>',
+      '  <key>CFBundleVersion</key><string>' + ($Version -replace '"','') + '</string>',
+      '  <key>CFBundleShortVersionString</key><string>' + ($Version -replace '"','') + '</string>',
+      '  <key>LSMinimumSystemVersion</key><string>10.13</string>',
+      '  <key>CFBundlePackageType</key><string>APPL</string>',
+      '  <key>NSHighResolutionCapable</key><true/>',
+      '  <key>NSPrincipalClass</key><string>NSApplication</string>',
+      '</dict>',
+      '</plist>'
+    ) -join "`n"
+    $plistPath = Join-Path $contents 'Info.plist'
+    Set-Content -Path $plistPath -Value $plist -Encoding UTF8
+    # Add icon if present
+    if (Test-Path 'header.icns') { Copy-Item 'header.icns' (Join-Path $resources 'AppIcon.icns') }
+    Write-Host "Created macOS bundle: $bundleRoot" -ForegroundColor Green
+  }
 }
 
 Write-Section "Create archive $archiveName"
