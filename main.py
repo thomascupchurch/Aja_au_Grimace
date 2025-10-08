@@ -4893,6 +4893,32 @@ class GanttChartView(QWidget):
         self.preview_label.clear()
         if not hasattr(model, 'rows'):
             return
+        # Performance guard rails and feature toggles
+        # Allow external toggle of connector rendering via attribute set by MainWindow
+        # Connector enable & mode (restored by MainWindow after construction)
+        if not hasattr(self, '_enable_connectors'):
+            self._enable_connectors = True  # default
+        if not hasattr(self, '_connector_mode'):
+            # 'all' (hierarchy+deps) or 'deps'
+            self._connector_mode = 'all'
+        # Dynamic thresholds: scale by approximate visible complexity
+        # Base thresholds (for ~1200px width viewport & moderate rows)
+        base_hard = 2500
+        base_soft = 1200
+        try:
+            vw = self.view.viewport().width() if hasattr(self,'view') else 1200
+            vh = self.view.viewport().height() if hasattr(self,'view') else 600
+            area_factor = max(0.6, min(2.0, (vw*vh)/(1200*700)))  # clamp scaling
+            row_factor = 1.0
+            try:
+                row_factor = max(0.5, min(2.0, (len(raw_rows)/200.0)))  # more rows increases chance of edges, tighten thresholds
+            except Exception:
+                row_factor = 1.0
+            MAX_CONNECTOR_EDGES = int(base_hard * area_factor / row_factor)
+            SOFT_WARN_EDGES = int(base_soft * area_factor / row_factor)
+        except Exception:
+            MAX_CONNECTOR_EDGES = 2500
+            SOFT_WARN_EDGES = 1200
         raw_rows = model.rows
         # Precompute critical path set for filtering/highlighting
         self._current_critical_set = set()
@@ -4902,7 +4928,14 @@ class GanttChartView(QWidget):
             graph = {}
             for r in raw_rows:
                 nm = r.get("Project Part", "")
+                # Some deployments may only populate 'Dependencies' (downstream list) and leave legacy 'Predecessors' blank.
+                # For visualization / critical path we treat Dependencies as predecessors (tasks that must finish before this one starts).
                 preds_raw = (r.get("Predecessors") or "").strip()
+                if not preds_raw:
+                    deps_field = (r.get("Dependencies") or "").strip()
+                    # Use dependencies as predecessors if predecessors absent
+                    if deps_field:
+                        preds_raw = deps_field
                 preds = [p.strip() for p in preds_raw.split(',') if p.strip()] if preds_raw else []
                 graph[nm] = preds
             visited = set(); order = []
@@ -5608,9 +5641,38 @@ class GanttChartView(QWidget):
                     self.setPen(self._base_pen)
                     self.fade(0.55, 260)
         self._connector_lines_map = {}
-        if draw_hierarchy:
-            base_color = _QColor3(180,180,180)
-            trunk_color = _QColor3(160,160,160)
+        # Estimate potential edge count early (parent-child + dependency edges) to decide skip
+        edge_estimate = 0
+        try:
+            # parent-child count ~ number of rows with a parent
+            edge_estimate += sum(1 for r in raw_rows if r.get('Parent'))
+            # dependencies count
+            for r in raw_rows:
+                deps_txt = r.get('Dependencies') or ''
+                if deps_txt.strip():
+                    edge_estimate += len([d for d in deps_txt.split(',') if d.strip()])
+        except Exception:
+            pass
+        skip_connectors = False
+        soft_warn = False
+        if edge_estimate > MAX_CONNECTOR_EDGES:
+            skip_connectors = True
+        elif edge_estimate > SOFT_WARN_EDGES:
+            soft_warn = True
+        if soft_warn and hasattr(self, 'preview_label'):
+            try:
+                self.preview_label.setText(f"Connector density high ({edge_estimate} edges) – drawn with reduced styling")
+            except Exception:
+                pass
+        if skip_connectors and hasattr(self, 'preview_label'):
+            try:
+                self.preview_label.setText(f"Connectors skipped (edge est {edge_estimate} > {MAX_CONNECTOR_EDGES})")
+            except Exception:
+                pass
+        if self._enable_connectors and not skip_connectors:
+            base_color = _QColor3(180,180,180)         # hierarchy child lines
+            trunk_color = _QColor3(150,150,150)        # hierarchy trunk
+            dep_color = _QColor3(255,170,40)           # dependency arrows (amber/orange)
             highlight_color = _QColor3('#00BFFF')
             parent_children = {}
             for name, start, duration, i, r in bars:
@@ -5619,35 +5681,115 @@ class GanttChartView(QWidget):
                     parent_children.setdefault(parent_name, []).append(name)
             def _register(part, item):
                 self._connector_lines_map.setdefault(part, []).append(item)
-            for parent, children in parent_children.items():
-                if not children:
-                    continue
-                px, py, pw, ph = name_to_bar[parent]
-                parent_mid_x = px + pw/2
-                parent_bottom_y = py + ph
-                child_positions = []
-                for child in children:
-                    cx, cy, cw, ch = name_to_bar[child]
-                    child_positions.append((child, cx + cw/2, cy))
-                child_positions.sort(key=lambda t: t[2])
-                trunk_top = parent_bottom_y
-                trunk_bottom = child_positions[-1][2]
-                trunk = _AnimatedConnector(parent_mid_x, trunk_top, parent_mid_x, trunk_bottom,
-                                            base_pen=_QPen(trunk_color), highlight_pen=_QPen(highlight_color), style='trunk')
-                trunk.setZValue(-1)
-                self.scene.addItem(trunk)
-                _register(parent, trunk)
-                for child, cmx, cty in child_positions:
-                    h_line = _AnimatedConnector(min(parent_mid_x, cmx), cty, max(parent_mid_x, cmx), cty,
-                                                base_pen=_QPen(base_color), highlight_pen=_QPen(highlight_color), style='child')
-                    h_line.setZValue(-1)
-                    self.scene.addItem(h_line)
-                    v_line = _AnimatedConnector(cmx, cty, cmx, cty,
-                                                base_pen=_QPen(base_color), highlight_pen=_QPen(highlight_color), style='child')
-                    v_line.setZValue(-1)
-                    self.scene.addItem(v_line)
-                    _register(parent, h_line); _register(child, h_line)
-                    _register(child, v_line); _register(parent, v_line)
+            # Draw hierarchy connectors only if mode is 'all' and hierarchy toggle present
+            if self._connector_mode == 'all' and draw_hierarchy:
+                for parent, children in parent_children.items():
+                    if not children:
+                        continue
+                    px, py, pw, ph = name_to_bar[parent]
+                    parent_mid_x = px + pw/2
+                    parent_bottom_y = py + ph
+                    child_positions = []
+                    for child in children:
+                        cx, cy, cw, ch = name_to_bar[child]
+                        child_positions.append((child, cx + cw/2, cy))
+                    child_positions.sort(key=lambda t: t[2])
+                    trunk_top = parent_bottom_y
+                    trunk_bottom = child_positions[-1][2]
+                    trunk = _AnimatedConnector(parent_mid_x, trunk_top, parent_mid_x, trunk_bottom,
+                                                base_pen=_QPen(trunk_color), highlight_pen=_QPen(highlight_color), style='trunk')
+                    trunk.setZValue(-1)
+                    self.scene.addItem(trunk)
+                    _register(parent, trunk)
+                    for child, cmx, cty in child_positions:
+                        h_line = _AnimatedConnector(min(parent_mid_x, cmx), cty, max(parent_mid_x, cmx), cty,
+                                                    base_pen=_QPen(base_color), highlight_pen=_QPen(highlight_color), style='child')
+                        h_line.setZValue(-1)
+                        self.scene.addItem(h_line)
+                        v_line = _AnimatedConnector(cmx, cty, cmx, cty,
+                                                    base_pen=_QPen(base_color), highlight_pen=_QPen(highlight_color), style='child')
+                        v_line.setZValue(-1)
+                        self.scene.addItem(v_line)
+                        _register(parent, h_line); _register(child, h_line)
+                        _register(child, v_line); _register(parent, v_line)
+            # Draw dependency arrows (Dependencies field) when mode == 'deps' OR mode == 'all'
+            if self._connector_mode in ('deps','all'):
+                from math import atan2, cos, sin, pi
+                try:
+                    # Build quick lookup: name -> (x,y,w,h)
+                    name_rect = {n: name_to_bar.get(n) for n in name_to_bar}
+                    # Collect dependency edges (A depends on B => arrow B -> A)
+                    dep_edges = []
+                    for r in raw_rows:
+                        a = r.get('Project Part','')
+                        if not a: continue
+                        deps_txt = r.get('Dependencies') or ''
+                        for d in [x.strip() for x in deps_txt.split(',') if x.strip()]:
+                            if d and d in name_rect and a in name_rect and d != a:
+                                dep_edges.append((d,a))  # d -> a
+                    # Limit drawing if dependency edges alone exceed hard threshold
+                    if len(dep_edges) > MAX_CONNECTOR_EDGES:
+                        if hasattr(self,'preview_label'):
+                            try:
+                                prev = self.preview_label.text() or ''
+                                self.preview_label.setText(prev + f"  (dep edges {len(dep_edges)} skipped)")
+                            except Exception: pass
+                    else:
+                        dep_pen = _QPen(dep_color); dep_pen.setWidth(2)
+                        for src,dst in dep_edges:
+                            sx, sy, sw, sh = name_rect[src]
+                            dx, dy, dw, dh = name_rect[dst]
+                            # route: right edge of src to left edge of dst (simple L path) unless overlapping vertically
+                            start_x = sx + sw
+                            start_y = sy + sh/2
+                            end_x = dx
+                            end_y = dy + dh/2
+                            # Horizontal + vertical segments
+                            mid_x = (start_x + end_x)/2
+                            line1 = self.scene.addLine(start_x, start_y, mid_x, start_y, dep_pen)
+                            line2 = self.scene.addLine(mid_x, start_y, mid_x, end_y, dep_pen)
+                            line3 = self.scene.addLine(mid_x, end_y, end_x, end_y, dep_pen)
+                            for ln in (line1,line2,line3):
+                                _register(src, ln); _register(dst, ln)
+                                try:
+                                    ln.setToolTip(f"{src} → {dst}")
+                                except Exception:
+                                    pass
+                            # Arrow head at destination (triangle)
+                            try:
+                                angle = atan2(end_y - start_y, end_x - start_x)
+                                ah = 8.0
+                                a1 = angle + pi - 0.45
+                                a2 = angle + pi + 0.45
+                                p1x = end_x; p1y = end_y
+                                p2x = end_x + ah*cos(a1); p2y = end_y + ah*sin(a1)
+                                p3x = end_x + ah*cos(a2); p3y = end_y + ah*sin(a2)
+                                from PyQt5.QtGui import QPolygonF
+                                from PyQt5.QtCore import QPointF
+                                poly = QPolygonF([QPointF(p1x,p1y), QPointF(p2x,p2y), QPointF(p3x,p3y)])
+                                item = self.scene.addPolygon(poly, dep_pen, dep_color)
+                                _register(dst, item); _register(src, item)
+                                try:
+                                    item.setToolTip(f"{src} → {dst}")
+                                except Exception:
+                                    pass
+                            except Exception:
+                                pass
+                        # Legend / mode message
+                        if hasattr(self,'preview_label'):
+                            try:
+                                prev = self.preview_label.text() or ''
+                                mode_note = f"Mode: {self._connector_mode} (hierarchy {'on' if self._connector_mode=='all' else 'off'}, deps {len(dep_edges)})"
+                                if prev:
+                                    self.preview_label.setText(prev + '  ' + mode_note)
+                                else:
+                                    self.preview_label.setText(mode_note)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+            # (Future) Could draw dependency arrows separately when _connector_mode == 'deps'
+            # Currently dependency visualization is label highlighting; expand later for explicit edges.
 
         # ---------- Scene rect ----------
         self.view.setSceneRect(0, 0, 800, max(300, len(bars)*(bar_height+bar_gap)+60))
@@ -7248,6 +7390,86 @@ class MainWindow(QMainWindow):
                         except Exception: pass
                         print(f"Backup failed: {e}")
                 act_backup_db.triggered.connect(do_backup_db)
+                # --- Migration / Backfill Utilities ---
+                tmenu.addSeparator()
+                act_backfill_preds = tmenu.addAction("Backfill Predecessors from Dependencies")
+                def do_backfill_preds():
+                    changed = 0
+                    try:
+                        for r in self.model.rows:
+                            if (not r.get('Predecessors')) and r.get('Dependencies'):
+                                r['Predecessors'] = r.get('Dependencies')
+                                changed += 1
+                        if changed:
+                            try:
+                                self.model.save_to_db()
+                            except Exception:
+                                pass
+                            self.on_data_changed()
+                        if self.statusBar():
+                            self.statusBar().showMessage(f"Backfill complete – updated {changed} rows", 3500)
+                    except Exception as e:
+                        print(f"Backfill failed: {e}")
+                act_backfill_preds.triggered.connect(do_backfill_preds)
+                # Toggle dependency/parent connectors
+                # Connector visibility toggle + mode submenu
+                from PyQt5.QtCore import QSettings as _QS
+                qs = _QS('LSI','ProjectPlanner')
+                stored_enabled = qs.value('Gantt/connectors_enabled', True)
+                if isinstance(stored_enabled, str):
+                    stored_enabled = stored_enabled.lower() in ('1','true','yes','on')
+                stored_mode = qs.value('Gantt/connectors_mode', 'all')
+                if stored_mode not in ('all','deps'):
+                    stored_mode = 'all'
+                act_toggle_connectors = tmenu.addAction("Show Connectors")
+                act_toggle_connectors.setCheckable(True)
+                act_toggle_connectors.setChecked(bool(stored_enabled))
+                # Mode submenu
+                mode_menu = QMenu("Connector Mode", tmenu)
+                act_mode_all = mode_menu.addAction("Hierarchy + Dependencies")
+                act_mode_deps = mode_menu.addAction("Dependencies Only")
+                act_mode_all.setCheckable(True); act_mode_deps.setCheckable(True)
+                if stored_mode == 'all':
+                    act_mode_all.setChecked(True)
+                else:
+                    act_mode_deps.setChecked(True)
+                tmenu.addMenu(mode_menu)
+                # Apply stored to existing view
+                try:
+                    if hasattr(self, 'gantt_chart_view'):
+                        self.gantt_chart_view._enable_connectors = bool(stored_enabled)
+                        self.gantt_chart_view._connector_mode = stored_mode
+                except Exception:
+                    pass
+                def do_toggle_connectors(checked):
+                    try:
+                        qs.setValue('Gantt/connectors_enabled', bool(checked))
+                        if hasattr(self, 'gantt_chart_view'):
+                            self.gantt_chart_view._enable_connectors = bool(checked)
+                            self.gantt_chart_view.render_gantt(self.model)
+                        if self.statusBar():
+                            self.statusBar().showMessage("Connectors " + ("enabled" if checked else "disabled"), 2000)
+                    except Exception:
+                        pass
+                act_toggle_connectors.toggled.connect(do_toggle_connectors)
+                def set_mode(mode):
+                    try:
+                        qs.setValue('Gantt/connectors_mode', mode)
+                        if hasattr(self, 'gantt_chart_view'):
+                            self.gantt_chart_view._connector_mode = mode
+                            self.gantt_chart_view.render_gantt(self.model)
+                        if self.statusBar():
+                            self.statusBar().showMessage(f"Connector mode: {mode}", 2000)
+                    except Exception:
+                        pass
+                def pick_all():
+                    act_mode_all.setChecked(True); act_mode_deps.setChecked(False); set_mode('all')
+                def pick_deps():
+                    act_mode_all.setChecked(False); act_mode_deps.setChecked(True); set_mode('deps')
+                act_mode_all.triggered.connect(pick_all)
+                act_mode_deps.triggered.connect(pick_deps)
+                # Allow clicking the title of submenu parent to cycle modes (optional future enhancement)
+                # Future: could add a settings dialog for thresholds
                 # Create Shared Folder (OneDrive template)
                 def do_create_shared_folder():
                     try:
