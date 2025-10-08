@@ -103,6 +103,25 @@ python tools/make_icons.py
 ```
 On Windows this ensures a deterministic `header.ico` prior to packaging.
 
+You can customize sizes during release builds:
+```powershell
+./build_release.ps1 -IconSizes "16,32,48,128,256" -ForceIcon
+```
+or directly:
+```bash
+python tools/make_icons.py --sizes 16,32,48,128,256 --force
+```
+Default curated set: 16,24,32,48,64,128,256 (balanced small/medium/HiDPI coverage). You can omit rarely used 24/64 for smaller ICO.
+
+### Git Hook (Icon Freshness Warning)
+Install the provided pre-commit hook to be reminded when `header.svg` changed but `header.ico` was not regenerated:
+```powershell
+./tools/install_git_hooks.ps1
+```
+Hook behavior:
+- Warns (does not block) if `header.svg` is newer than `header.ico` or `header.ico` missing.
+- Suggests regeneration command: `python tools/make_icons.py --force`.
+
 ### Desktop Shortcut Icon
 The application offers to create a desktop shortcut on first run and will use `header.ico` automatically if it exists. If the shortcut was created before the icon existed, delete and recreate it via the in‑app menu (or just remove `header.ico` and relaunch to regenerate and rebuild the shortcut manually).
 

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Pre-commit hook: warn if header.svg is newer than header.ico (suggest regenerating icons)
+# Allows commit to proceed (non-blocking) but prints guidance.
+
+SVG="header.svg"
+ICO="header.ico"
+if [ -f "$SVG" ]; then
+  if [ ! -f "$ICO" ]; then
+    echo "[pre-commit] WARNING: $ICO missing (run: python tools/make_icons.py --force)" >&2
+  else
+    if [ "$SVG" -nt "$ICO" ]; then
+      echo "[pre-commit] WARNING: $SVG is newer than $ICO. Regenerate with: python tools/make_icons.py --force" >&2
+    fi
+  fi
+fi
+exit 0

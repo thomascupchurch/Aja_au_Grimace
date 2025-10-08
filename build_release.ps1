@@ -34,7 +34,9 @@ param(
   [switch]$SkipClean,
   [switch]$OneFile,
   [string]$Version = "",
-  [int]$Keep = 0
+  [int]$Keep = 0,
+  [string]$IconSizes = "16,24,32,48,64,128,256",
+  [switch]$ForceIcon
 )
 $ErrorActionPreference = 'Stop'
 
@@ -86,6 +88,40 @@ Write-Section "Run PyInstaller build"
 $specFile = if ($OneFile) { 'main_onefile.spec' } else { 'main.spec' }
 if (-not (Test-Path $specFile)) { throw "Spec file '$specFile' not found." }
 Write-Host "Using spec: $specFile" -ForegroundColor DarkYellow
+
+# --- Auto Icon Generation -----------------------------------------------------
+try {
+  $iconScript = Join-Path (Get-Location) 'tools/make_icons.py'
+  if (Test-Path $iconScript) {
+    $argsList = @()
+    if ($ForceIcon) { $argsList += '--force' }
+    if ($IconSizes) { $argsList += @('--sizes', $IconSizes) }
+    # Auto-generate macOS ICNS if platform is Darwin (when script executed under PowerShell Core on macOS)
+    try {
+      $isMac = $false
+      if ($PSVersionTable.Platform -eq 'Unix') {
+        # Check uname for Darwin (avoid relying solely on $IsMacOS which older Windows PowerShell lacks)
+        $uname = (uname 2>$null)
+        if ($uname -match 'Darwin') { $isMac = $true }
+      }
+      if ($isMac) { $argsList += '--icns' }
+    } catch { }
+    Write-Host "Icon generation: python tools/make_icons.py $($argsList -join ' ')" -ForegroundColor DarkCyan
+    & $pythonExe $iconScript @argsList
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "[warn] Icon generation returned $LASTEXITCODE (continuing build)." -ForegroundColor Yellow
+    } elseif (-not (Test-Path 'header.ico')) {
+      Write-Host "[warn] header.ico still missing after icon generation." -ForegroundColor Yellow
+    } else {
+      Write-Host "Icon generation complete." -ForegroundColor Green
+      if (Test-Path 'header.icns') { Write-Host "Detected header.icns (macOS app icon available)." -ForegroundColor Green }
+    }
+  } else {
+    Write-Host "[info] tools/make_icons.py not found; skipping icon pre-build." -ForegroundColor DarkGray
+  }
+} catch {
+  Write-Host "[warn] Exception during icon generation: $($_.Exception.Message)" -ForegroundColor Yellow
+}
 
 # If ForceKill specified, attempt to terminate any running instance of prior exe (common cause of WinError 5)
 if ($ForceKill) {
