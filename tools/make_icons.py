@@ -28,9 +28,18 @@ from datetime import datetime
 ICO_DEFAULT_SIZES = [16,24,32,48,64,128,256]
 
 try:
-    from PIL import Image
+    from PIL import Image  # type: ignore
 except Exception as e:  # pragma: no cover
-    print("[make_icons] Pillow not installed; cannot proceed.", file=sys.stderr)
+    # Provide richer diagnostics so build script can surface the root cause instead of a generic message.
+    print("[make_icons] Pillow import failed; cannot proceed.", file=sys.stderr)
+    try:
+        print(f"[make_icons] sys.executable={sys.executable}", file=sys.stderr)
+        print("[make_icons] sys.path:", file=sys.stderr)
+        for p in sys.path:
+            print(f"  - {p}", file=sys.stderr)
+        print(f"[make_icons] Exception: {type(e).__name__}: {e}", file=sys.stderr)
+    except Exception:
+        pass
     sys.exit(2)
 
 def svg_to_png_bytes(svg_path: str, size: int) -> bytes | None:

@@ -6,7 +6,9 @@ import os
 #   Windows: header.ico auto-used if present (generate via runtime or python tools/make_icons.py)
 #   macOS: create header.icns (python tools/make_icons.py --icns) and set icon='header.icns'
 
-datas_list = [('project_data.db', '.'), ('images/*', 'images'), ('header.svg', '.'), ('header.png', '.'), ('header.ico', '.')]
+datas_list = [('project_data.db', '.'), ('images/*', 'images'), ('header.svg', '.'), ('header.png', '.')]
+if os.path.exists('header.ico'):
+    datas_list.append(('header.ico', '.'))
 if os.path.isdir('attachments'):
     datas_list.append(('attachments/*', 'attachments'))
 
@@ -19,7 +21,8 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # Exclude PyQt5 to prevent dual-binding collection; the migration shim populates PyQt5 namespace from PyQt6.
+    excludes=['PyQt5'],
     noarchive=False,
     optimize=0,
 )

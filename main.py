@@ -7217,8 +7217,9 @@ class MainWindow(QMainWindow):
                 try:
                     url_path = shortcut_base + '.url'
                     with open(url_path, 'w', encoding='utf-8') as f:
+                        norm_target = target.replace('\\', '/')
                         f.write('[InternetShortcut]\n')
-                        f.write(f'URL=file:///{target.replace("\\", "/")}\n')
+                        f.write(f'URL=file:///{norm_target}\n')
                         f.write('IconIndex=0\n')
                         if icon_path and os.path.exists(icon_path):
                             f.write(f'IconFile={icon_path}\n')

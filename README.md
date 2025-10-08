@@ -180,6 +180,46 @@ Internal LSI Graphics project management tool.
 
 Generated & maintained with assistance from GitHub Copilot Chat.
 
+## Qt Binding Strategy (PyQt6 Migration Shim)
+
+The codebase now standardizes on PyQt6 while legacy import statements (`from PyQt5...`) still appear in modules. A migration shim at the very top of `main.py` imports PyQt6 and then dynamically inserts PyQt6 modules into `sys.modules` under `PyQt5.*` keys (e.g. `PyQt5.QtWidgets`). This lets older code paths run unmodified during the transition.
+
+Packaging detail:
+* The PyInstaller spec files explicitly set `excludes=['PyQt5']` so that only PyQt6 binaries are collected. The shim ensures any `PyQt5` imports resolve to PyQt6 objects at runtime.
+* This prevents PyInstaller from attempting to gather both bindings (which otherwise triggers a multi-binding conflict or inflated bundle size).
+
+If you observe build logs referencing both `hook-PyQt5.py` and `hook-PyQt6.py`, a stale `build/` cache is likely. Fix by removing `build/` & `dist/` and rebuilding:
+```powershell
+Remove-Item -Recurse -Force build, dist
+./build_release.ps1 -OneFile -ForceIcon
+```
+
+Future cleanup plan:
+1. Replace any lingering `from PyQt5...` imports with their PyQt6 counterparts.
+2. Remove the shim block from `main.py`.
+3. Drop the `excludes=['PyQt5']` entry from the spec files.
+
+## Pillow `_imaging` Import Troubleshooting
+
+During icon generation (`tools/make_icons.py`), a corrupted or partial Pillow install can produce:
+```
+ImportError: cannot import name '_imaging' from 'PIL'
+```
+Resolution steps:
+```powershell
+.venv\Scripts\python.exe -m pip uninstall -y Pillow
+.venv\Scripts\python.exe -m pip install --no-cache-dir Pillow
+```
+Then regenerate icons:
+```powershell
+python tools/make_icons.py --force
+```
+Or force via release script:
+```powershell
+./build_release.ps1 -ForceIcon -OneFile
+```
+If issues persist, ensure no second Python environment is shadowing the venv and verify that `PIL\_imaging*.pyd` files exist inside `.venv/Lib/site-packages/PIL/`.
+
 ## Lightweight Deployment / Sync (deploy.ps1)
 
 For quickly pushing an updated working copy (source tree or PyInstaller build output) to a shared folder (e.g. a OneDrive/SharePoint synced location), use the included `deploy.ps1` script.

@@ -14,7 +14,9 @@ import os
 #   python tools/make_icons.py --force
 
 # Build datas list dynamically so missing optional folders don't break build
-datas_list = [('project_data.db', '.'), ('images/*', 'images'), ('header.svg', '.'), ('header.png', '.'), ('header.ico', '.')]
+datas_list = [('project_data.db', '.'), ('images/*', 'images'), ('header.svg', '.'), ('header.png', '.')]
+if os.path.exists('header.ico'):
+    datas_list.append(('header.ico', '.'))
 if os.path.isdir('attachments'):
     datas_list.append(('attachments/*', 'attachments'))
 
@@ -28,7 +30,8 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # Exclude PyQt5 so only PyQt6 binaries are collected; shim maps PyQt6 modules into PyQt5.* names.
+    excludes=['PyQt5'],
     noarchive=False,
     optimize=0,
 )

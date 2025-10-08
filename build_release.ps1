@@ -38,6 +38,7 @@ param(
   [string]$IconSizes = "16,24,32,48,64,128,256",
   [switch]$ForceIcon,
   [switch]$MacBundle
+  , [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
 
@@ -67,18 +68,26 @@ $archiveName = "release_${stamp}${versionTag}${channelTag}${hashTag}.zip"
 
 if (-not $SkipClean) {
   Write-Section "Clean previous build artifacts"
-  Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
+  if ($DryRun) {
+    Write-Host "[dryrun] Would remove build/, dist/" -ForegroundColor DarkGray
+  } else {
+    Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
+  }
 } else {
   Write-Section "Skip clean (user requested)"
 }
 
 # After determining $pythonExe and before invoking PyInstaller:
 Write-Host "=== Ensure PyInstaller present ==="
-& $pythonExe -c "import importlib,sys; sys.exit(0 if importlib.util.find_spec('PyInstaller') else 1)"
-if ($LASTEXITCODE -ne 0) {
-  Write-Host "[build] Installing PyInstaller..." -ForegroundColor Cyan
-  & $pythonExe -m pip install --upgrade pip
-  & $pythonExe -m pip install PyInstaller
+if ($DryRun) {
+  Write-Host "[dryrun] Would check for PyInstaller (import PyInstaller) and install if missing" -ForegroundColor DarkGray
+} else {
+  & $pythonExe -c "import PyInstaller" 2>$null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "[build] Installing PyInstaller..." -ForegroundColor Cyan
+    & $pythonExe -m pip install --upgrade pip
+    & $pythonExe -m pip install PyInstaller
+  }
 }
 
 Write-Section "Run PyInstaller build"
@@ -105,14 +114,31 @@ try {
       if ($isMac) { $argsList += '--icns' }
     } catch { }
     Write-Host "Icon generation: python tools/make_icons.py $($argsList -join ' ')" -ForegroundColor DarkCyan
-    & $pythonExe $iconScript @argsList
-    if ($LASTEXITCODE -ne 0) {
-      Write-Host "[warn] Icon generation returned $LASTEXITCODE (continuing build)." -ForegroundColor Yellow
-    } elseif (-not (Test-Path 'header.ico')) {
-      Write-Host "[warn] header.ico still missing after icon generation." -ForegroundColor Yellow
+    if ($DryRun) {
+      Write-Host "[dryrun] Would invoke icon generation script" -ForegroundColor DarkGray
     } else {
-      Write-Host "Icon generation complete." -ForegroundColor Green
-      if (Test-Path 'header.icns') { Write-Host "Detected header.icns (macOS app icon available)." -ForegroundColor Green }
+      & $pythonExe $iconScript @argsList
+      if ($LASTEXITCODE -ne 0) {
+          Write-Host "[warn] Icon generation returned $LASTEXITCODE (continuing build)." -ForegroundColor Yellow
+          if ($LASTEXITCODE -eq 2) {
+            Write-Host "[info] Attempting automatic Pillow install..." -ForegroundColor DarkYellow
+            & $pythonExe -m pip install Pillow
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "[info] Retrying icon generation after Pillow install" -ForegroundColor DarkYellow
+              & $pythonExe $iconScript @argsList
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "[warn] Retry icon generation still failed ($LASTEXITCODE)." -ForegroundColor Yellow
+              }
+            } else {
+              Write-Host "[warn] Pillow auto-install failed; continuing without branded icon." -ForegroundColor Yellow
+            }
+          }
+        } elseif (-not (Test-Path 'header.ico')) {
+          Write-Host "[warn] header.ico still missing after icon generation (build will proceed without branded exe icon)." -ForegroundColor Yellow
+        } else {
+        Write-Host "Icon generation complete." -ForegroundColor Green
+        if (Test-Path 'header.icns') { Write-Host "Detected header.icns (macOS app icon available)." -ForegroundColor Green }
+      }
     }
   } else {
     Write-Host "[info] tools/make_icons.py not found; skipping icon pre-build." -ForegroundColor DarkGray
@@ -135,27 +161,31 @@ if ($ForceKill) {
   }
 }
 
-Write-Host "Invoking PyInstaller..." -ForegroundColor DarkCyan
-$buildLogFile = Join-Path $env:TEMP "build_release_pyinstaller_$(Get-Random).log"
-$previousErrorPreference = $ErrorActionPreference
-$ErrorActionPreference = 'Continue'
-try {
-  & $pythonExe -m PyInstaller --clean --noconfirm $specFile 2>&1 | Tee-Object -FilePath $buildLogFile
-  $exitCode = $LASTEXITCODE
-  if ($exitCode -ne 0) {
-    Write-Host "Initial PyInstaller run failed (exit $exitCode). Retrying without --clean..." -ForegroundColor Yellow
-  & $pythonExe -m PyInstaller --noconfirm $specFile 2>&1 | Tee-Object -FilePath $buildLogFile
+if ($DryRun) {
+  Write-Host "[dryrun] Would run PyInstaller with spec $specFile" -ForegroundColor DarkGray
+} else {
+  Write-Host "Invoking PyInstaller..." -ForegroundColor DarkCyan
+  $buildLogFile = Join-Path $env:TEMP "build_release_pyinstaller_$(Get-Random).log"
+  $previousErrorPreference = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    & $pythonExe -m PyInstaller --clean --noconfirm $specFile 2>&1 | Tee-Object -FilePath $buildLogFile
     $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+      Write-Host "Initial PyInstaller run failed (exit $exitCode). Retrying without --clean..." -ForegroundColor Yellow
+      & $pythonExe -m PyInstaller --noconfirm $specFile 2>&1 | Tee-Object -FilePath $buildLogFile
+      $exitCode = $LASTEXITCODE
+    }
+    if ($exitCode -ne 0) {
+      Write-Host "PyInstaller failed. Last 40 log lines:" -ForegroundColor Red
+      if (Test-Path $buildLogFile) { Get-Content $buildLogFile -Tail 40 | ForEach-Object { Write-Host $_ -ForegroundColor Red } }
+      throw "PyInstaller build failed (exit $exitCode)"
+    }
+  } finally {
+    $ErrorActionPreference = $previousErrorPreference
   }
-  if ($exitCode -ne 0) {
-    Write-Host "PyInstaller failed. Last 40 log lines:" -ForegroundColor Red
-    if (Test-Path $buildLogFile) { Get-Content $buildLogFile -Tail 40 | ForEach-Object { Write-Host $_ -ForegroundColor Red } }
-    throw "PyInstaller build failed (exit $exitCode)"
-  }
-} finally {
-  $ErrorActionPreference = $previousErrorPreference
+  Write-Host "PyInstaller build succeeded." -ForegroundColor Green
 }
-Write-Host "PyInstaller build succeeded." -ForegroundColor Green
 
 $distRoot = Join-Path (Get-Location) 'dist'
 
@@ -167,44 +197,52 @@ $staging = Join-Path (Get-Location) "_stage_main"
 if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
 New-Item -ItemType Directory -Path $staging | Out-Null
 
-if (Test-Path $oneDirFolder) {
+if ($DryRun) {
+  Write-Host "[dryrun] Would detect build layout (expect dist/main or dist/main.exe)" -ForegroundColor DarkGray
+}
+if (-not $DryRun -and (Test-Path $oneDirFolder)) {
   Write-Host "Detected one-dir build layout (dist/main/)." -ForegroundColor Green
   Copy-Item (Join-Path $oneDirFolder '*') $staging -Recurse -Force
-} elseif (Test-Path $oneFileExe) {
+} elseif (-not $DryRun -and (Test-Path $oneFileExe)) {
   Write-Host "Detected one-file build layout (dist/main.exe)." -ForegroundColor Green
   Copy-Item $oneFileExe (Join-Path $staging 'main.exe')
-} else {
+} elseif (-not $DryRun) {
   throw "Neither dist/main folder nor dist/main.exe found. Build layout unexpected."
 }
 
 if ($Version) {
-  Set-Content -Path (Join-Path $staging 'VERSION') -Value $Version -Encoding UTF8
+  if ($DryRun) { Write-Host "[dryrun] Would write VERSION file ($Version)" -ForegroundColor DarkGray }
+  else { Set-Content -Path (Join-Path $staging 'VERSION') -Value $Version -Encoding UTF8 }
 }
 
 if ($IncludeCLI) {
-  if (Test-Path 'cli.py') { Copy-Item 'cli.py' $staging }
-  else { Write-Warning 'cli.py not found; skipping.' }
+  if ($DryRun) { Write-Host "[dryrun] Would copy cli.py (if exists)" -ForegroundColor DarkGray }
+  elseif (Test-Path 'cli.py') { Copy-Item 'cli.py' $staging } else { Write-Warning 'cli.py not found; skipping.' }
 }
 if ($IncludeDBTemplate) {
-  if (Test-Path 'project_data.db') { Copy-Item 'project_data.db' $staging }
-  else { Write-Warning 'project_data.db not found; skipping DB template.' }
+  if ($DryRun) { Write-Host "[dryrun] Would copy project_data.db" -ForegroundColor DarkGray }
+  elseif (Test-Path 'project_data.db') { Copy-Item 'project_data.db' $staging } else { Write-Warning 'project_data.db not found; skipping DB template.' }
 }
-if (Test-Path 'README.md') { Copy-Item 'README.md' $staging }
+if ($DryRun) { Write-Host "[dryrun] Would copy README.md" -ForegroundColor DarkGray } elseif (Test-Path 'README.md') { Copy-Item 'README.md' $staging }
 
 if ($IncludeManifest) {
   Write-Section "Generate manifest.json"
-  $manifest = @()
-  Get-ChildItem -Path $staging -Recurse -File | ForEach-Object {
-    $rel = $_.FullName.Substring($staging.Length+1)
-    $hashObj = Get-FileHash -Algorithm SHA256 -Path $_.FullName
-    $manifest += [PSCustomObject]@{
-      path = $rel
-      bytes = $_.Length
-      sha256 = $hashObj.Hash.ToLower()
+  if ($DryRun) {
+    Write-Host "[dryrun] Would compute file hashes and write manifest.json" -ForegroundColor DarkGray
+  } else {
+    $manifest = @()
+    Get-ChildItem -Path $staging -Recurse -File | ForEach-Object {
+      $rel = $_.FullName.Substring($staging.Length+1)
+      $hashObj = Get-FileHash -Algorithm SHA256 -Path $_.FullName
+      $manifest += [PSCustomObject]@{
+        path = $rel
+        bytes = $_.Length
+        sha256 = $hashObj.Hash.ToLower()
+      }
     }
+    $json = $manifest | ConvertTo-Json -Depth 4
+    $json | Out-File -FilePath (Join-Path $staging 'manifest.json') -Encoding UTF8
   }
-  $json = $manifest | ConvertTo-Json -Depth 4
-  $json | Out-File -FilePath (Join-Path $staging 'manifest.json') -Encoding UTF8
 }
 
 # --- Optional macOS .app bundle repackage ------------------------------------
@@ -222,22 +260,27 @@ if ($MacBundle) {
   } else {
     $appName = 'ProjectPlanner'
     $bundleRoot = Join-Path (Get-Location) "$appName.app"
-    if (Test-Path $bundleRoot) { Remove-Item -Recurse -Force $bundleRoot }
-    $contents = Join-Path $bundleRoot 'Contents'
-    $macosDir = Join-Path $contents 'MacOS'
-    $resources = Join-Path $contents 'Resources'
-    New-Item -ItemType Directory -Path $macosDir,$resources | Out-Null
+    if ($DryRun) {
+      Write-Host "[dryrun] Would create bundle directories $bundleRoot/Contents/..." -ForegroundColor DarkGray
+    } else {
+      if (Test-Path $bundleRoot) { Remove-Item -Recurse -Force $bundleRoot }
+      $contents = Join-Path $bundleRoot 'Contents'
+      $macosDir = Join-Path $contents 'MacOS'
+      $resources = Join-Path $contents 'Resources'
+      New-Item -ItemType Directory -Path $macosDir,$resources | Out-Null
+    }
     # Choose executable: if one-file build, main.exe in staging; else pick 'main' or first .exe
     $exeCandidate = Get-ChildItem -Path $staging -File | Where-Object { $_.Name -match 'main(.exe)?' } | Select-Object -First 1
     if (-not $exeCandidate) { $exeCandidate = Get-ChildItem -Path $staging -File | Select-Object -First 1 }
-    if (-not $exeCandidate) { throw 'No executable found in staging to place inside .app bundle.' }
-    Copy-Item $exeCandidate.FullName (Join-Path $macosDir $appName) -Force
+  if (-not $exeCandidate) { if (-not $DryRun) { throw 'No executable found in staging to place inside .app bundle.' } }
+  if ($DryRun) { Write-Host "[dryrun] Would copy executable $($exeCandidate.Name) -> Contents/MacOS/$appName" -ForegroundColor DarkGray }
+  elseif ($exeCandidate) { Copy-Item $exeCandidate.FullName (Join-Path $macosDir $appName) -Force }
     # Copy resources (everything else) simplistic approach
-    Get-ChildItem -Path $staging | Where-Object { $_.FullName -ne $exeCandidate.FullName } | ForEach-Object {
-      if ($_.PSIsContainer) {
-        Copy-Item $_.FullName (Join-Path $resources $_.Name) -Recurse -Force
-      } else {
-        Copy-Item $_.FullName (Join-Path $resources $_.Name) -Force
+    if ($DryRun) { Write-Host "[dryrun] Would copy remaining staging files into Resources/" -ForegroundColor DarkGray }
+    else {
+      Get-ChildItem -Path $staging | Where-Object { $_.FullName -ne $exeCandidate.FullName } | ForEach-Object {
+        if ($_.PSIsContainer) { Copy-Item $_.FullName (Join-Path $resources $_.Name) -Recurse -Force }
+        else { Copy-Item $_.FullName (Join-Path $resources $_.Name) -Force }
       }
     }
     $plist = @(
@@ -258,26 +301,40 @@ if ($MacBundle) {
       '</plist>'
     ) -join "`n"
     $plistPath = Join-Path $contents 'Info.plist'
-    Set-Content -Path $plistPath -Value $plist -Encoding UTF8
+  if ($DryRun) { Write-Host "[dryrun] Would write Info.plist" -ForegroundColor DarkGray } else { Set-Content -Path $plistPath -Value $plist -Encoding UTF8 }
     # Add icon if present
-    if (Test-Path 'header.icns') { Copy-Item 'header.icns' (Join-Path $resources 'AppIcon.icns') }
-    Write-Host "Created macOS bundle: $bundleRoot" -ForegroundColor Green
+    if ($DryRun) { Write-Host "[dryrun] Would copy header.icns to Resources/AppIcon.icns (if exists)" -ForegroundColor DarkGray }
+    elseif (Test-Path 'header.icns') { Copy-Item 'header.icns' (Join-Path $resources 'AppIcon.icns') }
+    if (-not $DryRun) { Write-Host "Created macOS bundle: $bundleRoot" -ForegroundColor Green } else { Write-Host "[dryrun] Simulated macOS bundle creation" -ForegroundColor DarkGray }
   }
 }
 
 Write-Section "Create archive $archiveName"
-if (Test-Path $archiveName) { Remove-Item $archiveName -Force }
-Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $archiveName -Force
+if ($DryRun) {
+  Write-Host "[dryrun] Would remove existing $archiveName (if present)" -ForegroundColor DarkGray
+  Write-Host "[dryrun] Would zip staging contents into $archiveName" -ForegroundColor DarkGray
+} else {
+  if (Test-Path $archiveName) { Remove-Item $archiveName -Force }
+  Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $archiveName -Force
+}
 
-$sizeKB = [math]::Round(((Get-Item $archiveName).Length / 1KB),2)
-Write-Host "Archive created: $archiveName (${sizeKB} KB)" -ForegroundColor Green
+if ($DryRun) {
+  Write-Host "[dryrun] Would report archive size after creation" -ForegroundColor DarkGray
+} else {
+  $sizeKB = [math]::Round(((Get-Item $archiveName).Length / 1KB),2)
+  Write-Host "Archive created: $archiveName (${sizeKB} KB)" -ForegroundColor Green
+}
 
 # Generate checksum file
 Write-Section "Checksum"
-$sha = (Get-FileHash -Algorithm SHA256 -Path $archiveName).Hash.ToLower()
-$checksumLine = "$sha *$archiveName"
-Set-Content -Path "$archiveName.sha256" -Value $checksumLine -Encoding ASCII
-Write-Host "SHA256: $sha" -ForegroundColor Green
+if ($DryRun) {
+  Write-Host "[dryrun] Would compute SHA256 and write $archiveName.sha256" -ForegroundColor DarkGray
+} else {
+  $sha = (Get-FileHash -Algorithm SHA256 -Path $archiveName).Hash.ToLower()
+  $checksumLine = "$sha *$archiveName"
+  Set-Content -Path "$archiveName.sha256" -Value $checksumLine -Encoding ASCII
+  Write-Host "SHA256: $sha" -ForegroundColor Green
+}
 
 if ($Keep -gt 0) {
   Write-Section "Prune old releases (keep $Keep)"
@@ -292,8 +349,18 @@ if ($Keep -gt 0) {
 }
 
 Write-Section "Contents (staging top-level)"
-Get-ChildItem $staging | Select-Object Name, Length | Format-Table -AutoSize
+if ($DryRun) {
+  Write-Host "[dryrun] Would list staging directory contents" -ForegroundColor DarkGray
+} else {
+  Get-ChildItem $staging | Select-Object Name, Length | Format-Table -AutoSize
+}
 
 Write-Section "Done"
-Write-Host "Use: Expand-Archive $archiveName -DestinationPath test_release" -ForegroundColor Yellow
-Write-Host "(Temporary staging folder '$staging' retained; safe to delete.)" -ForegroundColor DarkGray
+if ($DryRun) {
+  Write-Host "[dryrun] Simulation complete. No files modified." -ForegroundColor Yellow
+  Write-Host "[dryrun] Planned archive: $archiveName" -ForegroundColor DarkGray
+  return
+} else {
+  Write-Host "Use: Expand-Archive $archiveName -DestinationPath test_release" -ForegroundColor Yellow
+  Write-Host "(Temporary staging folder '$staging' retained; safe to delete.)" -ForegroundColor DarkGray
+}
