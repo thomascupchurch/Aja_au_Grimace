@@ -14,13 +14,6 @@ from PyQt6.QtCore import QDate, Qt
 from PyQt6.QtGui import QPixmap
 import os
 
-# Debug sentinel (temporary) to verify actual executing file during hover crash investigation.
-DEBUG_HOVER_SENTINEL = "HOVER_PATCH_V3"
-try:
-    print(f"[DEBUG] main.py loaded sentinel={DEBUG_HOVER_SENTINEL} path={__file__}")
-except Exception:
-    pass
-
 # (Removed transitional PyQt5 compatibility shim – codebase now fully PyQt6 native)
 
 # --- Dependency cycle detection helper ---
@@ -46,6 +39,13 @@ def _would_create_cycle(model, part_name: str, new_deps: set[str]) -> bool:
         return dfs(part_name)
     except Exception:
         return False
+
+# Unified helper for smooth pixmap scaling mode (centralizes fallback logic)
+def _smooth_mode():
+    try:
+        return Qt.TransformationMode.SmoothTransformation
+    except Exception:
+        return getattr(Qt, 'SmoothTransformation', 1)
 
 # --- Central JSON lines logger -------------------------------------------------
 # Lightweight, dependency-free structured logging. Writes JSON objects one per
@@ -3649,7 +3649,7 @@ class ProjectTreeView(QWidget):
             except Exception:
                 pm = QPixmap(full)
             if not pm.isNull():
-                self.preview_label.setPixmap(pm.scaledToHeight(120, getattr(Qt,'TransformationMode', Qt).SmoothTransformation))
+                self.preview_label.setPixmap(pm.scaledToHeight(120, _smooth_mode()))
                 self.preview_label.setText("")
                 return
         self.preview_label.setText("")
@@ -4031,6 +4031,11 @@ class GanttChartView(QWidget):
         dialog.setWindowTitle(f"Edit Project Part: {row.get('Project Part', '')}")
         layout = QFormLayout(dialog)
         edits = {}
+        # Early QLabel alias to simplify guarded usages later
+        try:
+            from PyQt6.QtWidgets import QLabel as _QLocalLabel
+        except Exception:
+            _QLocalLabel = None
         # Load pricing settings for suggestions
         try:
             from PyQt6.QtCore import QSettings
@@ -4043,7 +4048,11 @@ class GanttChartView(QWidget):
             val = row.get(col, "")
             if col == "Dependencies":
                 # Enhanced Dependencies picker with filter persistence, IDs, helper buttons, cycle detection
-                from PyQt6.QtWidgets import QLineEdit as _QLineEdit, QPushButton as _QPushButton, QDialog as _DepDlg, QVBoxLayout as _VB, QListWidget, QListWidgetItem, QHBoxLayout as _HB, QLabel as _Lbl, QMessageBox
+                from PyQt6.QtWidgets import (
+                    QLineEdit as _QLineEdit, QPushButton as _QPushButton, QDialog as _DepDlg,
+                    QVBoxLayout as _VB, QListWidget, QListWidgetItem, QHBoxLayout as _HB,
+                    QLabel as _Lbl, QMessageBox, QHBoxLayout as _QHBoxLayout
+                )
                 from PyQt6.QtCore import QSettings as _QS
                 dep_edit = _QLineEdit(str(val) if val else "")
                 dep_edit.setPlaceholderText("Comma-separated part names or numeric IDs")
@@ -4117,7 +4126,16 @@ class GanttChartView(QWidget):
                     ok.clicked.connect(accept); canc.clicked.connect(d.reject)
                     d.setLayout(vb); d.resize(420,500); d.exec()
                 pick_btn = _QPushButton('Select…'); pick_btn.clicked.connect(open_dep_picker)
-                hb = QHBoxLayout(); hb.addWidget(dep_edit,1); hb.addWidget(pick_btn); layout.addRow(col, hb)
+                # Use direct class if globally imported, else fallback to alias to avoid UnboundLocalError
+                try:
+                    hb = QHBoxLayout()
+                except Exception:
+                    try:
+                        hb = _QHBoxLayout()
+                    except Exception:
+                        from PyQt6.QtWidgets import QHBoxLayout as __QL
+                        hb = __QL()
+                hb.addWidget(dep_edit,1); hb.addWidget(pick_btn); layout.addRow(col, hb)
                 continue
             if col in ("Start Date", "Calculated End Date"):
                 date_edit = QDateEdit()
@@ -4205,8 +4223,32 @@ class GanttChartView(QWidget):
                 edits[col] = hrs
                 layout.addRow(col, hrs)
             elif col == "Images":
-                hbox = QHBoxLayout()
-                img_label = QLabel()
+                # Ensure QHBoxLayout available in this scope (PyQt6 namespaced import patterns)
+                try:
+                    from PyQt6.QtWidgets import QHBoxLayout as _LocalHBox
+                except Exception:
+                    _LocalHBox = None
+                # Ensure QLabel available (avoid UnboundLocalError if overshadowed)
+                try:
+                    from PyQt6.QtWidgets import QLabel as _LocalQLabel
+                except Exception:
+                    _LocalQLabel = None
+                try:
+                    hbox = QHBoxLayout()
+                except Exception:
+                    if _LocalHBox:
+                        hbox = _LocalHBox()
+                    else:
+                        from PyQt6.QtWidgets import QHBoxLayout as _HB2
+                        hbox = _HB2()
+                try:
+                    img_label = QLabel()
+                except Exception:
+                    if _LocalQLabel:
+                        img_label = _LocalQLabel()
+                    else:
+                        from PyQt6.QtWidgets import QLabel as _QL2
+                        img_label = _QL2()
                 if val:
                     import os
                     from PyQt6.QtGui import QPixmap
@@ -4242,7 +4284,23 @@ class GanttChartView(QWidget):
             elif col == "Pace Link":
                 link_edit = QLineEdit(val)
                 edits[col] = link_edit
-                link_label = QLabel()
+                # Guarded QLabel acquisition to avoid UnboundLocalError in mixed import contexts
+                try:
+                    from PyQt6.QtWidgets import QLabel as _LinkQLabel
+                except Exception:
+                    _LinkQLabel = None
+                try:
+                    link_label = QLabel()
+                except Exception:
+                    if _LinkQLabel:
+                        try:
+                            link_label = _LinkQLabel()
+                        except Exception:
+                            from PyQt6.QtWidgets import QLabel as _QLFallback
+                            link_label = _QLFallback()
+                    else:
+                        from PyQt6.QtWidgets import QLabel as _QLFallback
+                        link_label = _QLFallback()
                 if val and (val.startswith("http://") or val.startswith("https://")):
                     link_label.setText(f'<a href="{val}">{val}</a>')
                     link_label.setOpenExternalLinks(True)
@@ -5461,11 +5519,6 @@ class GanttChartView(QWidget):
                 refresh_thumb()
                 dlg.exec()
             def _set_preview(self):
-                # DEBUG: confirm runtime version of this function
-                try:
-                    print(f"[DEBUG] _set_preview() entered sentinel={DEBUG_HOVER_SENTINEL} file={__file__}")
-                except Exception:
-                    pass
                 img_path = self.row.get("Images", "")
                 if img_path and str(img_path).strip():
                     from PyQt6.QtGui import QPixmap
@@ -5476,10 +5529,6 @@ class GanttChartView(QWidget):
                             _smooth = Qt.TransformationMode.SmoothTransformation
                         except Exception:
                             _smooth = getattr(Qt, 'SmoothTransformation', 1)
-                        try:
-                            print(f"[DEBUG] scaling preview with _smooth={_smooth}")
-                        except Exception:
-                            pass
                         self.preview_label.setPixmap(pm.scaledToHeight(90, _smooth))
                         self.preview_label.setText("")
                         return
