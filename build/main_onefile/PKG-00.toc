@@ -73,22 +73,6 @@
    'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
    'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\numpy.libs\\libscipy_openblas64_-860d95b1c38e637ce4509f5fa24fbf2a.dll',
    'BINARY'),
-  ('PyQt5\\Qt5\\bin\\opengl32sw.dll',
-   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
-   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt5\\Qt5\\bin\\opengl32sw.dll',
-   'BINARY'),
-  ('PyQt5\\Qt5\\bin\\libEGL.dll',
-   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
-   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt5\\Qt5\\bin\\libEGL.dll',
-   'BINARY'),
-  ('PyQt5\\Qt5\\bin\\libGLESv2.dll',
-   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
-   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt5\\Qt5\\bin\\libGLESv2.dll',
-   'BINARY'),
-  ('PyQt5\\Qt5\\bin\\d3dcompiler_47.dll',
-   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
-   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt5\\Qt5\\bin\\d3dcompiler_47.dll',
-   'BINARY'),
   ('unicodedata.pyd',
    'C:\\Users\\tupchurch\\AppData\\Local\\Python\\pythoncore-3.11-64\\DLLs\\unicodedata.pyd',
    'EXTENSION'),
@@ -158,8 +142,28 @@
    'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
    'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PIL\\_imaging.cp311-win_amd64.pyd',
    'EXTENSION'),
+  ('PyQt6\\QtSvg.pyd',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt6\\QtSvg.pyd',
+   'EXTENSION'),
+  ('PyQt6\\QtPrintSupport.pyd',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt6\\QtPrintSupport.pyd',
+   'EXTENSION'),
   ('_sqlite3.pyd',
    'C:\\Users\\tupchurch\\AppData\\Local\\Python\\pythoncore-3.11-64\\DLLs\\_sqlite3.pyd',
+   'EXTENSION'),
+  ('PyQt6\\QtGui.pyd',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt6\\QtGui.pyd',
+   'EXTENSION'),
+  ('PyQt6\\QtCore.pyd',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt6\\QtCore.pyd',
+   'EXTENSION'),
+  ('PyQt6\\QtWidgets.pyd',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt6\\QtWidgets.pyd',
    'EXTENSION'),
   ('VCRUNTIME140.dll',
    'C:\\Users\\tupchurch\\AppData\\Local\\Python\\pythoncore-3.11-64\\VCRUNTIME140.dll',
@@ -167,23 +171,11 @@
   ('VCRUNTIME140_1.dll',
    'C:\\Users\\tupchurch\\AppData\\Local\\Python\\pythoncore-3.11-64\\VCRUNTIME140_1.dll',
    'BINARY'),
-  ('PyQt5\\Qt5\\bin\\VCRUNTIME140.dll',
-   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
-   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt5\\Qt5\\bin\\VCRUNTIME140.dll',
-   'BINARY'),
-  ('PyQt5\\Qt5\\bin\\VCRUNTIME140_1.dll',
-   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
-   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt5\\Qt5\\bin\\VCRUNTIME140_1.dll',
-   'BINARY'),
-  ('PyQt5\\Qt5\\bin\\MSVCP140.dll',
-   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
-   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt5\\Qt5\\bin\\MSVCP140.dll',
+  ('libssl-3.dll',
+   'C:\\Users\\tupchurch\\AppData\\Local\\Python\\pythoncore-3.11-64\\DLLs\\libssl-3.dll',
    'BINARY'),
   ('libcrypto-3.dll',
    'C:\\Users\\tupchurch\\AppData\\Local\\Python\\pythoncore-3.11-64\\DLLs\\libcrypto-3.dll',
-   'BINARY'),
-  ('libssl-3.dll',
-   'C:\\Users\\tupchurch\\AppData\\Local\\Python\\pythoncore-3.11-64\\DLLs\\libssl-3.dll',
    'BINARY'),
   ('libffi-8.dll',
    'C:\\Users\\tupchurch\\AppData\\Local\\Python\\pythoncore-3.11-64\\DLLs\\libffi-8.dll',
@@ -191,8 +183,48 @@
   ('python3.dll',
    'C:\\Users\\tupchurch\\AppData\\Local\\Python\\pythoncore-3.11-64\\python3.dll',
    'BINARY'),
+  ('PyQt6\\Qt6\\bin\\Qt6Gui.dll',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\Qt6Gui.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\bin\\Qt6Core.dll',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\Qt6Core.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\bin\\Qt6Svg.dll',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\Qt6Svg.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\bin\\Qt6Widgets.dll',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\Qt6Widgets.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\bin\\Qt6PrintSupport.dll',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\Qt6PrintSupport.dll',
+   'BINARY'),
   ('sqlite3.dll',
    'C:\\Users\\tupchurch\\AppData\\Local\\Python\\pythoncore-3.11-64\\DLLs\\sqlite3.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\bin\\MSVCP140_2.dll',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\MSVCP140_2.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\bin\\MSVCP140.dll',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\MSVCP140.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\bin\\MSVCP140_1.dll',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\MSVCP140_1.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\bin\\VCRUNTIME140_1.dll',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\VCRUNTIME140_1.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\bin\\VCRUNTIME140.dll',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\VCRUNTIME140.dll',
    'BINARY'),
   ('header.ico',
    'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
@@ -485,6 +517,22 @@
    'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
    'projects\\Aja_au_Grimace\\project_data.db',
    'DATA'),
+  ('setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\top_level.txt',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\top_level.txt',
+   'DATA'),
+  ('setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\RECORD',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\RECORD',
+   'DATA'),
+  ('setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\WHEEL',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\WHEEL',
+   'DATA'),
+  ('setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\METADATA',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\METADATA',
+   'DATA'),
   ('setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\INSTALLER',
    'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
    'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\INSTALLER',
@@ -493,25 +541,9 @@
    'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
    'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\LICENSE',
    'DATA'),
-  ('setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\top_level.txt',
-   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
-   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\top_level.txt',
-   'DATA'),
-  ('setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\WHEEL',
-   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
-   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\WHEEL',
-   'DATA'),
   ('setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\REQUESTED',
    'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
    'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\REQUESTED',
-   'DATA'),
-  ('setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\METADATA',
-   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
-   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\METADATA',
-   'DATA'),
-  ('setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\RECORD',
-   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
-   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\setuptools\\_vendor\\importlib_metadata-8.0.0.dist-info\\RECORD',
    'DATA'),
   ('setuptools\\_vendor\\jaraco\\text\\Lorem ipsum.txt',
    'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
@@ -522,13 +554,13 @@
    'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
    'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\numpy-2.3.3.dist-info\\entry_points.txt',
    'DATA'),
+  ('numpy-2.3.3.dist-info\\METADATA',
+   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\numpy-2.3.3.dist-info\\METADATA',
+   'DATA'),
   ('numpy-2.3.3.dist-info\\DELVEWHEEL',
    'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
    'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\numpy-2.3.3.dist-info\\DELVEWHEEL',
-   'DATA'),
-  ('numpy-2.3.3.dist-info\\LICENSE.txt',
-   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
-   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\numpy-2.3.3.dist-info\\LICENSE.txt',
    'DATA'),
   ('numpy-2.3.3.dist-info\\RECORD',
    'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
@@ -542,9 +574,9 @@
    'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
    'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\numpy-2.3.3.dist-info\\REQUESTED',
    'DATA'),
-  ('numpy-2.3.3.dist-info\\METADATA',
+  ('numpy-2.3.3.dist-info\\LICENSE.txt',
    'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
-   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\numpy-2.3.3.dist-info\\METADATA',
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\numpy-2.3.3.dist-info\\LICENSE.txt',
    'DATA'),
   ('numpy-2.3.3.dist-info\\WHEEL',
    'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '

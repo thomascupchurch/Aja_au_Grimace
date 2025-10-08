@@ -1,4 +1,4 @@
-from PyQt5 import QtCore, QtGui, QtWidgets, QtSvg, QtPrintSupport
+from PyQt6 import QtCore, QtGui, QtWidgets, QtSvg, QtPrintSupport
 
 # Core
 Qt        = QtCore.Qt
@@ -60,12 +60,11 @@ QPrinter        = QtPrintSupport.QPrinter
 QPrintDialog    = QtPrintSupport.QPrintDialog
 QPageSetupDialog= QtPrintSupport.QPageSetupDialog
 
-# QMessageBox StandardButton shim (for test code using PyQt6 style)
-if not hasattr(QMessageBox, "StandardButton"):
-    class _SB:
-        Yes = QMessageBox.Yes
-        No = QMessageBox.No
-        Cancel = QMessageBox.Cancel
-    QMessageBox.StandardButton = _SB
+"""Centralized PyQt6 re-exports.
+
+Previously this module wrapped PyQt5 and provided a compatibility layer. Now the
+application is fully migrated to PyQt6 so we simply re-export the Qt6 symbols
+used across the project for convenience / namespace stability.
+"""
 
 __all__ = [n for n in globals() if not n.startswith('_')]

@@ -6,7 +6,7 @@ from project.qt_bindings import (
     QPen, QBrush, QColor
 )
 try:
-    from PyQt5.QtPrintSupport import QPrinter
+    from PyQt6.QtPrintSupport import QPrinter
 except Exception:  # pragma: no cover
     QPrinter = None  # type: ignore
 try:

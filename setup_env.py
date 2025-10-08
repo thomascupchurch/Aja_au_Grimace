@@ -24,8 +24,8 @@ def install_dependencies():
     
     commands = [
         "pip install --upgrade pip",
-        # Standardize on PyQt5 runtime; shim provides PyQt6 namespace if needed
-        "pip install PyQt5==5.15.11",
+        # Native PyQt6 runtime (shim removed)
+        "pip install PyQt6",
         "pip install openpyxl python-dateutil pyinstaller"
     ]
     
@@ -44,13 +44,10 @@ def test_installation():
     
     test_script = """
 try:
-    from PyQt5.QtWidgets import QApplication
-    print('[OK] PyQt5 working!')
-    # Also verify PyQt6 shim resolves
-    import PyQt6.QtWidgets  # noqa: F401
-    print('[OK] PyQt6 shim available')
+    from PyQt6.QtWidgets import QApplication  # noqa: F401
+    print('[OK] PyQt6 working!')
 except ImportError:
-    print('[ERROR] Qt binding not installed')
+    print('[ERROR] PyQt6 not installed')
     exit(1)
 """
     

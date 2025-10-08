@@ -9,7 +9,7 @@ from project.qt_bindings import (
 )
 try:
     # QPrinter may not be present in very minimal environments
-    from PyQt5.QtPrintSupport import QPrinter
+    from PyQt6.QtPrintSupport import QPrinter
 except Exception:  # pragma: no cover
     QPrinter = None  # type: ignore
 from project.helpers import resolve_resource_path, load_holiday_dates

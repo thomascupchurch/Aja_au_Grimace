@@ -18,7 +18,7 @@ class MainWindow(QMainWindow):
     def __init__(self, model):
         super().__init__()
         self.model = model
-        self.setWindowTitle("Project Planner (PyQt5)")
+        self.setWindowTitle("Project Planner")
         self.resize(1400, 900)
 
         root = QWidget()
@@ -52,7 +52,7 @@ class MainWindow(QMainWindow):
 
         sb = QStatusBar()
         self.setStatusBar(sb)
-        sb.showMessage("Ready (PyQt5)")
+        sb.showMessage("Ready")
 
         # Load holiday dates
         self.holiday_dates = load_holiday_dates()

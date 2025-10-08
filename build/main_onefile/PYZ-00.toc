@@ -302,7 +302,7 @@
    'PYMODULE'),
   ('PyQt6',
    'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
-   'projects\\Aja_au_Grimace\\PyQt6\\__init__.py',
+   'projects\\Aja_au_Grimace\\.venv\\Lib\\site-packages\\PyQt6\\__init__.py',
    'PYMODULE'),
   ('__future__',
    'C:\\Users\\tupchurch\\AppData\\Local\\Python\\pythoncore-3.11-64\\Lib\\__future__.py',
@@ -2938,10 +2938,6 @@
    'PYMODULE'),
   ('site',
    'C:\\Users\\tupchurch\\AppData\\Local\\Python\\pythoncore-3.11-64\\Lib\\site.py',
-   'PYMODULE'),
-  ('sitecustomize',
-   'C:\\Users\\tupchurch\\OneDrive - LSI\\Github '
-   'projects\\Aja_au_Grimace\\sitecustomize.py',
    'PYMODULE'),
   ('socket',
    'C:\\Users\\tupchurch\\AppData\\Local\\Python\\pythoncore-3.11-64\\Lib\\socket.py',

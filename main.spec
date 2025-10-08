@@ -26,11 +26,12 @@ a = Analysis(
     binaries=[],
     # Include database, images, and optionally attachments directory contents
     datas=datas_list,
-    hiddenimports=['PyQt5.QtSvg'],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # Exclude PyQt5 so only PyQt6 binaries are collected; shim maps PyQt6 modules into PyQt5.* names.
+    # Explicitly exclude PyQt5 to prevent PyInstaller from attempting to run its hook
+    # in case any stale bytecode or tooling scripts reference the name.
     excludes=['PyQt5'],
     noarchive=False,
     optimize=0,

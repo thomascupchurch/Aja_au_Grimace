@@ -96,6 +96,53 @@ $specFile = if ($OneFile) { 'main_onefile.spec' } else { 'main.spec' }
 if (-not (Test-Path $specFile)) { throw "Spec file '$specFile' not found." }
 Write-Host "Using spec: $specFile" -ForegroundColor DarkYellow
 
+# --- Pillow Self-Test (pre Icon Generation) ----------------------------------
+if (-not $DryRun) {
+  Write-Host "Performing Pillow self-test..." -ForegroundColor DarkCyan
+  $selfTestCode = @'
+import sys
+try:
+    from PIL import Image, ImageFilter  # noqa: F401
+    im = Image.new('RGBA', (2,2), (255,0,0,255))
+    im.filter(ImageFilter.BLUR)
+except Exception as e:
+    print('[pillow-selftest] FAIL:', repr(e))
+    sys.exit(3)
+else:
+    print('[pillow-selftest] OK')
+'@
+  $tmpSelfTest = [System.IO.Path]::GetTempFileName() + '.py'
+  Set-Content -Path $tmpSelfTest -Value $selfTestCode -Encoding UTF8
+  & $pythonExe $tmpSelfTest
+  $selfTestExit = $LASTEXITCODE
+  Remove-Item $tmpSelfTest -Force -ErrorAction SilentlyContinue
+  if ($selfTestExit -eq 3) {
+    Write-Host "[pillow-selftest] Attempting repair (force reinstall Pillow)..." -ForegroundColor Yellow
+    & $pythonExe -m pip install --no-cache-dir --force-reinstall Pillow
+    if ($LASTEXITCODE -eq 0) {
+      $retestCode = @'
+import sys
+try:
+    from PIL import Image
+    Image.new('RGB',(1,1))
+except Exception as e:
+    print('[pillow-selftest] Still failing:', repr(e))
+    sys.exit(3)
+else:
+    print('[pillow-selftest] OK after repair')
+'@
+      $tmpRetest = [System.IO.Path]::GetTempFileName() + '.py'
+      Set-Content -Path $tmpRetest -Value $retestCode -Encoding UTF8
+      & $pythonExe $tmpRetest
+      Remove-Item $tmpRetest -Force -ErrorAction SilentlyContinue
+    } else {
+      Write-Host "[pillow-selftest] Repair failed; continuing (icon generation may fall back)." -ForegroundColor Yellow
+    }
+  }
+} else {
+  Write-Host "[dryrun] Would perform Pillow self-test" -ForegroundColor DarkGray
+}
+
 # --- Auto Icon Generation -----------------------------------------------------
 try {
   $iconScript = Join-Path (Get-Location) 'tools/make_icons.py'

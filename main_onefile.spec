@@ -17,11 +17,11 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=datas_list,
-    hiddenimports=['PyQt5.QtSvg'],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # Exclude PyQt5 to prevent dual-binding collection; the migration shim populates PyQt5 namespace from PyQt6.
+    # Pure PyQt6 build; force exclude PyQt5 to avoid dual-binding hook attempt
     excludes=['PyQt5'],
     noarchive=False,
     optimize=0,
