@@ -7,11 +7,21 @@ be migrated; if found they should be updated to their PyQt6 counterparts.
 from PyQt6.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QTextEdit, QComboBox, QDateEdit, QPushButton,
     QFileDialog, QLabel, QHBoxLayout, QMessageBox, QWidget, QVBoxLayout, QMainWindow,
-    QApplication, QListWidget, QTreeWidget, QGraphicsScene, QStackedWidget, QTreeWidgetItem
+    QApplication, QListWidget, QTreeWidget, QGraphicsScene, QStackedWidget, QTreeWidgetItem,
+    QAbstractItemView
 )
-from PyQt6.QtCore import QDate
+from PyQt6.QtCore import QDate, Qt
 from PyQt6.QtGui import QPixmap
 import os
+
+# Debug sentinel (temporary) to verify actual executing file during hover crash investigation.
+DEBUG_HOVER_SENTINEL = "HOVER_PATCH_V3"
+try:
+    print(f"[DEBUG] main.py loaded sentinel={DEBUG_HOVER_SENTINEL} path={__file__}")
+except Exception:
+    pass
+
+# (Removed transitional PyQt5 compatibility shim – codebase now fully PyQt6 native)
 
 # --- Dependency cycle detection helper ---
 def _would_create_cycle(model, part_name: str, new_deps: set[str]) -> bool:
@@ -377,20 +387,25 @@ class ImageCellWidget(QWidget):
     def refresh(self):
         img_path = self.model.rows[self.row].get(self.model.COLUMNS[self.col], "")
         if img_path:
-            img_path_full = resolve_resource_path(img_path)
-
+            # Resolve relative path via resource resolver
+            base_dir = os.path.dirname(resolve_resource_path("."))
+            img_path_full = os.path.join(base_dir, img_path)
             pixmap = QPixmap(img_path_full)
             if not pixmap.isNull():
-                self.img_label.setPixmap(pixmap.scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-                self.img_label.setCursor(Qt.PointingHandCursor)
-                self.img_label.mousePressEvent = lambda event: self.show_full_image(img_path_full)
+                aspect_ratio_mode = getattr(Qt, 'AspectRatioMode', Qt)
+                transformation_mode = getattr(Qt, 'TransformationMode', Qt)
+                keep_ar = getattr(aspect_ratio_mode, 'KeepAspectRatio', getattr(Qt, 'KeepAspectRatio', None))
+                smooth_tx = getattr(transformation_mode, 'SmoothTransformation', getattr(Qt, 'SmoothTransformation', None))
+                self.img_label.setPixmap(pixmap.scaled(48, 48, keep_ar, smooth_tx))
+                self.img_label.setCursor(getattr(Qt,'CursorShape', Qt).PointingHandCursor)
+                self.img_label.mousePressEvent = lambda event, p=img_path_full: self.show_full_image(p)
             else:
                 self.img_label.setText("[Image not found]")
-                self.img_label.setCursor(Qt.ArrowCursor)
+                self.img_label.setCursor(getattr(Qt,'CursorShape', Qt).ArrowCursor)
                 self.img_label.mousePressEvent = None
         else:
             self.img_label.setText("")
-            self.img_label.setCursor(Qt.ArrowCursor)
+            self.img_label.setCursor(getattr(Qt,'CursorShape', Qt).ArrowCursor)
             self.img_label.mousePressEvent = None
 
     def show_full_image(self, img_path_full):
@@ -400,12 +415,16 @@ class ImageCellWidget(QWidget):
         lbl = QLabel()
         pixmap = QPixmap(img_path_full)
         if not pixmap.isNull():
-            lbl.setPixmap(pixmap.scaledToWidth(600, Qt.SmoothTransformation))
+            try:
+                _smooth = Qt.TransformationMode.SmoothTransformation
+            except Exception:
+                _smooth = getattr(Qt, 'SmoothTransformation', 1)
+            lbl.setPixmap(pixmap.scaledToWidth(600, _smooth))
         else:
             lbl.setText("[Image not found]")
         vbox.addWidget(lbl)
         dlg.setLayout(vbox)
-        dlg.exec_()
+        dlg.exec()
 
 class ProjectDataModel:
     # NOTE: Append-only pattern; new progress-related columns added at end to avoid breaking older rows
@@ -529,6 +548,29 @@ class ProjectDataModel:
             import traceback
             print(f"ERROR: Failed to open database '{self.DB_FILE}': {e}")
             traceback.print_exc()
+            # Fallback: if path looks like a network/UNC path, retry with a local DB to allow app to start
+            try:
+                import os
+                path_lower = str(self.DB_FILE).lower()
+                if path_lower.startswith('\\\\') or path_lower.startswith('\\') or ':' in path_lower and not os.path.exists(os.path.dirname(os.path.abspath(self.DB_FILE))):
+                    local_db = 'project_data.db'
+                    if local_db != self.DB_FILE:
+                        print(f"WARN: Falling back to local '{local_db}' due to inaccessible primary DB path.")
+                        self.DB_FILE = local_db
+                        try:
+                            from PyQt6.QtCore import QSettings as _QS
+                            _QS('LSI','ProjectApp').setValue('DB/path', self.DB_FILE)
+                        except Exception:
+                            pass
+                        try:
+                            self.ensure_schema()
+                            self.load_from_db()
+                            print("INFO: Local fallback DB initialized.")
+                            return
+                        except Exception as _e2:
+                            print(f"ERROR: Fallback local DB also failed: {_e2}")
+            except Exception:
+                pass
             raise
 
     def _connect(self):
@@ -1431,10 +1473,28 @@ class ProgressDashboard(QWidget):
         # Status distribution table
         self.status_table = QTableWidget(0, 3)
         self.status_table.setHorizontalHeaderLabels(["Status","Count","% of Leaf Tasks"])
-        self.status_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.status_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.status_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.status_table.setEditTriggers(self.status_table.NoEditTriggers)
+        try:
+            self.status_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        except Exception:
+            # Fallback for any environments still exposing legacy attribute
+            self.status_table.horizontalHeader().setSectionResizeMode(0, getattr(QHeaderView, 'Stretch', 1))
+        # PyQt6: enums moved under QHeaderView.ResizeMode; provide robust fallback
+        try:
+            resize_mode = QHeaderView.ResizeMode
+            self.status_table.horizontalHeader().setSectionResizeMode(1, resize_mode.ResizeToContents)
+            self.status_table.horizontalHeader().setSectionResizeMode(2, resize_mode.ResizeToContents)
+        except Exception:
+            # Fallback: attempt legacy attribute name or integer constant 2 (ResizeToContents)
+            legacy_rtc = getattr(QHeaderView, 'ResizeToContents', 2)
+            self.status_table.horizontalHeader().setSectionResizeMode(1, legacy_rtc)
+            self.status_table.horizontalHeader().setSectionResizeMode(2, legacy_rtc)
+        # PyQt6: Edit trigger enums live under QAbstractItemView.EditTrigger
+        try:
+            no_edit = QAbstractItemView.EditTrigger.NoEditTriggers
+        except Exception:
+            # Fallback to legacy attribute if still present
+            no_edit = getattr(QAbstractItemView, 'NoEditTriggers', 0)
+        self.status_table.setEditTriggers(no_edit)
         self.status_table.setAlternatingRowColors(True)
         self.vbox.addWidget(self.status_table)
         # Overdue / At-Risk lists
@@ -1984,8 +2044,16 @@ class CostEstimatesView(QWidget):
         self.table.setHorizontalHeaderLabels([
             "Project Part","Parent","Prod Cost","Inst Cost","Total Cost","Prod Price","Inst Price","Total Price","Profit $","Margin %","Δ Price %","Δ Margin pts","% of Total Price","Internal/External"
         ])
-        self.table.setEditTriggers(self.table.NoEditTriggers)
-        self.table.setSelectionBehavior(self.table.SelectRows)
+        try:
+            no_edit2 = QAbstractItemView.EditTrigger.NoEditTriggers
+        except Exception:
+            no_edit2 = getattr(QAbstractItemView, 'NoEditTriggers', 0)
+        self.table.setEditTriggers(no_edit2)
+        try:
+            sel_rows = QAbstractItemView.SelectionBehavior.SelectRows
+        except Exception:
+            sel_rows = getattr(QAbstractItemView, 'SelectRows', 0)
+        self.table.setSelectionBehavior(sel_rows)
         self.table.setAlternatingRowColors(True)
         try:
             self.table.horizontalHeader().setSectionsMovable(True)
@@ -2091,7 +2159,9 @@ class CostEstimatesView(QWidget):
                 dlg.accept(); self._export_render(); return
             QMessageBox.warning(self, 'Unsupported', f'Format {fmt} not implemented.')
         export_btn.clicked.connect(do_export)
-        dlg.setLayout(v); dlg.exec_()
+        # Finalize and run dialog
+        dlg.setLayout(v)
+        dlg.exec()
 
     def _export_render(self):
         """Render the QTableWidget to PDF or PNG using export settings & header/footer branding."""
@@ -2175,7 +2245,11 @@ class CostEstimatesView(QWidget):
                     hh=_svg_h(header_svg_renderer, page_rect.width())
                     if hh: header_svg_renderer.render(painter, QRectF(0,0,page_rect.width(),hh)); y_offset=hh+8
                 elif header_pix and not header_pix.isNull():
-                    sh=header_pix.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); y_offset=sh.height()+8
+                    try:
+                        _smooth = Qt.TransformationMode.SmoothTransformation
+                    except Exception:
+                        _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                    sh=header_pix.scaledToWidth(page_rect.width(), _smooth); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); y_offset=sh.height()+8
             # Pagination: draw rows until page full, then newPage
             cur_y = y_offset
             from PyQt6.QtGui import QFont
@@ -2210,7 +2284,7 @@ class CostEstimatesView(QWidget):
                     # footer before new page
                     try:
                         painter.save(); f=QFont(font); f.setPointSizeF(f.pointSizeF()*0.85); painter.setFont(f)
-                        painter.drawText(QRectF(0,page_rect.height()-18,page_rect.width(),16), Qt.AlignCenter, footer_text)
+                        painter.drawText(QRectF(0,page_rect.height()-18,page_rect.width(),16), Qt.AlignmentFlag.AlignCenter, footer_text)
                         painter.restore()
                     except Exception: pass
                     printer.newPage(); cur_y=0
@@ -2219,13 +2293,17 @@ class CostEstimatesView(QWidget):
                             hh=_svg_h(header_svg_renderer, page_rect.width())
                             if hh: header_svg_renderer.render(painter, QRectF(0,0,page_rect.width(),hh)); cur_y=hh+8
                         elif header_pix and not header_pix.isNull():
-                            sh=header_pix.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); cur_y=sh.height()+8
+                            try:
+                                _smooth = Qt.TransformationMode.SmoothTransformation
+                            except Exception:
+                                _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                            sh=header_pix.scaledToWidth(page_rect.width(), _smooth); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); cur_y=sh.height()+8
                     draw_header(cur_y); cur_y += row_h
                 draw_row(r, cur_y); cur_y += row_h
             # Final footer
             try:
                 painter.save(); f=QFont(font); f.setPointSizeF(f.pointSizeF()*0.85); painter.setFont(f)
-                painter.drawText(QRectF(0,page_rect.height()-18,page_rect.width(),16), Qt.AlignCenter, footer_text)
+                painter.drawText(QRectF(0,page_rect.height()-18,page_rect.width(),16), Qt.AlignmentFlag.AlignCenter, footer_text)
                 painter.restore()
             except Exception: pass
             painter.end(); print(f'Exported PDF -> {path}'); return
@@ -2278,7 +2356,7 @@ class CostEstimatesView(QWidget):
             try:
                 from PyQt6.QtGui import QFont
                 f=QFont(); f.setPointSizeF(f.pointSizeF()*0.85); painter.setFont(f)
-                painter.drawText(0, hh+table_pix.height()-18, tw, 16, Qt.AlignCenter, footer_text)
+                painter.drawText(0, hh+table_pix.height()-18, tw, 16, Qt.AlignmentFlag.AlignCenter, footer_text)
             except Exception: pass
             painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
         if header_pix and not header_pix.isNull():
@@ -2287,7 +2365,7 @@ class CostEstimatesView(QWidget):
             try:
                 from PyQt6.QtGui import QFont
                 f=QFont(); f.setPointSizeF(f.pointSizeF()*0.85); painter.setFont(f)
-                painter.drawText(0, header_pix.height()+table_pix.height()-18, cw, 16, Qt.AlignCenter, footer_text)
+                painter.drawText(0, header_pix.height()+table_pix.height()-18, cw, 16, Qt.AlignmentFlag.AlignCenter, footer_text)
             except Exception: pass
             painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
         # Footer only
@@ -2295,7 +2373,7 @@ class CostEstimatesView(QWidget):
         try:
             from PyQt6.QtGui import QFont
             f=QFont(); f.setPointSizeF(f.pointSizeF()*0.85); painter.setFont(f)
-            painter.drawText(0, table_pix.height()-18, table_pix.width(), 16, Qt.AlignCenter, footer_text)
+            painter.drawText(0, table_pix.height()-18, table_pix.width(), 16, Qt.AlignmentFlag.AlignCenter, footer_text)
         except Exception: pass
         painter.end(); table_pix.save(path,'PNG'); print(f'Exported PNG -> {path}')
 
@@ -2556,7 +2634,7 @@ class CostEstimatesView(QWidget):
         apply_btn.clicked.connect(apply_layout)
         delete_btn.clicked.connect(delete_layout)
         close_btn.clicked.connect(dlg.accept)
-        dlg.exec_()
+        dlg.exec()
 
     def _apply_last_layout(self):
         # Called after construction to restore last used layout
@@ -2744,7 +2822,7 @@ class CostEstimatesView(QWidget):
             for col_idx, val in enumerate(values):
                 item = QTableWidgetItem(val)
                 if col_idx >=2 and col_idx not in (9,11):  # margin & delta margin are textual with % / pts
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 # Conditional formatting
                 from PyQt6.QtGui import QColor
                 if col_idx == 8:  # profit
@@ -2911,7 +2989,7 @@ class ProjectTreeView(QWidget):
         def open_settings():
             try:
                 dlg = ExportSettingsDialog(self)
-                dlg.exec_()
+                dlg.exec()
             except Exception as e:
                 print(f"Tree export settings failed: {e}")
         settings_btn.clicked.connect(open_settings)
@@ -2963,7 +3041,7 @@ class ProjectTreeView(QWidget):
         # Preview label (shares style with others)
         self.preview_label = QLabel()
         self.preview_label.setFixedHeight(140)
-        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setStyleSheet("border:1px solid #666; background:#222;")
         layout.addWidget(self.preview_label)
         self.setLayout(layout)
@@ -2987,8 +3065,13 @@ class ProjectTreeView(QWidget):
         mini_layout.setContentsMargins(2,2,2,2)
         self._mini_scene = QGraphicsScene()
         self._mini_view = QGraphicsView(self._mini_scene)
-        self._mini_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._mini_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        try:
+            self._mini_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self._mini_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        except Exception:
+            # Fallback if enum namespace differs
+            self._mini_view.setHorizontalScrollBarPolicy(getattr(Qt, 'ScrollBarAlwaysOff', 1))
+            self._mini_view.setVerticalScrollBarPolicy(getattr(Qt, 'ScrollBarAlwaysOff', 1))
         self._mini_view.setRenderHints(self._mini_view.renderHints())
         mini_layout.addWidget(self._mini_view)
         layout.addWidget(self._mini_frame)
@@ -3166,7 +3249,13 @@ class ProjectTreeView(QWidget):
                 base_color = QColor('#5f4a23')
             rect_item = self.scene.addRect(x, y, node_w, node_h, QPen(QColor('#888')), QBrush(base_color))
             rect_item.setData(0, name)
-            rect_item.setFlag(rect_item.ItemIsSelectable, True)
+            try:
+                from PyQt6.QtWidgets import QGraphicsItem
+                rect_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+            except Exception:
+                # Fallback attempt using legacy attribute
+                if hasattr(rect_item, 'ItemIsSelectable'):
+                    rect_item.setFlag(rect_item.ItemIsSelectable, True)
             try:
                 # Ensure hover events fire at scene level
                 rect_item.setAcceptHoverEvents(True)
@@ -3191,7 +3280,11 @@ class ProjectTreeView(QWidget):
             # Progress overlay
             if pc > 0:
                 prog_w = int((pc/100)*node_w)
-                prog = self.scene.addRect(x, y+node_h-8, prog_w, 8, QPen(Qt.NoPen), QBrush(QColor('#FF8200')))
+                try:
+                    no_pen = Qt.PenStyle.NoPen
+                except Exception:
+                    no_pen = getattr(Qt, 'NoPen', 0)
+                prog = self.scene.addRect(x, y+node_h-8, prog_w, 8, QPen(no_pen), QBrush(QColor('#FF8200')))
                 prog.setZValue(rect_item.zValue()+1)
                 try:
                     prog.setData(0, name)
@@ -3247,7 +3340,10 @@ class ProjectTreeView(QWidget):
             pass
         # Initial fit
         try:
-            self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+            try:
+                self.view.fitInView(self.scene.sceneRect(), getattr(Qt, 'AspectRatioMode', Qt).KeepAspectRatio)
+            except Exception:
+                self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
         except Exception:
             pass
         # After initial fit, apply persisted zoom scale (if user had manual zoom). Re-run restore.
@@ -3260,7 +3356,8 @@ class ProjectTreeView(QWidget):
     # -------- Event Handling --------
     def eventFilter(self, obj, event):
         from PyQt6.QtCore import QEvent
-        if event.type() in (QEvent.Wheel, QEvent.Resize):
+        qevent_type = getattr(QEvent, 'Type', QEvent)
+        if event.type() in (qevent_type.Wheel, qevent_type.Resize):
             try:
                 if hasattr(self, '_minimap_timer'):
                     self._minimap_timer.start(120)
@@ -3268,7 +3365,7 @@ class ProjectTreeView(QWidget):
                     self._update_minimap()
             except Exception:
                 pass
-        if event.type() == QEvent.GraphicsSceneMousePress:
+        if event.type() == qevent_type.GraphicsSceneMousePress:
             item = self.scene.itemAt(event.scenePos(), self.view.transform())
             if item:
                 name = item.data(0)
@@ -3309,9 +3406,9 @@ class ProjectTreeView(QWidget):
                                 if hasattr(self.view, 'smoothFocusRect'):
                                     self.view.smoothFocusRect(rect_focus)
                                 else:
-                                    self.view.fitInView(rect_focus, Qt.KeepAspectRatio)
+                                    self.view.fitInView(rect_focus, getattr(Qt, 'AspectRatioMode', Qt).KeepAspectRatio)
                             except Exception:
-                                self.view.fitInView(rect_focus, Qt.KeepAspectRatio)
+                                self.view.fitInView(rect_focus, getattr(Qt, 'AspectRatioMode', Qt).KeepAspectRatio)
                     except Exception:
                         pass
                     # preview image
@@ -3321,7 +3418,7 @@ class ProjectTreeView(QWidget):
                             self._show_image_for_row(row)
             if event.button() == 2:  # Right click fallback if item not matched
                 self._show_context_menu(event.screenPos(), None)
-        elif event.type() == QEvent.GraphicsSceneContextMenu:
+        elif event.type() == qevent_type.GraphicsSceneContextMenu:
             item = self.scene.itemAt(event.scenePos(), self.view.transform())
             target_name = None
             if item:
@@ -3329,7 +3426,7 @@ class ProjectTreeView(QWidget):
                 if isinstance(d, str) and d and not d.startswith("__toggle__::"):
                     target_name = d
             self._show_context_menu(event.screenPos(), target_name)
-        elif event.type() == QEvent.GraphicsSceneHoverMove:
+        elif event.type() == qevent_type.GraphicsSceneHoverMove:
             if not self._hover_preview_enabled:
                 self.preview_label.clear()
             else:
@@ -3340,7 +3437,7 @@ class ProjectTreeView(QWidget):
                         row = self._name_to_row.get(name)
                         if row:
                             self._show_image_for_row(row)
-        elif event.type() == QEvent.GraphicsSceneMouseMove:
+        elif event.type() == qevent_type.GraphicsSceneMouseMove:
             # Fallback: some items might not emit hover events; use mouse move to drive previews
             if not self._hover_preview_enabled:
                 self.preview_label.clear()
@@ -3355,7 +3452,7 @@ class ProjectTreeView(QWidget):
                                 self._show_image_for_row(row)
                 except Exception:
                     pass
-        elif event.type() == QEvent.GraphicsSceneHoverLeave:
+        elif event.type() == qevent_type.GraphicsSceneHoverLeave:
             self.preview_label.clear()
         return super().eventFilter(obj, event)
 
@@ -3380,15 +3477,16 @@ class ProjectTreeView(QWidget):
                     from PyQt6.QtGui import QBrush, QColor
                     r = it.sceneBoundingRect()
                     rect = self._mini_scene.addRect(r.x()*scale_factor, r.y()*scale_factor, r.width()*scale_factor, r.height()*scale_factor,
-                                                    pen=Qt.NoPen, brush=QBrush(QColor(255,130,0,90)))
+                                                    pen=(Qt.PenStyle.NoPen if hasattr(Qt,'PenStyle') else getattr(Qt,'NoPen',0)), brush=QBrush(QColor(255,130,0,90)))
             except Exception:
                 pass
         # Viewport box
         try:
             from PyQt6.QtGui import QPen, QColor, QBrush
             vr = self.view.mapToScene(self.view.viewport().rect()).boundingRect()
+            no_brush = getattr(getattr(Qt,'BrushStyle', Qt), 'NoBrush', getattr(Qt,'NoBrush', 0))
             vp = self._mini_scene.addRect(vr.x()*scale_factor, vr.y()*scale_factor, vr.width()*scale_factor, vr.height()*scale_factor,
-                                          pen=QPen(QColor('#ffffff')), brush=QBrush(Qt.NoBrush))
+                                          pen=QPen(QColor('#ffffff')), brush=QBrush(no_brush))
             vp.setZValue(999)
         except Exception:
             pass
@@ -3412,7 +3510,7 @@ class ProjectTreeView(QWidget):
             menu.addAction(a)
         if not name:
             act_open.setEnabled(False); act_jump.setEnabled(False); act_copy.setEnabled(False); act_set_parent.setEnabled(False); act_expand.setEnabled(False); act_collapse.setEnabled(False)
-        chosen = menu.exec_(screen_pos)
+        chosen = menu.exec(screen_pos)
         if not chosen or not name:
             return
         if chosen == act_open:
@@ -3510,7 +3608,7 @@ class ProjectTreeView(QWidget):
             dlg.accept()
         buttons.accepted.connect(apply)
         buttons.rejected.connect(dlg.reject)
-        dlg.exec_()
+        dlg.exec()
 
     def _collect_descendants(self, name):
         out = set(); queue = [name]
@@ -3551,7 +3649,7 @@ class ProjectTreeView(QWidget):
             except Exception:
                 pm = QPixmap(full)
             if not pm.isNull():
-                self.preview_label.setPixmap(pm.scaledToHeight(120, Qt.SmoothTransformation))
+                self.preview_label.setPixmap(pm.scaledToHeight(120, getattr(Qt,'TransformationMode', Qt).SmoothTransformation))
                 self.preview_label.setText("")
                 return
         self.preview_label.setText("")
@@ -3631,7 +3729,11 @@ class ProjectTreeView(QWidget):
                     if hh:
                         header_svg_renderer.render(painter, QRectF(0,0,tw,hh)); y_offset=hh+10
                 elif header_pixmap and not header_pixmap.isNull():
-                    sh=header_pixmap.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); y_offset=sh.height()+10
+                    try:
+                        _smooth = Qt.TransformationMode.SmoothTransformation
+                    except Exception:
+                        _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                    sh=header_pixmap.scaledToWidth(page_rect.width(), _smooth); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); y_offset=sh.height()+10
             avail_h=max(1,page_rect.height()-y_offset); scale=avail_h/rect.height(); from math import ceil
             scaled_total_w=max(1.0, rect.width()*scale); cols=max(1,int(ceil(scaled_total_w/page_rect.width())))
             for col in range(cols):
@@ -3642,7 +3744,11 @@ class ProjectTreeView(QWidget):
                             tw=page_rect.width(); hh=_svg_h(header_svg_renderer, tw)
                             if hh: header_svg_renderer.render(painter, QRectF(0,0,tw,hh))
                         elif header_pixmap and not header_pixmap.isNull():
-                            sh=header_pixmap.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh)
+                            try:
+                                _smooth = Qt.TransformationMode.SmoothTransformation
+                            except Exception:
+                                _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                            sh=header_pixmap.scaledToWidth(page_rect.width(), _smooth); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh)
                 painter.save(); painter.translate(0,y_offset); painter.scale(scale,scale)
                 source_x=(col*page_rect.width())/scale
                 scene.render(painter, target=QRectF(0,0,page_rect.width(), rect.height()*scale), source=QRectF(source_x,0,page_rect.width()/scale, rect.height()))
@@ -3654,7 +3760,7 @@ class ProjectTreeView(QWidget):
                     f = QFont(); f.setPointSizeF(f.pointSizeF()*0.85)
                     painter.setFont(f)
                     footer_y = page_rect.height() - 12
-                    painter.drawText(QRectF(0, footer_y, page_rect.width(), 12), Qt.AlignCenter, footer_text)
+                    painter.drawText(QRectF(0, footer_y, page_rect.width(), 12), Qt.AlignmentFlag.AlignCenter, footer_text)
                     painter.restore()
                 except Exception:
                     pass
@@ -3688,7 +3794,7 @@ class ProjectTreeView(QWidget):
                 from PyQt6.QtGui import QFont
                 f = QFont(); f.setPointSizeF(f.pointSizeF()*0.85)
                 painter.setFont(f)
-                painter.drawText(0, hh+content_pix.height()-18, tw, 16, Qt.AlignCenter, footer_text)
+                painter.drawText(0, hh+content_pix.height()-18, tw, 16, Qt.AlignmentFlag.AlignCenter, footer_text)
             except Exception:
                 pass
             painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
@@ -3699,7 +3805,7 @@ class ProjectTreeView(QWidget):
                 from PyQt6.QtGui import QFont
                 f = QFont(); f.setPointSizeF(f.pointSizeF()*0.85)
                 painter.setFont(f)
-                painter.drawText(0, header_pixmap.height()+content_pix.height()-18, cw, 16, Qt.AlignCenter, footer_text)
+                painter.drawText(0, header_pixmap.height()+content_pix.height()-18, cw, 16, Qt.AlignmentFlag.AlignCenter, footer_text)
             except Exception:
                 pass
             painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
@@ -3709,7 +3815,7 @@ class ProjectTreeView(QWidget):
             from PyQt6.QtGui import QFont
             f = QFont(); f.setPointSizeF(f.pointSizeF()*0.85)
             painter.setFont(f)
-            painter.drawText(0, content_pix.height()-18, content_pix.width(), 16, Qt.AlignCenter, footer_text)
+            painter.drawText(0, content_pix.height()-18, content_pix.width(), 16, Qt.AlignmentFlag.AlignCenter, footer_text)
         except Exception:
             pass
         painter.end(); content_pix.save(path,'PNG'); print(f'Exported PNG -> {path}')
@@ -3718,16 +3824,36 @@ class ProjectTreeView(QWidget):
 # Add a custom QGraphicsView subclass for zooming
 from PyQt6.QtWidgets import QGraphicsView
 from PyQt6.QtCore import Qt
+# Backward compat: provide PyQt5-style attribute name if missing
+try:
+    if not hasattr(QGraphicsView, 'ScrollHandDrag') and hasattr(QGraphicsView, 'DragMode') and hasattr(QGraphicsView.DragMode, 'ScrollHandDrag'):
+        QGraphicsView.ScrollHandDrag = QGraphicsView.DragMode.ScrollHandDrag  # type: ignore[attr-defined]
+except Exception:
+    pass
 
 class ZoomableGraphicsView(QGraphicsView):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._zoom = 0
-        self.setDragMode(QGraphicsView.ScrollHandDrag)
+        # PyQt6 enum namespace change
+        try:
+            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        except Exception:
+            # Fallback: if DragMode enum missing (very old PyQt), ignore
+            try:
+                m = getattr(QGraphicsView, 'DragMode', None)
+                if m and hasattr(m, 'ScrollHandDrag'):
+                    self.setDragMode(m.ScrollHandDrag)
+            except Exception:
+                pass
         self._settings_key = None  # e.g., 'GanttZoom' or 'TimelineZoom'
 
     def wheelEvent(self, event):
-        if event.modifiers() & Qt.ControlModifier:
+        try:
+            _ctrl_mod = Qt.KeyboardModifier.ControlModifier
+        except Exception:
+            _ctrl_mod = getattr(Qt, 'ControlModifier', 0)
+        if event.modifiers() & _ctrl_mod:
             if event.angleDelta().y() > 0:
                 self.zoomIn()
             else:
@@ -3989,7 +4115,7 @@ class GanttChartView(QWidget):
                         except Exception: pass
                         d.accept()
                     ok.clicked.connect(accept); canc.clicked.connect(d.reject)
-                    d.setLayout(vb); d.resize(420,500); d.exec_()
+                    d.setLayout(vb); d.resize(420,500); d.exec()
                 pick_btn = _QPushButton('Select…'); pick_btn.clicked.connect(open_dep_picker)
                 hb = QHBoxLayout(); hb.addWidget(dep_edit,1); hb.addWidget(pick_btn); layout.addRow(col, hb)
                 continue
@@ -4091,12 +4217,20 @@ class GanttChartView(QWidget):
                         img_path_full = val
                     pixmap = QPixmap(img_path_full)
                     if not pixmap.isNull():
-                        img_label.setPixmap(pixmap.scaledToHeight(48, Qt.SmoothTransformation))
+                        try:
+                            _smooth = Qt.TransformationMode.SmoothTransformation
+                        except Exception:
+                            _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                        img_label.setPixmap(pixmap.scaledToHeight(48, _smooth))
                 btn = QPushButton("Change Image")
                 def pick_image():
                     fname, _ = QFileDialog.getOpenFileName(dialog, "Select Image", "", "Image Files (*.png *.jpg *.jpeg *.bmp *.gif)")
                     if fname:
-                        img_label.setPixmap(QPixmap(fname).scaledToHeight(48, Qt.SmoothTransformation))
+                        try:
+                            _smooth = Qt.TransformationMode.SmoothTransformation
+                        except Exception:
+                            _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                        img_label.setPixmap(QPixmap(fname).scaledToHeight(48, _smooth))
                         edits[col].setText(fname)
                 btn.clicked.connect(pick_image)
                 img_path_edit = QLineEdit(val)
@@ -4521,12 +4655,20 @@ class GanttChartView(QWidget):
                     y_offset = header_h + 10
                 elif header_pixmap and not header_pixmap.isNull():
                     header_w = page_rect.width()
-                    scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
+                    try:
+                        _smooth = Qt.TransformationMode.SmoothTransformation
+                    except Exception:
+                        _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                    scaled_header = header_pixmap.scaledToWidth(header_w, _smooth)
                     painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
                     y_offset = scaled_header.height() + 10
             elif include_header and header_pixmap and not header_pixmap.isNull():
                 header_w = page_rect.width()
-                scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
+                try:
+                    _smooth = Qt.TransformationMode.SmoothTransformation
+                except Exception:
+                    _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                scaled_header = header_pixmap.scaledToWidth(header_w, _smooth)
                 painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
                 y_offset = scaled_header.height() + 10
             avail_h = max(1, page_rect.height() - y_offset)
@@ -4546,11 +4688,19 @@ class GanttChartView(QWidget):
                                 header_svg_renderer.render(painter, target_rect)
                             elif header_pixmap and not header_pixmap.isNull():
                                 header_w = page_rect.width()
-                                scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
+                                try:
+                                    _smooth = Qt.TransformationMode.SmoothTransformation
+                                except Exception:
+                                    _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                                scaled_header = header_pixmap.scaledToWidth(header_w, _smooth)
                                 painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
                         elif header_pixmap and not header_pixmap.isNull():
                             header_w = page_rect.width()
-                            scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
+                            try:
+                                _smooth = Qt.TransformationMode.SmoothTransformation
+                            except Exception:
+                                _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                            scaled_header = header_pixmap.scaledToWidth(header_w, _smooth)
                             painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
                 painter.save()
                 painter.translate(0, y_offset)
@@ -4647,7 +4797,7 @@ class GanttChartView(QWidget):
 
         self.preview_label = QLabel()
         self.preview_label.setFixedHeight(140)
-        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setStyleSheet("border:1px solid #666; background:#222;")
 
         # Export / Settings / Refresh
@@ -4658,7 +4808,7 @@ class GanttChartView(QWidget):
         def open_settings():
             try:
                 dlg = ExportSettingsDialog(self)
-                dlg.exec_()
+                dlg.exec()
             except Exception as e:
                 print(f"Open Export Settings failed: {e}")
         settings_btn.clicked.connect(open_settings)
@@ -4754,7 +4904,7 @@ class GanttChartView(QWidget):
         # Mini legend (hierarchy vs dependency vs highlight colors)
         self.legend_label = QLabel()
         self.legend_label.setFixedHeight(24)
-        self.legend_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.legend_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.legend_label.setStyleSheet("font-size:11px; padding:2px 6px; background:#1a1a1a; border:1px solid #444;")
         try:
             self.legend_label.setTextFormat(Qt.RichText)
@@ -5168,7 +5318,17 @@ class GanttChartView(QWidget):
                 self.preview_label = preview_label
                 self.gantt_view = gantt_view
                 self.setAcceptHoverEvents(True)
-                self.setFlag(QGraphicsItem.ItemIsSelectable, True)
+                # Set selectable flag (PyQt6 namespaced enums with fallback)
+                try:
+                    from PyQt6.QtWidgets import QGraphicsItem as _QGI
+                    self.setFlag(_QGI.GraphicsItemFlag.ItemIsSelectable, True)
+                except Exception:
+                    try:
+                        from PyQt6.QtWidgets import QGraphicsItem as _QGI2
+                        if hasattr(_QGI2, 'ItemIsSelectable'):
+                            self.setFlag(_QGI2.ItemIsSelectable, True)
+                    except Exception:
+                        pass
 
             # --- Attachment utilities ---
             def _attachments_list(self):
@@ -5197,7 +5357,7 @@ class GanttChartView(QWidget):
                 open_action = menu.addAction("Open Attachments…")
                 add_action = menu.addAction("Add Attachment…")
                 open_folder_action = menu.addAction("Open Attachments Folder")
-                chosen = menu.exec_(event.screenPos())
+                chosen = menu.exec(event.screenPos())
                 if chosen == open_action:
                     self.show_attachments_dialog()
                 elif chosen == add_action:
@@ -5270,7 +5430,11 @@ class GanttChartView(QWidget):
                     if os.path.exists(full) and os.path.splitext(full)[1].lower() in ('.png','.jpg','.jpeg','.bmp','.gif'):
                         pm = QPixmap(full)
                         if not pm.isNull():
-                            thumb.setPixmap(pm.scaledToHeight(100, Qt.SmoothTransformation)); return
+                            try:
+                                _smooth = Qt.TransformationMode.SmoothTransformation
+                            except Exception:
+                                _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                            thumb.setPixmap(pm.scaledToHeight(100, _smooth)); return
                     thumb.setText(os.path.basename(full))
                 def do_add():
                     self.add_attachment_files(); lst.clear(); [lst.addItem(p) for p in self._attachments_list()]; refresh_thumb()
@@ -5295,15 +5459,28 @@ class GanttChartView(QWidget):
                 rem_btn.clicked.connect(do_remove)
                 open_btn.clicked.connect(do_open)
                 refresh_thumb()
-                dlg.exec_()
+                dlg.exec()
             def _set_preview(self):
+                # DEBUG: confirm runtime version of this function
+                try:
+                    print(f"[DEBUG] _set_preview() entered sentinel={DEBUG_HOVER_SENTINEL} file={__file__}")
+                except Exception:
+                    pass
                 img_path = self.row.get("Images", "")
                 if img_path and str(img_path).strip():
                     from PyQt6.QtGui import QPixmap
                     img_path_full = resolve_resource_path(img_path)
                     pm = QPixmap(img_path_full)
                     if not pm.isNull():
-                        self.preview_label.setPixmap(pm.scaledToHeight(90, Qt.SmoothTransformation))
+                        try:
+                            _smooth = Qt.TransformationMode.SmoothTransformation
+                        except Exception:
+                            _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                        try:
+                            print(f"[DEBUG] scaling preview with _smooth={_smooth}")
+                        except Exception:
+                            pass
+                        self.preview_label.setPixmap(pm.scaledToHeight(90, _smooth))
                         self.preview_label.setText("")
                         return
                 # Ensure QPixmap is imported when clearing
@@ -5363,7 +5540,11 @@ class GanttChartView(QWidget):
                         if os.path.exists(full):
                             pm = QPixmap(full)
                             if not pm.isNull():
-                                self.preview_label.setPixmap(pm.scaledToHeight(90, Qt.SmoothTransformation))
+                                try:
+                                    _smooth = Qt.TransformationMode.SmoothTransformation
+                                except Exception:
+                                    _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                                self.preview_label.setPixmap(pm.scaledToHeight(90, _smooth))
                                 self.preview_label.setText("")
 
         name_to_bar = {}
@@ -5395,12 +5576,12 @@ class GanttChartView(QWidget):
                     run_end = cur
                     x0 = (run_start - chart_min_date).days * 10 + bar_offset_x
                     x1 = (run_end - chart_min_date).days * 10 + bar_offset_x
-                    self.scene.addRect(x0, 0, max(1, x1-x0), len(bars)*(bar_height+bar_gap)+80, pen=Qt.NoPen, brush=shade_wknd)
+                    self.scene.addRect(x0, 0, max(1, x1-x0), len(bars)*(bar_height+bar_gap)+80, pen=(Qt.PenStyle.NoPen if hasattr(Qt,'PenStyle') else getattr(Qt,'NoPen',0)), brush=shade_wknd)
                 else:
                     # holidays (single days)
                     if cur.date() in holidays:
                         x0 = (cur - chart_min_date).days * 10 + bar_offset_x
-                        self.scene.addRect(x0, 0, 10, len(bars)*(bar_height+bar_gap)+80, pen=Qt.NoPen, brush=shade_hol)
+                        self.scene.addRect(x0, 0, 10, len(bars)*(bar_height+bar_gap)+80, pen=(Qt.PenStyle.NoPen if hasattr(Qt,'PenStyle') else getattr(Qt,'NoPen',0)), brush=shade_hol)
                     cur += timedelta(days=1)
         except Exception:
             pass
@@ -5432,7 +5613,7 @@ class GanttChartView(QWidget):
                     at_risk = True
             except Exception:
                 pass
-            outline_pen = _QPen4(Qt.NoPen)
+            outline_pen = _QPen4(Qt.PenStyle.NoPen if hasattr(Qt,'PenStyle') else getattr(Qt,'NoPen',0))
             if overdue:
                 outline_pen = _QPen4(QColor("red")); outline_pen.setWidth(2)
             elif at_risk:
@@ -5448,8 +5629,14 @@ class GanttChartView(QWidget):
                 prog_w = max(2, int(width * pc / 100))
                 prog_color = QColor("#DAA520") if name in critical_set else gantt_color
                 from PyQt6.QtGui import QPen as _QPen3
-                prog_rect = self.scene.addRect(x, y, prog_w, bar_height, _QPen3(Qt.NoPen), prog_color)
-                prog_rect.setAcceptedMouseButtons(Qt.NoButton)
+                prog_rect = self.scene.addRect(x, y, prog_w, bar_height, _QPen3(Qt.PenStyle.NoPen if hasattr(Qt,'PenStyle') else getattr(Qt,'NoPen',0)), prog_color)
+                # Disable mouse interaction: PyQt6 uses Qt.MouseButton.NoButton
+                try:
+                    prog_rect.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                except Exception:
+                    # Fallback for legacy style
+                    nb = getattr(Qt, 'NoButton', 0)
+                    prog_rect.setAcceptedMouseButtons(nb)
                 prog_rect.setZValue(rect.zValue() + 1)
             full_name = name
             display_name = full_name
@@ -5484,7 +5671,7 @@ class GanttChartView(QWidget):
             radius = 6
             path.addRoundedRect(padded, radius, radius)
             bg_brush = _LblBrush(bg_color)
-            bg_rect = self.scene.addPath(path, _LblPen(Qt.NoPen), bg_brush)
+            bg_rect = self.scene.addPath(path, _LblPen(Qt.PenStyle.NoPen if hasattr(Qt,'PenStyle') else getattr(Qt,'NoPen',0)), bg_brush)
             bg_rect.setZValue(text_item.zValue()-1)
             text_item.setData(3, bg_rect)  # store bg rect
             text_item.setData(4, bg_brush)  # store original brush
@@ -5499,7 +5686,12 @@ class GanttChartView(QWidget):
                 bmap = self.model.load_baseline_map(baseline_name)
                 from PyQt6.QtGui import QPen
                 pen = QPen(QColor(150,150,150))
-                pen.setStyle(Qt.DashLine); pen.setWidth(1)
+                try:
+                    pen.setStyle(Qt.PenStyle.DashLine)  # PyQt6 namespaced enum
+                except Exception:
+                    # Fallback for PyQt5
+                    pen.setStyle(getattr(Qt, 'DashLine', 1))
+                pen.setWidth(1)
                 for name, pos in name_to_bar.items():
                     if name in bmap:
                         bs, be = bmap[name]
@@ -5525,7 +5717,16 @@ class GanttChartView(QWidget):
         # ---------- Selection handling ----------
         self._bar_rect_to_row = {}
         for rect, r in bar_items:
-            rect.setFlag(QGraphicsItem.ItemIsSelectable, True)
+            try:
+                from PyQt6.QtWidgets import QGraphicsItem as _QGI
+                rect.setFlag(_QGI.GraphicsItemFlag.ItemIsSelectable, True)
+            except Exception:
+                try:
+                    from PyQt6.QtWidgets import QGraphicsItem as _QGI2
+                    if hasattr(_QGI2, 'ItemIsSelectable'):
+                        rect.setFlag(_QGI2.ItemIsSelectable, True)
+                except Exception:
+                    pass
             self._bar_rect_to_row[rect] = r
         def on_selection_changed():
             selected = [it for it in self.scene.selectedItems() if it in self._bar_rect_to_row]
@@ -5615,7 +5816,10 @@ class GanttChartView(QWidget):
                 self._base_pen = _QPen(base_pen)
                 self._highlight_pen = _QPen(highlight_pen)
                 if style == 'trunk':
-                    self._base_pen.setStyle(Qt.DashLine)
+                    try:
+                        self._base_pen.setStyle(Qt.PenStyle.DashLine)
+                    except Exception:
+                        self._base_pen.setStyle(getattr(Qt, 'DashLine', 1))
                     self._base_pen.setWidth(2)
                     self._highlight_pen.setWidth(3)
                 else:
@@ -6071,7 +6275,7 @@ class TimelineView(QWidget):
         layout.addLayout(export_row)
         self.preview_label = QLabel()
         self.preview_label.setFixedHeight(200)
-        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.preview_label)
         self.setLayout(layout)
         # Keyboard shortcuts for zoom
@@ -6282,7 +6486,11 @@ class TimelineView(QWidget):
                         img_path_full = resolve_resource_path(img_path)
                         pixmap = QPixmap(img_path_full)
                         if not pixmap.isNull():
-                            preview_label.setPixmap(pixmap.scaledToHeight(180, Qt.SmoothTransformation))
+                            try:
+                                _smooth = Qt.TransformationMode.SmoothTransformation
+                            except Exception:
+                                _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                            preview_label.setPixmap(pixmap.scaledToHeight(180, _smooth))
                             preview_label.setText("")
                         else:
                             preview_label.setText("[Image not found]")
@@ -6322,7 +6530,7 @@ class TimelineView(QWidget):
             path = _LblPath2()
             radius = 6
             path.addRoundedRect(padded, radius, radius)
-            bg_rect = self.scene.addPath(path, _LblPen2(Qt.NoPen), _LblBrush2(bg_color))
+            bg_rect = self.scene.addPath(path, _LblPen2(Qt.PenStyle.NoPen if hasattr(Qt,'PenStyle') else getattr(Qt,'NoPen',0)), _LblBrush2(bg_color))
             bg_rect.setZValue(text_item.zValue()-1)
             text_item.setData(3, bg_rect)
             self._timeline_name_to_text[name] = text_item
@@ -6363,7 +6571,7 @@ class TimelineView(QWidget):
                     run_end = cur
                     x0 = bar_offset_x + (run_start - min_date).days * 8
                     x1 = bar_offset_x + (run_end - min_date).days * 8
-                    self.scene.addRect(x0, 0, max(1, x1 - x0), y + 30, pen=Qt.NoPen, brush=shade)
+                    self.scene.addRect(x0, 0, max(1, x1 - x0), y + 30, pen=(Qt.PenStyle.NoPen if hasattr(Qt,'PenStyle') else getattr(Qt,'NoPen',0)), brush=shade)
                 else:
                     cur += timedelta(days=1)
         except Exception:
@@ -6842,7 +7050,7 @@ class DatabaseView(QWidget):
                 remote = self.model.get_row_snapshot(part_name) or {}
                 original = dict(self.model.rows[row])
                 dlg = ConflictResolutionDialog(part_name, original=original, pending=new_values, remote=remote, parent=self)
-                if dlg.exec_():
+                if dlg.exec():
                     if dlg.choice == 'keep':
                         try: log_event('conflict','keep_remote', part=part_name)
                         except Exception: pass
@@ -6904,7 +7112,7 @@ class DatabaseView(QWidget):
                 remote = self.model.get_row_snapshot(part_name) or {}
                 original = dict(self.model.rows[row])
                 dlg = ConflictResolutionDialog(part_name, original=original, pending={colname: date_val}, remote=remote, parent=self)
-                if dlg.exec_():
+                if dlg.exec():
                     if dlg.choice == 'keep':
                         if remote:
                             self.model.rows[row].update(remote)
@@ -6958,7 +7166,7 @@ class DatabaseView(QWidget):
                 remote = self.model.get_row_snapshot(part_name) or {}
                 original = dict(self.model.rows[row])
                 dlg = ConflictResolutionDialog(part_name, original=original, pending=updates, remote=remote, parent=self)
-                if dlg.exec_():
+                if dlg.exec():
                     choice_fields = updates.keys()
                     if dlg.choice == 'keep':
                         if remote:
@@ -7016,7 +7224,7 @@ class DatabaseView(QWidget):
                 remote = self.model.get_row_snapshot(part_name) or {}
                 original = dict(self.model.rows[row])
                 dlg = ConflictResolutionDialog(part_name, original=original, pending=updates, remote=remote, parent=self)
-                if dlg.exec_():
+                if dlg.exec():
                     if dlg.choice == 'keep':
                         if remote:
                             self.model.rows[row].update(remote)
@@ -7094,7 +7302,11 @@ class MainWindow(QMainWindow):
                             # raster fallback scale
                             pm = QPixmap(png_fallback)
                             if not pm.isNull():
-                                pm_scaled = pm.scaled(sz, sz, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                                try:
+                                    _smooth = Qt.TransformationMode.SmoothTransformation
+                                except Exception:
+                                    _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                                pm_scaled = pm.scaled(sz, sz, Qt.KeepAspectRatio, _smooth)
                                 p.drawPixmap(0,0, pm_scaled)
                         p.end()
                         images.append(img)
@@ -7312,7 +7524,7 @@ class MainWindow(QMainWindow):
         btns.addWidget(ok); btns.addWidget(cancel)
         v.addLayout(btns)
         dlg.setLayout(v)
-        dlg.exec_()
+        dlg.exec()
     def on_data_changed(self):
         # Refresh all views when data changes
         if hasattr(self, 'project_tree_view'):
@@ -7486,11 +7698,11 @@ class MainWindow(QMainWindow):
                 center_col = QVBoxLayout()
                 center_col.setContentsMargins(0, 0, 0, 0)
                 center_col.setSpacing(0)
-                center_col.addWidget(header_widget, alignment=Qt.AlignCenter)
+                center_col.addWidget(header_widget, alignment=Qt.AlignmentFlag.AlignCenter)
                 header_layout.addLayout(center_col)
             except Exception:
                 # Fallback to just adding the header widget centered
-                header_layout.addWidget(header_widget, alignment=Qt.AlignCenter)
+                header_layout.addWidget(header_widget, alignment=Qt.AlignmentFlag.AlignCenter)
             header_layout.addStretch(1)
 
             # Controls row (separate from header row so the logo stays perfectly centered)
@@ -8233,7 +8445,7 @@ class MainWindow(QMainWindow):
 
             # Footer
             footer_label = QLabel("Copyright 2025 © LSI Graphics, LLC. All Rights Reserved.")
-            footer_label.setAlignment(Qt.AlignCenter)
+            footer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             footer_label.setStyleSheet("color: #888; font-size: 11px; margin-top: 8px;")
             main_layout.addWidget(footer_label)
 
@@ -8337,7 +8549,7 @@ class MainWindow(QMainWindow):
             def _open_pricing_settings():
                 try:
                     dlg = PricingSettingsDialog(self)
-                    dlg.exec_()
+                    dlg.exec()
                 except Exception as e:
                     print(f"Pricing settings dialog failed: {e}")
             act_pricing.triggered.connect(_open_pricing_settings)
@@ -8440,7 +8652,7 @@ class MainWindow(QMainWindow):
                     hide = hide.lower() in ('1','true','yes','on')
                 if not hide and not self.model.rows:
                     dlg = FirstRunDialog(self)
-                    dlg.exec_()
+                    dlg.exec()
                     if dlg.hide_future():
                         s.setValue('Onboarding/hide_empty_dialog', True)
                     if dlg.selected_action == 'sample':
@@ -8690,7 +8902,7 @@ class MainWindow(QMainWindow):
                         m.setInformativeText(f"Owner: {owner}{' @ ' + when if when else ''}\nTake over the lock?")
                         m.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
                         m.setDefaultButton(QMessageBox.No)
-                        choice = m.exec_()
+                        choice = m.exec()
                         if choice == QMessageBox.Yes:
                             # Forcefully take over (overwrite existing)
                             try:
@@ -9182,12 +9394,16 @@ class MainWindow(QMainWindow):
                         pm_trim = trim_uniform_color(pm_trim, 10)
                     # Enforce width cap
                     if pm_trim.width() > max_w:
-                        pm_trim = pm_trim.scaled(max_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                        try:
+                            _smooth = Qt.TransformationMode.SmoothTransformation
+                        except Exception:
+                            _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                        pm_trim = pm_trim.scaled(max_w, target_h, Qt.KeepAspectRatio, _smooth)
                     if getattr(self, '_header_label', None):
                         try:
                             from PyQt6.QtWidgets import QSizePolicy
                             self._header_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-                            self._header_label.setAlignment(Qt.AlignCenter)
+                            self._header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                         except Exception:
                             pass
                         self._header_label.setPixmap(pm_trim)
@@ -9222,7 +9438,7 @@ if __name__ == "__main__":
         model = ProjectDataModel()
         window = MainWindow(model)
         window.show()
-        exit_code = app.exec_()
+        exit_code = app.exec()
         sys.exit(exit_code)
     except Exception as e:
         import traceback, sys

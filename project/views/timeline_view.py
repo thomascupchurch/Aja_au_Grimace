@@ -157,7 +157,15 @@ class TimelineView(QWidget):
         p = QPainter(printer)
         try:
             rect = printer.pageRect()
-            scaled = pix.scaled(rect.width(), rect.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            try:
+                _smooth = Qt.TransformationMode.SmoothTransformation
+            except Exception:  # PyQt5 fallback
+                _smooth = getattr(Qt, 'SmoothTransformation', 1)
+            try:
+                _keep_ar = Qt.AspectRatioMode.KeepAspectRatio
+            except Exception:
+                _keep_ar = getattr(Qt, 'KeepAspectRatio', 1)
+            scaled = pix.scaled(rect.width(), rect.height(), _keep_ar, _smooth)
             x = rect.x() + (rect.width() - scaled.width()) // 2
             y = rect.y() + (rect.height() - scaled.height()) // 2
             p.drawPixmap(x, y, scaled)

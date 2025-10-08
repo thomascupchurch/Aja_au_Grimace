@@ -1,28 +1,2 @@
 # 2025.10.07-pyqt6-migration-1
 
-# In MainWindow.__init__, add version checking
-def check_for_updates(self):
-    try:
-        # Check if there's a newer VERSION file in OneDrive
-        import os
-        current_version = self.get_current_version()
-        
-        # Look for VERSION file in parent directories (OneDrive structure)
-        onedrive_version_path = self.find_onedrive_version_file()
-        if onedrive_version_path and os.path.exists(onedrive_version_path):
-            with open(onedrive_version_path, 'r') as f:
-                latest_version = f.read().strip()
-            
-            if self.is_newer_version(latest_version, current_version):
-                self.show_update_notification(latest_version)
-    except Exception as e:
-        print(f"Update check failed: {e}")
-
-def show_update_notification(self, new_version):
-    from PyQt6.QtWidgets import QMessageBox
-    msg = QMessageBox(self)
-    msg.setIcon(QMessageBox.Information)
-    msg.setWindowTitle("Update Available")
-    msg.setText(f"A newer version ({new_version}) is available in OneDrive.")
-    msg.setInformativeText("Please download the latest version from the OneDrive folder.")
-    msg.exec()

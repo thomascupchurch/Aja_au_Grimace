@@ -212,7 +212,15 @@ class GanttChartView(QWidget):
             page_rect = printer.pageRect()
             target = page_rect
             # scale maintaining aspect
-            scaled = pix.scaled(target.width(), target.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            try:
+                _smooth = Qt.TransformationMode.SmoothTransformation
+            except Exception:
+                _smooth = getattr(Qt, 'SmoothTransformation', 1)
+            try:
+                _keep_ar = Qt.AspectRatioMode.KeepAspectRatio
+            except Exception:
+                _keep_ar = getattr(Qt, 'KeepAspectRatio', 1)
+            scaled = pix.scaled(target.width(), target.height(), _keep_ar, _smooth)
             x = target.x() + (target.width() - scaled.width()) // 2
             y = target.y() + (target.height() - scaled.height()) // 2
             p.drawPixmap(x, y, scaled)
