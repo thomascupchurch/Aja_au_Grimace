@@ -7080,6 +7080,200 @@ class DatabaseView(QWidget):
 
 
 class MainWindow(QMainWindow):
+    # --- Desktop Shortcut Helpers (OneDrive deployment convenience) ---
+    def _ensure_app_icon(self):
+        """Render header.svg into a multi-size .ico (16,32,48,64,128,256) if available.
+        Stores header.ico adjacent to executable/script. Returns path or None."""
+        try:
+            import os, time
+            svg_path = resolve_resource_path('header.svg')
+            png_fallback = resolve_resource_path('header.png')
+            use_svg = svg_path and os.path.exists(svg_path)
+            if (not use_svg) and (not (png_fallback and os.path.exists(png_fallback))):
+                return None
+            # Target icon path beside script/exe
+            base_dir = os.path.dirname(resolve_resource_path('.'))
+            ico_path = os.path.join(base_dir, 'header.ico')
+            # Rebuild if missing or svg newer
+            rebuild = True
+            try:
+                if os.path.exists(ico_path):
+                    src_mtime = os.path.getmtime(svg_path if use_svg else png_fallback)
+                    rebuild = src_mtime > os.path.getmtime(ico_path)
+            except Exception:
+                rebuild = True
+            if rebuild:
+                try:
+                    from PyQt5.QtGui import QImage, QPainter, QPixmap
+                    if use_svg:
+                        from PyQt5.QtSvg import QSvgRenderer  # type: ignore
+                        renderer = QSvgRenderer(svg_path)
+                        if not renderer.isValid():
+                            use_svg = False
+                    sizes = [16,32,48,64,128,256]
+                    images = []
+                    for sz in sizes:
+                        img = QImage(sz, sz, QImage.Format_ARGB32)
+                        img.fill(0)
+                        p = QPainter(img)
+                        if use_svg:
+                            renderer.render(p)
+                        else:
+                            # raster fallback scale
+                            pm = QPixmap(png_fallback)
+                            if not pm.isNull():
+                                pm_scaled = pm.scaled(sz, sz, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                                p.drawPixmap(0,0, pm_scaled)
+                        p.end()
+                        images.append(img)
+                    # Save first size then append others (PyQt lacks direct multi-icon save; fallback to largest only)
+                    # Attempt to use PIL if available for true multi-size ICO
+                    saved = False
+                    try:
+                        from PIL import Image  # type: ignore
+                        pil_images = []
+                        for img in images:
+                            ptr = img.bits(); ptr.setsize(img.width()*img.height()*4)
+                            data = bytes(ptr)
+                            pil = Image.frombuffer('RGBA', (img.width(), img.height()), data, 'raw', 'BGRA', 0, 1)
+                            pil_images.append(pil)
+                        pil_images[0].save(ico_path, sizes=[(im.width, im.height) for im in pil_images])
+                        saved = True
+                    except Exception:
+                        # Fallback: save 256 png then convert single-size ICO via qt (largest only)
+                        try:
+                            images[-1].save(ico_path)
+                            saved = True
+                        except Exception:
+                            pass
+                    if not saved:
+                        return None
+                except Exception:
+                    return None
+            return ico_path if os.path.exists(ico_path) else None
+        except Exception:
+            return None
+    def _desktop_path(self):
+        import os
+        # Prefer USERPROFILE/Desktop, fallback to expanduser
+        try:
+            home = os.path.expanduser('~')
+            candidates = []
+            if 'USERPROFILE' in os.environ:
+                candidates.append(os.path.join(os.environ['USERPROFILE'], 'Desktop'))
+            candidates.append(os.path.join(home, 'Desktop'))
+            for c in candidates:
+                if c and os.path.isdir(c):
+                    return c
+            return home
+        except Exception:
+            return os.path.expanduser('~')
+    def _shortcut_exists(self, base_name: str) -> bool:
+        import os
+        desk = self._desktop_path()
+        stem = base_name
+        return (os.path.exists(os.path.join(desk, stem + '.lnk')) or
+                os.path.exists(os.path.join(desk, stem + '.url')))
+    def _create_desktop_shortcut(self, base_name: str = 'Project Planner'):
+        """Create a desktop shortcut to the current executable or launcher script.
+        Attempts .lnk via COM (win32com) first; falls back to .url if COM not available.
+        Safe no-op on non-Windows.
+        Returns (True, path) or (False, reason)."""
+        import sys, os, platform, traceback
+        desk = self._desktop_path()
+        target = None
+        # Determine launch target: packaged exe OR python main script
+        try:
+            if getattr(sys, 'frozen', False):
+                target = sys.executable
+            else:
+                target = os.path.abspath(sys.argv[0])
+        except Exception:
+            target = sys.executable
+        # Prefer generated header.ico if present
+        icon_path = None
+        try:
+            icon_path = self._ensure_app_icon() or None
+        except Exception:
+            icon_path = None
+        if not icon_path:
+            icon_path = target  # fallback to exe/script
+        shortcut_base = os.path.join(desk, base_name)
+        if platform.system().lower().startswith('win'):
+            # Try .lnk first
+            try:
+                import win32com.client  # type: ignore
+                shell = win32com.client.Dispatch('WScript.Shell')
+                lnk_path = shortcut_base + '.lnk'
+                sc = shell.CreateShortcut(lnk_path)
+                sc.TargetPath = target
+                sc.WorkingDirectory = os.path.dirname(target)
+                sc.IconLocation = icon_path
+                sc.Description = 'Launch Project Planner'
+                sc.save()
+                return True, lnk_path
+            except Exception:
+                # Fall back to .url (works for scripts/executables)
+                try:
+                    url_path = shortcut_base + '.url'
+                    with open(url_path, 'w', encoding='utf-8') as f:
+                        f.write('[InternetShortcut]\n')
+                        f.write(f'URL=file:///{target.replace("\\", "/")}\n')
+                        f.write('IconIndex=0\n')
+                        if icon_path and os.path.exists(icon_path):
+                            f.write(f'IconFile={icon_path}\n')
+                    return True, url_path
+                except Exception as e2:
+                    return False, f'Fallback .url failed: {e2}'
+        else:
+            # Non-Windows: create a .desktop file if on Linux (optional)
+            try:
+                if platform.system().lower() == 'linux':
+                    desktop_file = shortcut_base + '.desktop'
+                    with open(desktop_file, 'w', encoding='utf-8') as f:
+                        f.write('[Desktop Entry]\n')
+                        f.write('Type=Application\n')
+                        f.write(f'Name={base_name}\n')
+                        f.write(f'Exec="{target}"\n')
+                        f.write('Terminal=false\n')
+                    os.chmod(desktop_file, 0o755)
+                    return True, desktop_file
+            except Exception as e:
+                return False, f'Desktop file failed: {e}'
+        return False, 'Unsupported platform or creation failed'
+    def _maybe_offer_shortcut(self):
+        """Prompt user once (per machine) to add a desktop shortcut if absent.
+        Stored flag: QSettings('LSI','ProjectApp')['Shortcut/prompted'] = True."""
+        try:
+            from PyQt5.QtCore import QSettings, QTimer
+            from PyQt5.QtWidgets import QMessageBox
+            s = QSettings('LSI','ProjectApp')
+            already_prompted = s.value('Shortcut/prompted', False)
+            if isinstance(already_prompted, str):
+                already_prompted = already_prompted.lower() in ('1','true','yes','on')
+            # Only prompt if not prompted before AND no shortcut exists
+            base_name = 'Project Planner'
+            if already_prompted or self._shortcut_exists(base_name):
+                return
+            def _ask():
+                try:
+                    ret = QMessageBox.question(self, 'Add Desktop Shortcut?',
+                        'Would you like to add a Project Planner shortcut to your Desktop?',
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+                    if ret == QMessageBox.Yes:
+                        ok, info = self._create_desktop_shortcut(base_name)
+                        if self.statusBar():
+                            if ok:
+                                self.statusBar().showMessage(f'Shortcut created: {info}', 4000)
+                            else:
+                                self.statusBar().showMessage(f'Shortcut failed: {info}', 6000)
+                    s.setValue('Shortcut/prompted', True)
+                except Exception:
+                    pass
+            # Defer until UI settles
+            QTimer.singleShot(1500, _ask)
+        except Exception:
+            pass
     def _open_holidays_manager(self):
         from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QLineEdit, QMessageBox
         dlg = QDialog(self)
@@ -7209,6 +7403,14 @@ class MainWindow(QMainWindow):
                 pass
             self.setWindowTitle(f"Project Management App{version_suffix}")
             self.resize(1200, 700)
+            # Set window icon from generated header.ico if possible
+            try:
+                from PyQt5.QtGui import QIcon
+                ico_path = self._ensure_app_icon()
+                if ico_path:
+                    self.setWindowIcon(QIcon(ico_path))
+            except Exception:
+                pass
             # Set global stylesheet for background and foreground colors
             self.setStyleSheet("""
                 QWidget {
@@ -7885,6 +8087,16 @@ class MainWindow(QMainWindow):
                 tmenu.addMenu(lock_menu)
                 self.tools_btn.setMenu(tmenu)
                 controls_layout.addWidget(self.tools_btn)
+                # Manual shortcut creation action
+                try:
+                    act_shortcut = tmenu.addAction('Create Desktop Shortcut Now')
+                    def _do_shortcut():
+                        ok, info = self._create_desktop_shortcut('Project Planner')
+                        if self.statusBar():
+                            self.statusBar().showMessage(('Shortcut created: ' if ok else 'Shortcut failed: ') + info, 5000)
+                    act_shortcut.triggered.connect(_do_shortcut)
+                except Exception:
+                    pass
 
                 # Sync menu with current (loaded) settings later in init
             except Exception:
@@ -8059,6 +8271,11 @@ class MainWindow(QMainWindow):
             # Initial header sizing based on current window size
             try:
                 self._resize_header()
+            except Exception:
+                pass
+            # Offer desktop shortcut once
+            try:
+                self._maybe_offer_shortcut()
             except Exception:
                 pass
 

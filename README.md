@@ -55,6 +55,64 @@ pyinstaller --onefile --windowed --name ProjectPlanner main.py
 # App bundle created in dist/ProjectPlanner.app
 ```
 
+## Branding & Icons
+
+The application auto-generates a multi-size Windows `.ico` file (`header.ico`) at runtime and build time using the function `_ensure_app_icon` in `main.py`.
+
+Icon source priority:
+1. `header.svg` (vector preferred)
+2. `header.png` (fallback if SVG missing)
+
+Generated outputs:
+- `header.ico` containing 16, 24, 32, 48, 64, 128, 256 px (sizes vary slightly if Pillow not present)
+
+Regeneration logic:
+- If `header.ico` is missing it is built automatically.
+- If you change `header.svg` (or `header.png` when no SVG) delete `header.ico` to force rebuild on next launch or build.
+
+PyInstaller integration:
+- `main.spec` and `main_onefile.spec` include `header.svg`, `header.png`, and `header.ico` in their `datas`.
+- The EXE `icon` parameter uses `header.ico` when present (Windows).
+- For macOS you can generate `header.icns` and pass `icon='header.icns'` in the spec (see below), or override with the `--icon` argument when invoking PyInstaller directly.
+
+### macOS .icns Generation
+Create an ICNS from the SVG (preferred) or PNG. Example (macOS Terminal):
+```bash
+mkdir -p AppIcon.iconset
+for s in 16 32 64 128 256 512; do \
+    s2=$((s*2)); \
+    rsvg-convert -w $s -h $s header.svg > AppIcon.iconset/icon_${s}x${s}.png; \
+    rsvg-convert -w $s2 -h $s2 header.svg > AppIcon.iconset/icon_${s}x${s}@2x.png; \
+done
+iconutil -c icns AppIcon.iconset
+mv AppIcon.icns header.icns
+```
+Then edit `main.spec` (or one-file spec) and set:
+```python
+icon='header.icns'
+```
+Or if building ad-hoc without the spec:
+```bash
+pyinstaller --onefile --windowed --icon header.icns main.py
+```
+
+### Automated Icon Script (Optional)
+A helper script (`tools/make_icons.py`) can generate `header.ico` and (on macOS) `header.icns` using Pillow. After creating it run:
+```bash
+python tools/make_icons.py
+```
+On Windows this ensures a deterministic `header.ico` prior to packaging.
+
+### Desktop Shortcut Icon
+The application offers to create a desktop shortcut on first run and will use `header.ico` automatically if it exists. If the shortcut was created before the icon existed, delete and recreate it via the in‑app menu (or just remove `header.ico` and relaunch to regenerate and rebuild the shortcut manually).
+
+### Troubleshooting Icons
+- Blank or default icon: Delete `header.ico` and restart; ensure Pillow installed.
+- SVG rendering issues: Verify `header.svg` is valid; try exporting a simplified SVG or supply a high‑resolution `header.png` fallback.
+- macOS bundle shows generic icon: Ensure the `.icns` file was referenced in the spec and rebuild (`dist/ProjectPlanner.app/Contents/Resources/`).
+
+---
+
 ## Project Structure
 ```
 ProjectPlanner/

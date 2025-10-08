@@ -2,8 +2,11 @@
 # Generated to preserve single-exe build capability.
 
 import os
+# NOTE (Icon Packaging):
+#   Windows: header.ico auto-used if present (generate via runtime or python tools/make_icons.py)
+#   macOS: create header.icns (python tools/make_icons.py --icns) and set icon='header.icns'
 
-datas_list = [('project_data.db', '.'), ('images/*', 'images'), ('header.svg', '.')]
+datas_list = [('project_data.db', '.'), ('images/*', 'images'), ('header.svg', '.'), ('header.png', '.'), ('header.ico', '.')]
 if os.path.isdir('attachments'):
     datas_list.append(('attachments/*', 'attachments'))
 
@@ -41,4 +44,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='header.ico' if os.path.exists('header.ico') else None,
 )

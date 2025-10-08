@@ -2,9 +2,19 @@
 
 
 import os
+# NOTE (Icon Packaging):
+# - Windows build: uses header.ico if present (auto-generated at runtime OR via tools/make_icons.py)
+# - macOS build: generate header.icns (see README or run: python tools/make_icons.py --icns) then set icon='header.icns'.
+# Manual macOS one-liner (requires rsvg-convert & iconutil):
+#   mkdir AppIcon.iconset; for s in 16 32 64 128 256 512; do s2=$((s*2)); \
+#     rsvg-convert -w $s -h $s header.svg > AppIcon.iconset/icon_${s}x${s}.png; \
+#     rsvg-convert -w $s2 -h $s2 header.svg > AppIcon.iconset/icon_${s}x${s}@2x.png; done; \
+#   iconutil -c icns AppIcon.iconset && mv AppIcon.icns header.icns
+# Deterministic pre-build generation (Windows/Mac):
+#   python tools/make_icons.py --force
 
 # Build datas list dynamically so missing optional folders don't break build
-datas_list = [('project_data.db', '.'), ('images/*', 'images'), ('header.svg', '.')]
+datas_list = [('project_data.db', '.'), ('images/*', 'images'), ('header.svg', '.'), ('header.png', '.'), ('header.ico', '.')]
 if os.path.isdir('attachments'):
     datas_list.append(('attachments/*', 'attachments'))
 
@@ -44,6 +54,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='header.ico' if os.path.exists('header.ico') else None,
 )
 
 coll = COLLECT(
