@@ -1,139 +1,70 @@
-import sys, types, os
-
-# --- Unified Qt Binding Setup -------------------------------------------------
-# We standardize on PyQt5 at runtime (stable wheels, broad platform support).
-# A lightweight shim exposes a PyQt6 namespace so existing/legacy code or tests
-# that import PyQt6 continue to function. All real symbols come from PyQt5.
-
-from PyQt5 import QtCore, QtGui, QtWidgets, QtSvg, QtPrintSupport  # Base modules (added QtPrintSupport)
-from PyQt5.QtCore import QDate, Qt, QEvent
-from PyQt5.QtWidgets import (
-    QApplication, QDialog, QFormLayout, QLineEdit, QTextEdit, QComboBox, QDateEdit,
-    QPushButton, QFileDialog, QLabel, QHBoxLayout, QAbstractItemView, QGraphicsView,
-    QTableWidget, QTableWidgetItem, QGraphicsItem, QMessageBox, QWidget, QVBoxLayout,
-    QMainWindow, QListWidget, QGraphicsScene, QStackedWidget, QTreeWidget, QTreeWidgetItem
-)
-from PyQt5.QtGui import (
-    QPixmap, QPainter, QColor, QBrush, QPen, QFont
-)
-from PyQt5.QtSvg import QSvgRenderer, QSvgWidget
-
-QT_BINDING = "PyQt5"
-
-# Provide PyQt6 namespace aliases (only minimal modules needed by tests/code).
-# We purposefully do NOT attempt a perfect emulation; just enough so that
-# 'import PyQt6.QtWidgets as ...' resolves to PyQt5 equivalents.
-if 'PyQt6' not in sys.modules:
-    _pyqt6_pkg = types.ModuleType('PyQt6')
-    _pyqt6_core = QtCore
-    _pyqt6_gui = QtGui
-    _pyqt6_widgets = QtWidgets
-    _pyqt6_svg = QtSvg
-    # Register package + submodules
-    sys.modules['PyQt6'] = _pyqt6_pkg
-    sys.modules['PyQt6.QtCore'] = _pyqt6_core
-    sys.modules['PyQt6.QtGui'] = _pyqt6_gui
-    sys.modules['PyQt6.QtWidgets'] = _pyqt6_widgets
-    sys.modules['PyQt6.QtSvg'] = _pyqt6_svg
-    # Map print support for PDF export when code imports PyQt6.QtPrintSupport
-    try:
-        sys.modules['PyQt6.QtPrintSupport'] = QtPrintSupport
-    except Exception:
-        pass
-    # (QtSvgWidgets merged into QtSvg in PyQt5; expose for safety)
-    sys.modules.setdefault('PyQt6.QtSvgWidgets', _pyqt6_svg)
-
-# Minimal enum/style attribute backfills expected when code thought it was PyQt6.
-# (If an attribute already exists we leave it untouched.)
+# --- PyQt6 Migration Shim (temporarily allow old PyQt5-style imports) ---
 try:
-    if not hasattr(QEvent, 'GraphicsSceneMousePress') and hasattr(QEvent, 'Type'):
-        QEvent.GraphicsSceneMousePress = QEvent.Type.GraphicsSceneMousePress
-        QEvent.GraphicsSceneContextMenu = QEvent.Type.GraphicsSceneContextMenu
-        QEvent.GraphicsSceneHoverMove = QEvent.Type.GraphicsSceneHoverMove
-        QEvent.GraphicsSceneMouseMove = QEvent.Type.GraphicsSceneMouseMove
-        QEvent.GraphicsSceneHoverLeave = QEvent.Type.GraphicsSceneHoverLeave
-    # Common table/view flags already exist in PyQt5; only patch if missing
-    if not hasattr(QAbstractItemView, 'NoEditTriggers') and hasattr(QAbstractItemView, 'EditTrigger'):
-        QAbstractItemView.NoEditTriggers = QAbstractItemView.EditTrigger.NoEditTriggers
-        QAbstractItemView.SelectRows = QAbstractItemView.SelectionBehavior.SelectRows
-        QAbstractItemView.SingleSelection = QAbstractItemView.SelectionMode.SingleSelection
-    if not hasattr(QGraphicsView, 'ScrollHandDrag') and hasattr(QGraphicsView, 'DragMode'):
-        QGraphicsView.ScrollHandDrag = QGraphicsView.DragMode.ScrollHandDrag
-    if not hasattr(QGraphicsItem, 'ItemIsSelectable') and hasattr(QGraphicsItem, 'GraphicsItemFlag'):
-        QGraphicsItem.ItemIsSelectable = QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
-    if not hasattr(Qt, 'ScrollBarAlwaysOff') and hasattr(Qt, 'ScrollBarPolicy'):
-        Qt.ScrollBarAlwaysOff = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        Qt.ScrollBarAlwaysOn = Qt.ScrollBarPolicy.ScrollBarAlwaysOn
-        Qt.ScrollBarAsNeeded = Qt.ScrollBarPolicy.ScrollBarAsNeeded
-    if not hasattr(Qt, 'NoButton') and hasattr(Qt, 'MouseButton'):
-        Qt.NoButton = Qt.MouseButton.NoButton
-        Qt.LeftButton = Qt.MouseButton.LeftButton
-        Qt.RightButton = Qt.MouseButton.RightButton
-        Qt.MiddleButton = Qt.MouseButton.MiddleButton
-    if not hasattr(Qt, 'DashLine') and hasattr(Qt, 'PenStyle'):
-        Qt.DashLine = Qt.PenStyle.DashLine
-        Qt.SolidLine = Qt.PenStyle.SolidLine
-        Qt.DotLine = Qt.PenStyle.DotLine
-        Qt.NoPen = Qt.PenStyle.NoPen
+    import sys, types
+    from PyQt6 import QtWidgets, QtCore, QtGui
+    try:
+        from PyQt6 import QtSvg
+    except Exception:
+        QtSvg = types.ModuleType("QtSvg")
+    try:
+        from PyQt6 import QtPrintSupport
+    except Exception:
+        QtPrintSupport = types.ModuleType("QtPrintSupport")
+    # Create base PyQt5 namespace if missing
+    if 'PyQt5' not in sys.modules:
+        sys.modules['PyQt5'] = types.ModuleType('PyQt5')
+    sys.modules.setdefault('PyQt5.QtWidgets', QtWidgets)
+    sys.modules.setdefault('PyQt5.QtCore', QtCore)
+    sys.modules.setdefault('PyQt5.QtGui', QtGui)
+    sys.modules.setdefault('PyQt5.QtSvg', QtSvg)
+    sys.modules.setdefault('PyQt5.QtPrintSupport', QtPrintSupport)
+    # Restore deprecated exec_ names used in existing code
+    if not hasattr(QtWidgets.QApplication, 'exec_'):
+        QtWidgets.QApplication.exec_ = QtWidgets.QApplication.exec
+    if not hasattr(QtWidgets.QDialog, 'exec_'):
+        QtWidgets.QDialog.exec_ = QtWidgets.QDialog.exec
+    # Provide Qt alias if code expects from PyQt5.QtCore import Qt
+    Qt = QtCore.Qt
 except Exception:
     pass
+# --- End PyQt6 Migration Shim ---
 
-# Lightweight enum aliasing (covers any legacy expectations)
-if not hasattr(Qt, 'DashLine'):
-    Qt.DashLine = Qt.PenStyle.DashLine
-    Qt.SolidLine = Qt.PenStyle.SolidLine
-    Qt.DotLine = Qt.PenStyle.DotLine
-    Qt.NoPen = Qt.PenStyle.NoPen
-if not hasattr(Qt, 'ScrollBarAlwaysOff'):
-    Qt.ScrollBarAlwaysOff = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-    Qt.ScrollBarAlwaysOn = Qt.ScrollBarPolicy.ScrollBarAlwaysOn
-    Qt.ScrollBarAsNeeded = Qt.ScrollBarPolicy.ScrollBarAsNeeded
 
+from PyQt5.QtWidgets import QDialog, QFormLayout, QLineEdit, QTextEdit, QComboBox, QDateEdit, QPushButton, QFileDialog, QLabel, QHBoxLayout
+from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtCore import QDate
+
+
+# Minimal ImageCellWidget for image upload/preview in DatabaseView
+from PyQt5.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFileDialog, QMainWindow, QApplication, QListWidget, QTreeWidget, QGraphicsScene, QStackedWidget, QDialog
+from PyQt5.QtWidgets import QTreeWidgetItem
 import os
-# ...existing code (top conditional import block retained)...
+from PyQt5.QtGui import QPixmap
 
-# REMOVE all duplicated "PyQt6 Compatibility Layer - add this after imports..." blocks below.
-# (Legacy note removed: previously warned about duplicate compat blocks under PySide6.)
-
-# REPLACE the first remaining compatibility block with this guarded version:
-if QT_BINDING == "PyQt6":
+# --- Dependency cycle detection helper ---
+def _would_create_cycle(model, part_name: str, new_deps: set[str]) -> bool:
     try:
-        from PyQt6.QtCore import QEvent, Qt
-        from PyQt6.QtWidgets import QAbstractItemView, QGraphicsView, QGraphicsItem
-        if not hasattr(QEvent, 'Wheel'):
-            QEvent.Wheel = QEvent.Type.Wheel
-            QEvent.Resize = QEvent.Type.Resize
-            QEvent.GraphicsSceneMousePress = QEvent.Type.GraphicsSceneMousePress
-            QEvent.GraphicsSceneContextMenu = QEvent.Type.GraphicsSceneContextMenu
-            QEvent.GraphicsSceneHoverMove = QEvent.Type.GraphicsSceneHoverMove
-            QEvent.GraphicsSceneMouseMove = QEvent.Type.GraphicsSceneMouseMove
-            QEvent.GraphicsSceneHoverLeave = QEvent.Type.GraphicsSceneHoverLeave
-        if not hasattr(QAbstractItemView, 'NoEditTriggers'):
-            QAbstractItemView.NoEditTriggers = QAbstractItemView.EditTrigger.NoEditTriggers
-            QAbstractItemView.SelectRows = QAbstractItemView.SelectionBehavior.SelectRows
-            QAbstractItemView.SingleSelection = QAbstractItemView.SelectionMode.SingleSelection
-        if not hasattr(QGraphicsView, 'ScrollHandDrag'):
-            QGraphicsView.ScrollHandDrag = QGraphicsView.DragMode.ScrollHandDrag
-        if not hasattr(QGraphicsItem, 'ItemIsSelectable'):
-            QGraphicsItem.ItemIsSelectable = QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
-        if not hasattr(Qt, 'ScrollBarAlwaysOff'):
-            Qt.ScrollBarAlwaysOff = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-            Qt.ScrollBarAlwaysOn = Qt.ScrollBarPolicy.ScrollBarAlwaysOn
-            Qt.ScrollBarAsNeeded = Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        if not hasattr(Qt, 'NoButton'):
-            Qt.NoButton = Qt.MouseButton.NoButton
-            Qt.LeftButton = Qt.MouseButton.LeftButton
-            Qt.RightButton = Qt.MouseButton.RightButton
-            Qt.MiddleButton = Qt.MouseButton.MiddleButton
-        if not hasattr(Qt, 'DashLine'):
-            Qt.DashLine = Qt.PenStyle.DashLine
-            Qt.SolidLine = Qt.PenStyle.SolidLine
-            Qt.DotLine = Qt.PenStyle.DotLine
-            Qt.NoPen = Qt.PenStyle.NoPen
-    except Exception as e:
-        print(f"[Compat] PyQt6 compatibility mapping failed: {e}")
+        if not part_name or not new_deps:
+            return False
+        graph = {}
+        for r in getattr(model, 'rows', []):
+            n = r.get('Project Part','')
+            deps = [d.strip() for d in (r.get('Dependencies') or '').split(',') if d.strip()]
+            graph[n] = set(deps)
+        graph.setdefault(part_name, set()).update(new_deps)
+        visiting=set(); visited=set()
+        def dfs(n):
+            if n in visiting: return True
+            if n in visited: return False
+            visiting.add(n)
+            for d in graph.get(n, ()):  # n depends on d
+                if dfs(d): return True
+            visiting.remove(n); visited.add(n)
+            return False
+        return dfs(part_name)
+    except Exception:
+        return False
 
-# ... rest of your existing code ...
 # --- Central JSON lines logger -------------------------------------------------
 # Lightweight, dependency-free structured logging. Writes JSON objects one per
 # line to app.log (sibling to the active DB file). Rotates when file exceeds
@@ -201,6 +132,7 @@ def log_event(category: str, event: str, **fields):
         # Never raise from logger
         pass
 import shutil
+
 # --- Resource path resolution helper ---
 def resolve_resource_path(path: str) -> str:
     """Return an absolute path to a resource that may live next to the script,
@@ -230,7 +162,7 @@ HOLIDAYS_FILE = "holidays.json"
 def _holidays_path():
     import os
     try:
-        from PyQt6.QtCore import QSettings
+        from PyQt5.QtCore import QSettings
         db_path = QSettings('LSI','ProjectApp').value('DB/path', '')
         if db_path:
             base_dir = os.path.dirname(os.path.abspath(db_path))
@@ -268,19 +200,133 @@ def save_holiday_dates(dates):
     except Exception:
         pass
 
-from project.dialogs import ExportSettingsDialog, PricingSettingsDialog, FirstRunDialog, ConflictResolutionDialog
-from project.views.gantt_view import GanttChartView
-from project.views.timeline_view import TimelineView
-from project.views.calendar_view import CalendarView
-from project.views.database_view import DatabaseView
-from project.views.cost_estimates_view import CostEstimatesView
-from project.views.progress_dashboard import ProgressDashboard
+# --- Export Settings Dialog (format/page size/orientation/margins) ---
+class ExportSettingsDialog(QDialog):
+    """Persistent export settings used by PNG/PDF exports.
+    Stored under QSettings("LSI", "ProjectPlanner") with keys:
+      Export/format -> 'PNG' | 'PDF'
+      Export/page_size -> 'A4' | 'Letter' | 'Legal' | 'Tabloid'
+      Export/orientation -> 'Portrait' | 'Landscape'
+      Export/margin_left_mm, Export/margin_top_mm, Export/margin_right_mm, Export/margin_bottom_mm (float mm)
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from PyQt5.QtWidgets import QFormLayout, QComboBox, QDialogButtonBox
+        from PyQt5.QtWidgets import QDoubleSpinBox
+        from PyQt5.QtCore import QSettings
+        self.setWindowTitle("Export Settings")
+        self.resize(380, 220)
+        self.form = QFormLayout(self)
+        self.format_combo = QComboBox(); self.format_combo.addItems(["PNG", "PDF"])
+        self.size_combo = QComboBox(); self.size_combo.addItems(["A4", "Letter", "Legal", "Tabloid"])
+        self.orientation_combo = QComboBox(); self.orientation_combo.addItems(["Portrait", "Landscape"])
+        def mkspin():
+            sb = QDoubleSpinBox(); sb.setRange(0.0, 50.0); sb.setDecimals(1); sb.setSingleStep(0.5); sb.setSuffix(" mm"); return sb
+        self.margin_left = mkspin(); self.margin_top = mkspin(); self.margin_right = mkspin(); self.margin_bottom = mkspin()
+        self.form.addRow("Format", self.format_combo)
+        self.form.addRow("Page Size (PDF)", self.size_combo)
+        self.form.addRow("Orientation (PDF)", self.orientation_combo)
+        self.form.addRow("Left Margin", self.margin_left)
+        self.form.addRow("Top Margin", self.margin_top)
+        self.form.addRow("Right Margin", self.margin_right)
+        self.form.addRow("Bottom Margin", self.margin_bottom)
+        from PyQt5.QtWidgets import QCheckBox
+        self.include_header_cb = QCheckBox("Include Header Graphic")
+        self.include_header_cb.setToolTip("If unchecked, exports omit the header.svg/header.png banner.")
+        self.form.addRow("Header", self.include_header_cb)
+        # Buttons
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        self.form.addRow(self.buttons)
+        # Load settings
+        s = QSettings("LSI", "ProjectPlanner")
+        fmt = s.value("Export/format", "PNG")
+        ps = s.value("Export/page_size", "A4")
+        orient = s.value("Export/orientation", "Portrait")
+        ml = float(s.value("Export/margin_left_mm", 8.0))
+        mt = float(s.value("Export/margin_top_mm", 8.0))
+        mr = float(s.value("Export/margin_right_mm", 8.0))
+        mb = float(s.value("Export/margin_bottom_mm", 8.0))
+        self.format_combo.setCurrentText(fmt if fmt in ("PNG","PDF") else "PNG")
+        if ps not in ("A4","Letter","Legal","Tabloid"): ps = "A4"
+        self.size_combo.setCurrentText(ps)
+        if orient not in ("Portrait","Landscape"): orient = "Portrait"
+        self.orientation_combo.setCurrentText(orient)
+        self.margin_left.setValue(ml); self.margin_top.setValue(mt); self.margin_right.setValue(mr); self.margin_bottom.setValue(mb)
+        inc_header = s.value("Export/include_header", True)
+        if isinstance(inc_header, str):
+            inc_header = (inc_header.lower() in ("1","true","yes"))
+        self.include_header_cb.setChecked(bool(inc_header))
+        # Disable PDF-only fields when PNG selected
+        def update_pdf_only():
+            is_pdf = (self.format_combo.currentText() == "PDF")
+            self.size_combo.setEnabled(is_pdf)
+            self.orientation_combo.setEnabled(is_pdf)
+        self.format_combo.currentTextChanged.connect(lambda _: update_pdf_only())
+        update_pdf_only()
+    def accept(self):
+        try:
+            from PyQt5.QtCore import QSettings
+            s = QSettings("LSI", "ProjectPlanner")
+            s.setValue("Export/format", self.format_combo.currentText())
+            s.setValue("Export/page_size", self.size_combo.currentText())
+            s.setValue("Export/orientation", self.orientation_combo.currentText())
+            s.setValue("Export/margin_left_mm", float(self.margin_left.value()))
+            s.setValue("Export/margin_top_mm", float(self.margin_top.value()))
+            s.setValue("Export/margin_right_mm", float(self.margin_right.value()))
+            s.setValue("Export/margin_bottom_mm", float(self.margin_bottom.value()))
+            s.setValue("Export/include_header", bool(self.include_header_cb.isChecked()))
+        except Exception:
+            pass
+        return super().accept()
+
+class PricingSettingsDialog(QDialog):
+    """Dialog to configure pricing guidance: target margin and default labor rates."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from PyQt5.QtWidgets import QFormLayout, QDialogButtonBox, QDoubleSpinBox
+        from PyQt5.QtCore import QSettings
+        self.setWindowTitle("Pricing Settings")
+        self.resize(360, 180)
+        form = QFormLayout(self)
+        def mkspin(minv, maxv, step, dec=1, suffix=""):
+            sb = QDoubleSpinBox(); sb.setRange(minv,maxv); sb.setDecimals(dec); sb.setSingleStep(step)
+            if suffix: sb.setSuffix(" "+suffix)
+            return sb
+        self.target_margin = mkspin(0, 95, 1, 1, "%")
+        self.labor_rate = mkspin(0, 1000, 5, 2, "$ /h")
+        self.install_labor_rate = mkspin(0, 1000, 5, 2, "$ /h")
+        form.addRow("Target Margin %", self.target_margin)
+        form.addRow("Fabrication Labor Rate", self.labor_rate)
+        form.addRow("Install Labor Rate", self.install_labor_rate)
+        s = QSettings("LSI","ProjectPlanner")
+        try:
+            self.target_margin.setValue(float(s.value("Pricing/target_margin", 35)))
+            self.labor_rate.setValue(float(s.value("Pricing/labor_rate", 55)))
+            self.install_labor_rate.setValue(float(s.value("Pricing/install_labor_rate", 65)))
+        except Exception:
+            pass
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        form.addWidget(buttons)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+    def accept(self):
+        from PyQt5.QtCore import QSettings
+        try:
+            s = QSettings("LSI","ProjectPlanner")
+            s.setValue("Pricing/target_margin", float(self.target_margin.value()))
+            s.setValue("Pricing/labor_rate", float(self.labor_rate.value()))
+            s.setValue("Pricing/install_labor_rate", float(self.install_labor_rate.value()))
+        except Exception:
+            pass
+        return super().accept()
 
 # --- First Run / Empty DB Onboarding Dialog ---
 class FirstRunDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        from PyQt6.QtWidgets import QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QCheckBox
+        from PyQt5.QtWidgets import QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QCheckBox
         self.setWindowTitle("Welcome – Getting Started")
         self.setModal(True)
         self.resize(520, 320)
@@ -363,16 +409,16 @@ class ImageCellWidget(QWidget):
 
             pixmap = QPixmap(img_path_full)
             if not pixmap.isNull():
-                self.img_label.setPixmap(pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-                self.img_label.setCursor(Qt.CursorShape.PointingHandCursor)
+                self.img_label.setPixmap(pixmap.scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                self.img_label.setCursor(Qt.PointingHandCursor)
                 self.img_label.mousePressEvent = lambda event: self.show_full_image(img_path_full)
             else:
                 self.img_label.setText("[Image not found]")
-                self.img_label.setCursor(Qt.CursorShape.ArrowCursor)
+                self.img_label.setCursor(Qt.ArrowCursor)
                 self.img_label.mousePressEvent = None
         else:
             self.img_label.setText("")
-            self.img_label.setCursor(Qt.CursorShape.ArrowCursor)
+            self.img_label.setCursor(Qt.ArrowCursor)
             self.img_label.mousePressEvent = None
 
     def show_full_image(self, img_path_full):
@@ -382,12 +428,12 @@ class ImageCellWidget(QWidget):
         lbl = QLabel()
         pixmap = QPixmap(img_path_full)
         if not pixmap.isNull():
-            lbl.setPixmap(pixmap.scaledToWidth(600, Qt.TransformationMode.SmoothTransformation))
+            lbl.setPixmap(pixmap.scaledToWidth(600, Qt.SmoothTransformation))
         else:
             lbl.setText("[Image not found]")
         vbox.addWidget(lbl)
         dlg.setLayout(vbox)
-        dlg.exec()
+        dlg.exec_()
 
 class ProjectDataModel:
     # NOTE: Append-only pattern; new progress-related columns added at end to avoid breaking older rows
@@ -424,7 +470,7 @@ class ProjectDataModel:
     ]
     DB_FILE = "project_data.db"
 
-    def __init__(self, lazy: bool | None = None):
+    def __init__(self):
         self.rows = []  # Each row is a dict with keys as COLUMNS
         # collaborative mode: prevent writes on viewer machines (persisted via QSettings)
         try:
@@ -436,12 +482,6 @@ class ProjectDataModel:
             self.read_only = bool(ro)
         except Exception:
             self.read_only = False
-        # Lazy load flag (env override)
-        if lazy is None:
-            import os as _os_env
-            lazy = _os_env.environ.get('PROJECT_LAZY_LOAD','').lower() in ('1','true','yes','on')
-        self._lazy_mode = bool(lazy)
-        self._loaded = False
         # Resolve DB path with simple override mechanisms suitable for a shared network DB scenario.
         # Precedence:
         #  1) Environment variable PROJECT_DB_PATH (UNC or local; supports %VAR% and ~)
@@ -483,7 +523,7 @@ class ProjectDataModel:
 
         # Persist resolved DB path for helpers (e.g., holidays path)
         try:
-            from PyQt6.QtCore import QSettings
+            from PyQt5.QtCore import QSettings
             QSettings('LSI','ProjectApp').setValue('DB/path', self.DB_FILE)
         except Exception:
             pass
@@ -509,24 +549,15 @@ class ProjectDataModel:
                 os.makedirs(db_dir, exist_ok=True)
         except Exception:
             pass
-        if not self._lazy_mode:
-            try:
-                self.ensure_schema()
-                self.load_from_db(); self._loaded = True
-            except Exception as e:
-                import traceback
-                print(f"ERROR: Failed to open database '{self.DB_FILE}': {e}")
-                traceback.print_exc()
-                raise
-
-    def ensure_loaded(self):
-        if self._loaded:
-            return
         try:
             self.ensure_schema()
-            self.load_from_db(); self._loaded = True
+            self.load_from_db()
         except Exception as e:
-            print(f"Deferred load failed: {e}")
+            # Provide better diagnostics when DB cannot be opened
+            import traceback
+            print(f"ERROR: Failed to open database '{self.DB_FILE}': {e}")
+            traceback.print_exc()
+            raise
 
     def _connect(self):
         """Return an sqlite3 connection with WAL, busy timeout and slightly safer cache settings.
@@ -1284,34 +1315,9 @@ class ProjectDataModel:
             graph = {}
             duration_map = {}
             min_date = None
-            # Helper to resolve dependency tokens (names OR numeric ids)
-            def _resolve_deps(raw_str):
-                tokens = [d.strip() for d in (raw_str or '').split(',') if d.strip()]
-                out = []
-                for t in tokens:
-                    if t in name_to_row:
-                        out.append(t)
-                        continue
-                    if t.isdigit():
-                        # Attempt lookup by DB row id using direct query for robustness
-                        try:
-                            import sqlite3, os
-                            if os.path.exists(self.DB_FILE):
-                                with self._connect() as _c:
-                                    cur = _c.cursor()
-                                    cur.execute('SELECT "Project Part" FROM project_parts WHERE id=? LIMIT 1', (int(t),))
-                                    res = cur.fetchone()
-                                    if res and res[0]:
-                                        out.append(res[0])
-                                        continue
-                        except Exception:
-                            pass
-                    # Fallback: keep token only if it looks like a part name (will be ignored later if missing)
-                    out.append(t)
-                return out
             for r in self.rows:
                 n = r.get("Project Part", "")
-                deps = _resolve_deps(r.get("Dependencies", ""))
+                deps = [d.strip() for d in (r.get("Dependencies", "") or '').split(',') if d.strip()]
                 graph[n] = deps
                 try:
                     duration_map[n] = int(r.get("Duration (days)") or 0)
@@ -1409,26 +1415,361 @@ class ProgressDashboard(QWidget):
     def __init__(self, model):
         super().__init__()
         self.model = model
-        self.vbox = QVBoxLayout()
-        self.vbox.addWidget(QLabel("Progress Dashboard"))
+        from PyQt5.QtWidgets import QHBoxLayout, QCheckBox, QTableWidget, QTableWidgetItem, QHeaderView
+        from PyQt5.QtWidgets import QMenu, QProgressBar
+        self.vbox = QVBoxLayout(self)
+        header_row = QHBoxLayout()
+        title = QLabel("Progress Dashboard")
+        title.setStyleSheet("font-weight:600; font-size:15px")
+        header_row.addWidget(title)
+        header_row.addStretch(1)
+        # Export (CSV/PDF) menu button
+        self.export_btn = QPushButton("Export")
+        self.export_btn.setToolTip("Export a snapshot of current dashboard metrics (CSV / PDF / PNG)")
+        menu = QMenu(self.export_btn)
+        act_csv = menu.addAction("CSV Snapshot…")
+        act_pdf = menu.addAction("PDF Snapshot…")
+        act_png = menu.addAction("PNG Snapshot…")
+        act_csv.triggered.connect(self._export_csv_snapshot)
+        act_pdf.triggered.connect(self._export_pdf_snapshot)
+        act_png.triggered.connect(self._export_png_snapshot)
+        self.export_btn.setMenu(menu)
+        header_row.addWidget(self.export_btn)
+        self.auto_chk = QCheckBox("Auto-Refresh")
+        self.auto_chk.setChecked(True)
+        header_row.addWidget(self.auto_chk)
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self.refresh)
+        header_row.addWidget(refresh_btn)
+        self.vbox.addLayout(header_row)
+        # Summary metrics
         self.summary_label = QLabel()
         self.summary_label.setStyleSheet("QLabel { font-family: Consolas, monospace; }")
         self.vbox.addWidget(self.summary_label)
-        refresh_btn = QPushButton("Refresh Metrics")
-        refresh_btn.clicked.connect(self.refresh)
-        self.vbox.addWidget(refresh_btn)
-        self.setLayout(self.vbox)
+        # Progress gauges row
+        gauges = QHBoxLayout()
+        self.overall_bar = QProgressBar(); self.overall_bar.setRange(0,100); self.overall_bar.setFormat("Overall %p%")
+        self.critical_bar = QProgressBar(); self.critical_bar.setRange(0,100); self.critical_bar.setFormat("Critical %p%")
+        for bar in (self.overall_bar, self.critical_bar):
+            bar.setMinimumWidth(180)
+            bar.setToolTip("Visual gauge for progress percentage")
+            gauges.addWidget(bar)
+        gauges.addStretch(1)
+        self.vbox.addLayout(gauges)
+        # Status distribution table
+        self.status_table = QTableWidget(0, 3)
+        self.status_table.setHorizontalHeaderLabels(["Status","Count","% of Leaf Tasks"])
+        self.status_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.status_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.status_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.status_table.setEditTriggers(self.status_table.NoEditTriggers)
+        self.status_table.setAlternatingRowColors(True)
+        self.vbox.addWidget(self.status_table)
+        # Overdue / At-Risk lists
+        lists_row = QHBoxLayout()
+        self.overdue_label = QLabel()
+        self.overdue_label.setText("Overdue: (none)")
+        self.overdue_label.setStyleSheet("font-family: Consolas; font-size:12px")
+        self.at_risk_label = QLabel("At Risk: (none)")
+        self.at_risk_label.setStyleSheet("font-family: Consolas; font-size:12px")
+        lists_row.addWidget(self.overdue_label,1)
+        lists_row.addWidget(self.at_risk_label,1)
+        self.vbox.addLayout(lists_row)
+        # Critical path tasks list (simple comma string)
+        self.critical_label = QLabel("Critical Path: (computing)")
+        self.critical_label.setWordWrap(True)
+        self.critical_label.setStyleSheet("font-family: Consolas; font-size:11px")
+        self.vbox.addWidget(self.critical_label)
+        # Simple history sparkline (store last N overall % values)
+        self._history = []
+        self.history_label = QLabel("History: -")
+        self.history_label.setStyleSheet("font-family: Consolas; font-size:11px")
+        self.vbox.addWidget(self.history_label)
+        # Internal caches for export
+        self._status_counts = {}
+        self._last_overdue_list = []
+        self._last_at_risk_list = []
+        self._last_critical_path = []
+        # Timer for auto refresh
+        from PyQt5.QtCore import QTimer
+        self._timer = QTimer(self)
+        self._timer.setInterval(5000)
+        self._timer.timeout.connect(self._auto_tick)
+        self._timer.start()
         self.refresh()
+
+    def _auto_tick(self):
+        if self.auto_chk.isChecked():
+            self.refresh()
+
     def refresh(self):
         m = self.model.progress_metrics()
-        text = (
-            f"Overall % Complete: {m['overall_percent']}%\n"
-            f"Critical Path % Complete: {m['critical_percent']}%\n"
-            f"Leaf Tasks: {m['leaf_count']} | Done: {m['done_count']}\n"
-            f"Overdue: {m['overdue']} | At Risk: {m['at_risk']}\n"
-            f"Critical Leaf Tasks: {m['critical_leaf_count']}"
+        # Update history (keep last 25 points)
+        try:
+            self._history.append(m['overall_percent'])
+            if len(self._history) > 25:
+                self._history = self._history[-25:]
+        except Exception:
+            pass
+        hist_str = ''.join(self._spark_chars(self._history)) if self._history else '-'
+        self.history_label.setText(f"History: {hist_str}")
+        self.summary_label.setText(
+            f"Overall %: {m['overall_percent']}%  |  Critical %: {m['critical_percent']}%  |  Leaf: {m['leaf_count']}  Done: {m['done_count']}  Overdue: {m['overdue']}  At Risk: {m['at_risk']}  Critical Leafs: {m['critical_leaf_count']}"
         )
-        self.summary_label.setText(text)
+        # Gauges
+        try:
+            self.overall_bar.setValue(int(round(m['overall_percent'])))
+            self.critical_bar.setValue(int(round(m['critical_percent'])))
+        except Exception:
+            pass
+        self._populate_status_distribution()
+        self._populate_overdue_lists()
+        self._populate_critical_path()
+
+    def _spark_chars(self, vals):
+        # Unicode sparkline blocks (▁▂▃▄▅▆▇█)
+        if not vals:
+            return []
+        mn = min(vals); mx = max(vals); span = (mx - mn) or 1.0
+        blocks = ['▁','▂','▃','▄','▅','▆','▇','█']
+        out=[]
+        for v in vals:
+            idx = int(round((v - mn)/span * (len(blocks)-1)))
+            out.append(blocks[idx])
+        return out
+
+    def _populate_status_distribution(self):
+        try:
+            status_counts = {}
+            leaf_set = set()
+            for r in self.model.rows:
+                name = r.get('Project Part','')
+                has_child = any(ch.get('Parent','') == name for ch in self.model.rows if ch is not r)
+                if has_child:
+                    continue
+                leaf_set.add(name)
+                st = (r.get('Status') or 'Planned').strip() or 'Planned'
+                status_counts[st] = status_counts.get(st,0)+1
+            total_leaf = len(leaf_set) or 1
+            rows = sorted(status_counts.items())
+            self.status_table.setRowCount(len(rows))
+            for i,(st,c) in enumerate(rows):
+                self.status_table.setItem(i,0,QTableWidgetItem(st))
+                self.status_table.setItem(i,1,QTableWidgetItem(str(c)))
+                pct = f"{(c/total_leaf)*100:.1f}%"
+                self.status_table.setItem(i,2,QTableWidgetItem(pct))
+            self._status_counts = dict(status_counts)
+        except Exception:
+            pass
+
+    def _populate_overdue_lists(self):
+        import datetime
+        overdue=[]; at_risk=[]
+        today = datetime.date.today()
+        for r in self.model.rows:
+            name = r.get('Project Part','')
+            if not name: continue
+            has_child = any(ch.get('Parent','') == name for ch in self.model.rows if ch is not r)
+            if has_child: continue
+            try:
+                dur = int(r.get('Duration (days)') or 0)
+            except Exception:
+                dur = 0
+            try:
+                pc = int(r.get('% Complete') or 0)
+            except Exception:
+                pc = 0
+            status_val = (r.get('Status') or '').strip()
+            try:
+                if r.get('Calculated End Date'):
+                    end_dt = datetime.datetime.strptime(r.get('Calculated End Date'),'%m-%d-%Y').date()
+                else:
+                    start_dt = datetime.datetime.strptime(r.get('Start Date') or '', '%m-%d-%Y').date()
+                    end_dt = start_dt + datetime.timedelta(days=dur)
+            except Exception:
+                end_dt = None
+            try:
+                start_dt = datetime.datetime.strptime(r.get('Start Date') or '', '%m-%d-%Y').date()
+            except Exception:
+                start_dt = None
+            if pc < 100 and end_dt and today > end_dt:
+                overdue.append(name)
+            elif pc == 0 and start_dt and today > start_dt and status_val in ('Planned','Blocked'):
+                at_risk.append(name)
+        self.overdue_label.setText("Overdue: " + (", ".join(overdue[:12]) + ("…" if len(overdue)>12 else "") if overdue else "(none)"))
+        self.at_risk_label.setText("At Risk: " + (", ".join(at_risk[:12]) + ("…" if len(at_risk)>12 else "") if at_risk else "(none)"))
+        self._last_overdue_list = list(overdue)
+        self._last_at_risk_list = list(at_risk)
+
+    def _populate_critical_path(self):
+        # Reuse quick critical set derivation from progress_metrics (duplicate minimal logic to avoid hidden coupling)
+        import datetime
+        try:
+            name_to_row = {r.get('Project Part',''): r for r in self.model.rows}
+            graph={}; duration={}
+            for r in self.model.rows:
+                n=r.get('Project Part','');
+                deps=[d.strip() for d in (r.get('Dependencies') or '').split(',') if d.strip()]
+                graph[n]=deps
+                try: duration[n]=int(r.get('Duration (days)') or 0)
+                except Exception: duration[n]=0
+            visited=set(); order=[]
+            def dfs(n):
+                if n in visited: return
+                for d in graph.get(n,[]): dfs(d)
+                visited.add(n); order.append(n)
+            for n in graph: dfs(n)
+            earliest_finish={}; earliest_start={}
+            base=datetime.datetime.today()
+            for n in order:
+                deps=graph.get(n,[])
+                if not deps:
+                    try:
+                        earliest_start[n]=datetime.datetime.strptime(name_to_row.get(n,{}).get('Start Date',''),'%m-%d-%Y')
+                    except Exception: earliest_start[n]=base
+                else:
+                    earliest_start[n]=max([earliest_finish.get(d,base) for d in deps])
+                earliest_finish[n]=earliest_start[n]+datetime.timedelta(days=duration.get(n,0))
+            project_finish = max(earliest_finish.values()) if earliest_finish else base
+            latest_start={}; latest_finish={}
+            for n in reversed(order):
+                succ=[k for k,v in graph.items() if n in v]
+                if not succ:
+                    latest_finish[n]=project_finish
+                else:
+                    latest_finish[n]=min([latest_start[s] for s in succ]) if succ else project_finish
+                latest_start[n]=latest_finish[n]-datetime.timedelta(days=duration.get(n,0))
+            critical = [n for n in order if abs((earliest_start[n]-latest_start[n]).days) <= 0]
+            self.critical_label.setText("Critical Path: " + (" → ".join(critical) if critical else "(none)"))
+            self._last_critical_path = list(critical)
+        except Exception:
+            self.critical_label.setText("Critical Path: (error)")
+            self._last_critical_path = []
+
+    # --- Export helpers -----------------------------------------------------
+    def _export_csv_snapshot(self):
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        import csv, datetime, json
+        path, _ = QFileDialog.getSaveFileName(self, "Export Dashboard Snapshot (CSV)", "dashboard_snapshot.csv", "CSV Files (*.csv)")
+        if not path:
+            return
+        try:
+            now = datetime.datetime.now().isoformat(timespec='seconds')
+            # Refresh once more to ensure latest values
+            self.refresh()
+            metrics = self.model.progress_metrics()
+            with open(path, 'w', newline='', encoding='utf-8') as f:
+                w = csv.writer(f)
+                w.writerow(["Metric","Value"])
+                for k,v in metrics.items():
+                    w.writerow([k, v])
+                # Status distribution
+                w.writerow([]); w.writerow(["Status Distribution",""])            
+                for st,count in sorted(self._status_counts.items()):
+                    w.writerow([f"status:{st}", count])
+                # Lists
+                w.writerow([]); w.writerow(["Overdue Tasks", "; ".join(self._last_overdue_list) or "<none>"])
+                w.writerow(["At Risk Tasks", "; ".join(self._last_at_risk_list) or "<none>"])
+                w.writerow(["Critical Path", " -> ".join(self._last_critical_path) or "<none>"])
+                # Raw JSON for automation
+                snapshot = {
+                    'timestamp': now,
+                    'metrics': metrics,
+                    'status_counts': self._status_counts,
+                    'overdue': self._last_overdue_list,
+                    'at_risk': self._last_at_risk_list,
+                    'critical_path': self._last_critical_path
+                }
+                w.writerow([]); w.writerow(["snapshot_json", json.dumps(snapshot)])
+            if self.parent() and self.parent().window().statusBar():
+                self.parent().window().statusBar().showMessage(f"Dashboard CSV exported: {path}", 4000)
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", str(e))
+
+    def _export_pdf_snapshot(self):
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        from PyQt5.QtGui import QPainter
+        try:
+            from PyQt5.QtPrintSupport import QPrinter
+        except Exception:
+            QPrinter = None
+        import datetime, os
+        path, _ = QFileDialog.getSaveFileName(self, "Export Dashboard Snapshot (PDF)", "dashboard_snapshot.pdf", "PDF Files (*.pdf)")
+        if not path:
+            return
+        if not path.lower().endswith('.pdf'):
+            path += '.pdf'
+        try:
+            # Make sure data is fresh
+            self.refresh()
+            if QPrinter is None:
+                raise RuntimeError("QPrinter not available in this build")
+            printer = QPrinter(QPrinter.HighResolution)
+            printer.setOutputFormat(QPrinter.PdfFormat)
+            printer.setFullPage(True)
+            printer.setOutputFileName(path)
+            # Margins (mm) from export settings if present
+            try:
+                from PyQt5.QtCore import QSettings
+                s = QSettings('LSI','ProjectPlanner')
+                ml = float(s.value('Export/margin_left_mm',8.0)); mt = float(s.value('Export/margin_top_mm',8.0)); mr = float(s.value('Export/margin_right_mm',8.0)); mb = float(s.value('Export/margin_bottom_mm',8.0))
+            except Exception:
+                ml=mr=mt=mb=8.0
+            painter = QPainter(printer)
+            try:
+                # Convert mm margins to device units
+                dpi = printer.resolution()
+                def mm(v): return v/25.4 * dpi
+                page_rect = printer.pageRect()
+                avail_w = page_rect.width() - (mm(ml)+mm(mr))
+                avail_h = page_rect.height() - (mm(mt)+mm(mb))
+                # Grab current widget pixmap
+                pix = self.grab()
+                if pix.isNull():
+                    raise RuntimeError('Failed to grab dashboard contents')
+                scale = min(avail_w / pix.width(), avail_h / pix.height())
+                target_w = pix.width()*scale
+                target_h = pix.height()*scale
+                tx = page_rect.left() + mm(ml) + (avail_w - target_w)/2
+                ty = page_rect.top() + mm(mt)
+                painter.drawPixmap(int(tx), int(ty), int(target_w), int(target_h), pix)
+                # Footer timestamp
+                ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                painter.setPen(Qt.black)
+                painter.drawText(int(page_rect.left()+mm(ml)), int(page_rect.bottom()-mm(mb/2)), f"Dashboard Snapshot – {ts}")
+            finally:
+                painter.end()
+            if self.parent() and self.parent().window().statusBar():
+                self.parent().window().statusBar().showMessage(f"Dashboard PDF exported: {path}", 4000)
+        except Exception as e:
+            try:
+                QMessageBox.critical(self, "Export Failed", str(e))
+            except Exception:
+                pass
+
+    def _export_png_snapshot(self):
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        import datetime
+        path, _ = QFileDialog.getSaveFileName(self, "Export Dashboard Snapshot (PNG)", "dashboard_snapshot.png", "PNG Files (*.png)")
+        if not path:
+            return
+        if not path.lower().endswith('.png'):
+            path += '.png'
+        try:
+            self.refresh()
+            pix = self.grab()
+            if pix.isNull():
+                raise RuntimeError('Failed to grab dashboard contents')
+            # Write directly; optionally annotate timestamp in future
+            if not pix.save(path, 'PNG'):
+                raise RuntimeError('Save failed')
+            if self.parent() and self.parent().window().statusBar():
+                self.parent().window().statusBar().showMessage(f"Dashboard PNG exported: {path}", 4000)
+        except Exception as e:
+            try:
+                QMessageBox.critical(self, "Export Failed", str(e))
+            except Exception:
+                pass
 
 # --- Conflict Resolution Dialog -------------------------------------------------
 class ConflictResolutionDialog(QDialog):
@@ -1452,7 +1793,7 @@ class ConflictResolutionDialog(QDialog):
         self.pending = pending or {}
         self.remote = remote or {}
         self.merged = dict(self.remote)  # start from remote baseline
-        from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QWidget, QGridLayout, QRadioButton, QButtonGroup
+        from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QWidget, QGridLayout, QRadioButton, QButtonGroup
         layout = QVBoxLayout(self)
         info = QLabel("Another user modified this row before your save completed. Resolve each differing field.")
         info.setWordWrap(True)
@@ -1543,7 +1884,7 @@ class CostEstimatesView(QWidget):
     def __init__(self, model):
         super().__init__()
         self.model = model
-        from PyQt6.QtWidgets import QVBoxLayout, QTableWidget, QTableWidgetItem, QLabel, QPushButton, QHBoxLayout, QLineEdit, QComboBox, QSpinBox, QFileDialog, QCheckBox
+        from PyQt5.QtWidgets import QVBoxLayout, QTableWidget, QTableWidgetItem, QLabel, QPushButton, QHBoxLayout, QLineEdit, QComboBox, QSpinBox, QFileDialog, QCheckBox
         self.vbox = QVBoxLayout(self)
         # --- Header / controls ---
         header = QHBoxLayout()
@@ -1597,7 +1938,7 @@ class CostEstimatesView(QWidget):
         self.delete_version_btn = QPushButton("Delete Version")
         self.rename_version_btn = QPushButton("Rename Version")
         def do_freeze():
-            from PyQt6.QtWidgets import QInputDialog, QMessageBox
+            from PyQt5.QtWidgets import QInputDialog, QMessageBox
             name, ok = QInputDialog.getText(self, "Freeze Quote Version", "Version name:")
             if ok and name.strip():
                 try:
@@ -1622,7 +1963,7 @@ class CostEstimatesView(QWidget):
                     QMessageBox.critical(self, "Freeze Failed", str(e))
         self.freeze_btn.clicked.connect(do_freeze)
         def do_delete_version():
-            from PyQt6.QtWidgets import QMessageBox
+            from PyQt5.QtWidgets import QMessageBox
             ver = self.version_combo.currentText()
             if not ver or ver in ("<None>",""):
                 return
@@ -1636,7 +1977,7 @@ class CostEstimatesView(QWidget):
                     QMessageBox.critical(self, "Delete Failed", f"Could not delete version '{ver}'.")
         self.delete_version_btn.clicked.connect(do_delete_version)
         def do_rename_version():
-            from PyQt6.QtWidgets import QInputDialog, QMessageBox
+            from PyQt5.QtWidgets import QInputDialog, QMessageBox
             cur = self.version_combo.currentText()
             if not cur or cur in ("<None>", ""):
                 return
@@ -1671,11 +2012,8 @@ class CostEstimatesView(QWidget):
         self.table.setHorizontalHeaderLabels([
             "Project Part","Parent","Prod Cost","Inst Cost","Total Cost","Prod Price","Inst Price","Total Price","Profit $","Margin %","Δ Price %","Δ Margin pts","% of Total Price","Internal/External"
         ])
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        # ensure selection mode explicit (if previously implicit)
-        # Allow multi-row selection so export tests selecting multiple rows work
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+        self.table.setEditTriggers(self.table.NoEditTriggers)
+        self.table.setSelectionBehavior(self.table.SelectRows)
         self.table.setAlternatingRowColors(True)
         try:
             self.table.horizontalHeader().setSectionsMovable(True)
@@ -1716,7 +2054,7 @@ class CostEstimatesView(QWidget):
             pass
 
     def _export_csv(self):
-        from PyQt6.QtWidgets import QFileDialog
+        from PyQt5.QtWidgets import QFileDialog
         path, _ = QFileDialog.getSaveFileName(self, "Export Cost Table", "cost_estimates.csv", "CSV Files (*.csv)")
         if not path:
             return
@@ -1741,7 +2079,7 @@ class CostEstimatesView(QWidget):
             print(f"CSV export failed: {e}")
 
     def _open_export_dialog(self):
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QCheckBox, QComboBox, QFileDialog, QMessageBox
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QCheckBox, QComboBox, QFileDialog, QMessageBox
         dlg = QDialog(self); dlg.setWindowTitle("Export Cost Data")
         v = QVBoxLayout(dlg)
         v.addWidget(QLabel("Choose an export format. Options honor current filters, visible columns, and (optionally) selected rows."))
@@ -1774,20 +2112,20 @@ class CostEstimatesView(QWidget):
                 dlg.accept(); self._export_xlsx(); return
             if fmt in ('PDF','PNG'):
                 # Temporarily set export format preferences via QSettings so _export_render uses them
-                from PyQt6.QtCore import QSettings
+                from PyQt5.QtCore import QSettings
                 s = QSettings('LSI','ProjectPlanner')
                 s.setValue('Export/format', fmt)
                 s.setValue('Export/include_header', hdr_chk.isChecked())
                 dlg.accept(); self._export_render(); return
             QMessageBox.warning(self, 'Unsupported', f'Format {fmt} not implemented.')
         export_btn.clicked.connect(do_export)
-        dlg.setLayout(v); dlg.exec()
+        dlg.setLayout(v); dlg.exec_()
 
     def _export_render(self):
         """Render the QTableWidget to PDF or PNG using export settings & header/footer branding."""
-        from PyQt6.QtCore import QSettings, QRectF
-        from PyQt6.QtWidgets import QFileDialog, QApplication
-        from PyQt6.QtGui import QPixmap, QPainter
+        from PyQt5.QtCore import QSettings, QRectF
+        from PyQt5.QtWidgets import QFileDialog, QApplication
+        from PyQt5.QtGui import QPixmap, QPainter
         import os
         s = QSettings('LSI','ProjectPlanner')
         fmt = s.value('Export/format','PDF')
@@ -1828,15 +2166,15 @@ class CostEstimatesView(QWidget):
         header_is_svg=False; header_svg_renderer=None
         try:
             if os.path.exists(svg_path):
-                from PyQt6.QtSvg import QSvgRenderer
+                from PyQt5.QtSvg import QSvgRenderer
                 r = QSvgRenderer(svg_path)
                 if r.isValid(): header_is_svg=True; header_svg_renderer=r
         except Exception:
             pass
         footer_text = "© 2025 LSI – For Internal Use Only"
         if is_pdf:
-            from PyQt6.QtPrintSupport import QPrinter
-            from PyQt6.QtCore import QMarginsF
+            from PyQt5.QtPrintSupport import QPrinter
+            from PyQt5.QtCore import QMarginsF
             printer = QPrinter(QPrinter.HighResolution)
             printer.setOutputFileName(path)
             printer.setOutputFormat(QPrinter.PdfFormat)
@@ -1865,10 +2203,10 @@ class CostEstimatesView(QWidget):
                     hh=_svg_h(header_svg_renderer, page_rect.width())
                     if hh: header_svg_renderer.render(painter, QRectF(0,0,page_rect.width(),hh)); y_offset=hh+8
                 elif header_pix and not header_pix.isNull():
-                    sh=header_pix.scaledToWidth(page_rect.width(), Qt.TransformationMode.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); y_offset=sh.height()+8
+                    sh=header_pix.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); y_offset=sh.height()+8
             # Pagination: draw rows until page full, then newPage
             cur_y = y_offset
-            from PyQt6.QtGui import QFont
+            from PyQt5.QtGui import QFont
             font = painter.font(); fm = painter.fontMetrics()
             row_h = fm.height()+4
             # Draw header row
@@ -1900,7 +2238,7 @@ class CostEstimatesView(QWidget):
                     # footer before new page
                     try:
                         painter.save(); f=QFont(font); f.setPointSizeF(f.pointSizeF()*0.85); painter.setFont(f)
-                        painter.drawText(QRectF(0,page_rect.height()-18,page_rect.width(),16), Qt.AlignmentFlag.AlignCenter, footer_text)
+                        painter.drawText(QRectF(0,page_rect.height()-18,page_rect.width(),16), Qt.AlignCenter, footer_text)
                         painter.restore()
                     except Exception: pass
                     printer.newPage(); cur_y=0
@@ -1909,13 +2247,13 @@ class CostEstimatesView(QWidget):
                             hh=_svg_h(header_svg_renderer, page_rect.width())
                             if hh: header_svg_renderer.render(painter, QRectF(0,0,page_rect.width(),hh)); cur_y=hh+8
                         elif header_pix and not header_pix.isNull():
-                            sh=header_pix.scaledToWidth(page_rect.width(), Qt.TransformationMode.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); cur_y=sh.height()+8
+                            sh=header_pix.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); cur_y=sh.height()+8
                     draw_header(cur_y); cur_y += row_h
                 draw_row(r, cur_y); cur_y += row_h
             # Final footer
             try:
                 painter.save(); f=QFont(font); f.setPointSizeF(f.pointSizeF()*0.85); painter.setFont(f)
-                painter.drawText(QRectF(0,page_rect.height()-18,page_rect.width(),16), Qt.AlignmentFlag.AlignCenter, footer_text)
+                painter.drawText(QRectF(0,page_rect.height()-18,page_rect.width(),16), Qt.AlignCenter, footer_text)
                 painter.restore()
             except Exception: pass
             painter.end(); print(f'Exported PDF -> {path}'); return
@@ -1927,7 +2265,7 @@ class CostEstimatesView(QWidget):
         painter = QPainter(table_pix)
         painter.translate(pad_l, pad_t)
         # Manual paint (similar to PDF)
-        from PyQt6.QtGui import QFont
+        from PyQt5.QtGui import QFont
         font = painter.font(); fm = painter.fontMetrics(); row_h = fm.height()+4
         x=0
         for c in range(self.table.columnCount()):
@@ -1966,26 +2304,26 @@ class CostEstimatesView(QWidget):
             combo = QPixmap(tw, hh+table_pix.height()); combo.fill(); painter=QPainter(combo)
             header_svg_renderer.render(painter, QRectF(0,0,tw,hh)); painter.drawPixmap(0,hh,table_pix)
             try:
-                from PyQt6.QtGui import QFont
+                from PyQt5.QtGui import QFont
                 f=QFont(); f.setPointSizeF(f.pointSizeF()*0.85); painter.setFont(f)
-                painter.drawText(0, hh+table_pix.height()-18, tw, 16, Qt.AlignmentFlag.AlignCenter, footer_text)
+                painter.drawText(0, hh+table_pix.height()-18, tw, 16, Qt.AlignCenter, footer_text)
             except Exception: pass
             painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
         if header_pix and not header_pix.isNull():
             cw=max(header_pix.width(), table_pix.width()); combo=QPixmap(cw, header_pix.height()+table_pix.height()); combo.fill(); painter=QPainter(combo)
             painter.drawPixmap((cw-header_pix.width())//2,0, header_pix); painter.drawPixmap(0, header_pix.height(), table_pix)
             try:
-                from PyQt6.QtGui import QFont
+                from PyQt5.QtGui import QFont
                 f=QFont(); f.setPointSizeF(f.pointSizeF()*0.85); painter.setFont(f)
-                painter.drawText(0, header_pix.height()+table_pix.height()-18, cw, 16, Qt.AlignmentFlag.AlignCenter, footer_text)
+                painter.drawText(0, header_pix.height()+table_pix.height()-18, cw, 16, Qt.AlignCenter, footer_text)
             except Exception: pass
             painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
         # Footer only
         painter = QPainter(table_pix)
         try:
-            from PyQt6.QtGui import QFont
+            from PyQt5.QtGui import QFont
             f=QFont(); f.setPointSizeF(f.pointSizeF()*0.85); painter.setFont(f)
-            painter.drawText(0, table_pix.height()-18, table_pix.width(), 16, Qt.AlignmentFlag.AlignCenter, footer_text)
+            painter.drawText(0, table_pix.height()-18, table_pix.width(), 16, Qt.AlignCenter, footer_text)
         except Exception: pass
         painter.end(); table_pix.save(path,'PNG'); print(f'Exported PNG -> {path}')
 
@@ -1996,10 +2334,10 @@ class CostEstimatesView(QWidget):
             from openpyxl.utils import get_column_letter
             from openpyxl.styles import numbers
         except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
+            from PyQt5.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Missing Dependency", "openpyxl not installed. Please install requirements.")
             return
-        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
         path, _ = QFileDialog.getSaveFileName(self, "Export Cost Table (XLSX)", "cost_estimates.xlsx", "Excel Workbook (*.xlsx)")
         if not path:
             return
@@ -2088,7 +2426,7 @@ class CostEstimatesView(QWidget):
 
     # --------------- Column Visibility & Layout Management ---------------
     def _open_columns_dialog(self):
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QPushButton, QCheckBox, QLineEdit, QLabel, QMessageBox
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QPushButton, QCheckBox, QLineEdit, QLabel, QMessageBox
         from PyQt5.QtCore import QSettings
         dlg = QDialog(self)
         dlg.setWindowTitle("Columns & Layouts")
@@ -2099,7 +2437,7 @@ class CostEstimatesView(QWidget):
         info.setWordWrap(True)
         vbox.addWidget(info)
         # Column list with checkboxes
-        from PyQt6.QtWidgets import QWidget, QScrollArea, QGridLayout
+        from PyQt5.QtWidgets import QWidget, QScrollArea, QGridLayout
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         container = QWidget(); grid = QGridLayout(container)
         self._col_checkboxes = []
@@ -2246,11 +2584,11 @@ class CostEstimatesView(QWidget):
         apply_btn.clicked.connect(apply_layout)
         delete_btn.clicked.connect(delete_layout)
         close_btn.clicked.connect(dlg.accept)
-        dlg.exec()
+        dlg.exec_()
 
     def _apply_last_layout(self):
         # Called after construction to restore last used layout
-        from PyQt6.QtCore import QSettings
+        from PyQt5.QtCore import QSettings
         import json
         try:
             s = QSettings("LSI", "ProjectPlanner")
@@ -2270,7 +2608,7 @@ class CostEstimatesView(QWidget):
                 if order and len(order) == self.table.columnCount():
                     # Apply after a short delay if needed to ensure header exists
                     try:
-                        from PyQt6.QtCore import QTimer
+                        from PyQt5.QtCore import QTimer
                         QTimer.singleShot(0, lambda o=order: [self.table.horizontalHeader().moveSection(self.table.horizontalHeader().visualIndex(log), pos) for pos, log in enumerate(o)])
                     except Exception:
                         pass
@@ -2280,7 +2618,7 @@ class CostEstimatesView(QWidget):
     # --- Programmatic layout API (for tests / automation) ---
     def save_layout_programmatic(self, name: str):
         """Save current layout (visibility + order + column names) under name. Returns True if saved."""
-        from PyQt6.QtCore import QSettings
+        from PyQt5.QtCore import QSettings
         import json
         if not name:
             return False
@@ -2301,7 +2639,7 @@ class CostEstimatesView(QWidget):
 
     def apply_layout_programmatic(self, name: str):
         """Apply a saved layout by name. Returns tuple(success, message)."""
-        from PyQt6.QtCore import QSettings
+        from PyQt5.QtCore import QSettings
         import json
         try:
             s = QSettings("LSI", "ProjectPlanner")
@@ -2434,9 +2772,9 @@ class CostEstimatesView(QWidget):
             for col_idx, val in enumerate(values):
                 item = QTableWidgetItem(val)
                 if col_idx >=2 and col_idx not in (9,11):  # margin & delta margin are textual with % / pts
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 # Conditional formatting
-                from PyQt6.QtGui import QColor
+                from PyQt5.QtGui import QColor
                 if col_idx == 8:  # profit
                     if profit < 0:
                         item.setBackground(QColor(120,0,0))
@@ -2519,7 +2857,7 @@ class ProjectTreeView(QWidget):
         title = QLabel("Project Tree (Horizontal)")
         title.setStyleSheet("font-weight:600; padding:2px 4px;")
         header.addWidget(title)
-        from PyQt6.QtWidgets import QPushButton, QCheckBox
+        from PyQt5.QtWidgets import QPushButton, QCheckBox
         fit_btn = QPushButton("Fit")
         refresh_btn = QPushButton("Refresh")
         toggle_img_btn = QPushButton("Previews: On")
@@ -2538,7 +2876,7 @@ class ProjectTreeView(QWidget):
             if hasattr(self, 'view'):
                 r = self.scene.itemsBoundingRect()
                 if not r.isNull():
-                    self.view.fitInView(r, Qt.AspectRatioMode.KeepAspectRatio)
+                    self.view.fitInView(r, Qt.KeepAspectRatio)
         def do_refresh():
             self.refresh()
         def do_toggle_preview():
@@ -2553,7 +2891,7 @@ class ProjectTreeView(QWidget):
             else:
                 # If turning on, try to show preview for the item under cursor
                 try:
-                    from PyQt6.QtGui import QCursor
+                    from PyQt5.QtGui import QCursor
                     vp = self.view.mapFromGlobal(QCursor.pos())
                     sp = self.view.mapToScene(vp)
                     item = self.scene.itemAt(sp, self.view.transform())
@@ -2581,7 +2919,7 @@ class ProjectTreeView(QWidget):
                     if not r.isNull():
                         target_rect = r
                 if target_rect is not None and not target_rect.isNull():
-                    self.view.fitInView(target_rect, Qt.AspectRatioMode.KeepAspectRatio)
+                    self.view.fitInView(target_rect, Qt.KeepAspectRatio)
                     # Persist the resulting zoom factor after fit
                     if hasattr(self.view, '_persist_zoom'):
                         self.view._persist_zoom()
@@ -2601,7 +2939,7 @@ class ProjectTreeView(QWidget):
         def open_settings():
             try:
                 dlg = ExportSettingsDialog(self)
-                dlg.exec()
+                dlg.exec_()
             except Exception as e:
                 print(f"Tree export settings failed: {e}")
         settings_btn.clicked.connect(open_settings)
@@ -2616,7 +2954,7 @@ class ProjectTreeView(QWidget):
         # Panel visibility toggles
         self.preview_panel_cb = QCheckBox("Preview")
         self.minimap_panel_cb = QCheckBox("Minimap")
-        from PyQt6.QtCore import QSettings
+        from PyQt5.QtCore import QSettings
         try:
             _ps = QSettings('LSI','ProjectApp')
             pv = _ps.value('TreeShowPreviewPanel', 'true')
@@ -2653,7 +2991,7 @@ class ProjectTreeView(QWidget):
         # Preview label (shares style with others)
         self.preview_label = QLabel()
         self.preview_label.setFixedHeight(140)
-        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setStyleSheet("border:1px solid #666; background:#222;")
         layout.addWidget(self.preview_label)
         self.setLayout(layout)
@@ -2661,7 +2999,7 @@ class ProjectTreeView(QWidget):
         self._minimap_view = None
         # Load persisted collapsed state
         try:
-            from PyQt6.QtCore import QSettings
+            from PyQt5.QtCore import QSettings
             _ts = QSettings('LSI','ProjectApp')
             saved = _ts.value('TreeCollapsed', [])
             if isinstance(saved, list):
@@ -2669,7 +3007,7 @@ class ProjectTreeView(QWidget):
         except Exception:
             pass
         # Minimap container (lightweight)
-        from PyQt6.QtWidgets import QFrame, QGraphicsView
+        from PyQt5.QtWidgets import QFrame, QGraphicsView
         self._mini_frame = QFrame()
         self._mini_frame.setFixedHeight(120)
         self._mini_frame.setStyleSheet("QFrame { border:1px solid #555; background:#111; }")
@@ -2677,9 +3015,8 @@ class ProjectTreeView(QWidget):
         mini_layout.setContentsMargins(2,2,2,2)
         self._mini_scene = QGraphicsScene()
         self._mini_view = QGraphicsView(self._mini_scene)
-
-        self._mini_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._mini_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._mini_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._mini_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._mini_view.setRenderHints(self._mini_view.renderHints())
         mini_layout.addWidget(self._mini_view)
         layout.addWidget(self._mini_frame)
@@ -2691,7 +3028,7 @@ class ProjectTreeView(QWidget):
             pass
         def _persist_panels():
             try:
-                from PyQt6.QtCore import QSettings
+                from PyQt5.QtCore import QSettings
                 _ps = QSettings('LSI','ProjectApp')
                 _ps.setValue('TreeShowPreviewPanel', self.preview_panel_cb.isChecked())
                 _ps.setValue('TreeShowMinimap', self.minimap_panel_cb.isChecked())
@@ -2720,7 +3057,7 @@ class ProjectTreeView(QWidget):
         try:
             self.view.viewport().installEventFilter(self)
             # Debounced minimap updates
-            from PyQt6.QtCore import QTimer
+            from PyQt5.QtCore import QTimer
             self._minimap_timer = QTimer(self)
             self._minimap_timer.setSingleShot(True)
             self._minimap_timer.timeout.connect(self._update_minimap)
@@ -2737,11 +3074,11 @@ class ProjectTreeView(QWidget):
         try:
             orig_press = self._mini_view.mousePressEvent
             def mini_click(ev):
-                if ev.button() == Qt.MouseButton.LeftButton:
+                if ev.button() == Qt.LeftButton:
                     scene_pt = self._mini_view.mapToScene(ev.pos())
                     # scale factor used in _update_minimap
                     scale_factor = 0.12
-                    from PyQt6.QtCore import QRectF
+                    from PyQt5.QtCore import QRectF
                     # Center main view around corresponding point
                     center_target = QPointF(scene_pt.x()/scale_factor, scene_pt.y()/scale_factor)
                     vr = self.view.mapToScene(self.view.viewport().rect()).boundingRect()
@@ -2750,12 +3087,12 @@ class ProjectTreeView(QWidget):
                         if hasattr(self.view, 'smoothFocusRect'):
                             self.view.smoothFocusRect(new_rect)
                         else:
-                            self.view.fitInView(new_rect, Qt.AspectRatioMode.KeepAspectRatio)
+                            self.view.fitInView(new_rect, Qt.KeepAspectRatio)
                     except Exception:
-                        self.view.fitInView(new_rect, Qt.AspectRatioMode.KeepAspectRatio)
+                        self.view.fitInView(new_rect, Qt.KeepAspectRatio)
                     self._update_minimap()
                 orig_press(ev)
-            from PyQt6.QtCore import QPointF
+            from PyQt5.QtCore import QPointF
             self._mini_view.mousePressEvent = mini_click
         except Exception:
             pass
@@ -2819,7 +3156,7 @@ class ProjectTreeView(QWidget):
             self.scene.addText("(No data)")
             return
         positions, (node_w, node_h) = self._compute_layout(roots, children)
-        from PyQt6.QtGui import QPen, QColor, QBrush, QFont
+        from PyQt5.QtGui import QPen, QColor, QBrush, QFont
         # Draw connectors first
         pen_conn = QPen(QColor(150,150,150))
         pen_conn.setWidth(2)
@@ -2857,7 +3194,7 @@ class ProjectTreeView(QWidget):
                 base_color = QColor('#5f4a23')
             rect_item = self.scene.addRect(x, y, node_w, node_h, QPen(QColor('#888')), QBrush(base_color))
             rect_item.setData(0, name)
-            rect_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+            rect_item.setFlag(rect_item.ItemIsSelectable, True)
             try:
                 # Ensure hover events fire at scene level
                 rect_item.setAcceptHoverEvents(True)
@@ -2866,8 +3203,8 @@ class ProjectTreeView(QWidget):
             # Collapse/expand indicator if has children
             if name in children and children[name]:
                 tri_w = 12; tri_h = 12
-                from PyQt6.QtGui import QPolygonF
-                from PyQt6.QtCore import QPointF
+                from PyQt5.QtGui import QPolygonF
+                from PyQt5.QtCore import QPointF
                 if name in self._collapsed:
                     pts = [QPointF(x+6, y+node_h/2 - tri_h/2), QPointF(x+6, y+node_h/2 + tri_h/2), QPointF(x+6+tri_w, y+node_h/2)]
                 else:
@@ -2882,7 +3219,7 @@ class ProjectTreeView(QWidget):
             # Progress overlay
             if pc > 0:
                 prog_w = int((pc/100)*node_w)
-                prog = self.scene.addRect(x, y+node_h-8, prog_w, 8, QPen(Qt.PenStyle.NoPen), QBrush(QColor('#FF8200')))
+                prog = self.scene.addRect(x, y+node_h-8, prog_w, 8, QPen(Qt.NoPen), QBrush(QColor('#FF8200')))
                 prog.setZValue(rect_item.zValue()+1)
                 try:
                     prog.setData(0, name)
@@ -2938,7 +3275,7 @@ class ProjectTreeView(QWidget):
             pass
         # Initial fit
         try:
-            self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+            self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
         except Exception:
             pass
         # After initial fit, apply persisted zoom scale (if user had manual zoom). Re-run restore.
@@ -2950,7 +3287,7 @@ class ProjectTreeView(QWidget):
 
     # -------- Event Handling --------
     def eventFilter(self, obj, event):
-        from PyQt6.QtCore import QEvent
+        from PyQt5.QtCore import QEvent
         if event.type() in (QEvent.Wheel, QEvent.Resize):
             try:
                 if hasattr(self, '_minimap_timer'):
@@ -2972,7 +3309,7 @@ class ProjectTreeView(QWidget):
                             self._collapsed.add(target)
                         # Persist collapsed
                         try:
-                            from PyQt6.QtCore import QSettings
+                            from PyQt5.QtCore import QSettings
                             _ts = QSettings('LSI','ProjectApp')
                             _ts.setValue('TreeCollapsed', list(self._collapsed))
                         except Exception:
@@ -3000,9 +3337,9 @@ class ProjectTreeView(QWidget):
                                 if hasattr(self.view, 'smoothFocusRect'):
                                     self.view.smoothFocusRect(rect_focus)
                                 else:
-                                    self.view.fitInView(rect_focus, Qt.AspectRatioMode.KeepAspectRatio)
+                                    self.view.fitInView(rect_focus, Qt.KeepAspectRatio)
                             except Exception:
-                                self.view.fitInView(rect_focus, Qt.AspectRatioMode.KeepAspectRatio)
+                                self.view.fitInView(rect_focus, Qt.KeepAspectRatio)
                     except Exception:
                         pass
                     # preview image
@@ -3068,15 +3405,15 @@ class ProjectTreeView(QWidget):
         for it in self.scene.items():
             try:
                 if it.data(0):
-                    from PyQt6.QtGui import QBrush, QColor
+                    from PyQt5.QtGui import QBrush, QColor
                     r = it.sceneBoundingRect()
                     rect = self._mini_scene.addRect(r.x()*scale_factor, r.y()*scale_factor, r.width()*scale_factor, r.height()*scale_factor,
-                                                    pen=Qt.PenStyle.NoPen, brush=QBrush(QColor(255,130,0,90)))
+                                                    pen=Qt.NoPen, brush=QBrush(QColor(255,130,0,90)))
             except Exception:
                 pass
         # Viewport box
         try:
-            from PyQt6.QtGui import QPen, QColor, QBrush
+            from PyQt5.QtGui import QPen, QColor, QBrush
             vr = self.view.mapToScene(self.view.viewport().rect()).boundingRect()
             vp = self._mini_scene.addRect(vr.x()*scale_factor, vr.y()*scale_factor, vr.width()*scale_factor, vr.height()*scale_factor,
                                           pen=QPen(QColor('#ffffff')), brush=QBrush(Qt.NoBrush))
@@ -3085,13 +3422,13 @@ class ProjectTreeView(QWidget):
             pass
         # Fit minimap view
         try:
-            self._mini_view.fitInView(self._mini_scene.itemsBoundingRect().adjusted(-4,-4,4,4), Qt.AspectRatioMode.KeepAspectRatio)
+            self._mini_view.fitInView(self._mini_scene.itemsBoundingRect().adjusted(-4,-4,4,4), Qt.KeepAspectRatio)
         except Exception:
             pass
 
     # -------- Context Menu --------
     def _show_context_menu(self, screen_pos, name):
-        from PyQt6.QtWidgets import QMenu, QAction, QApplication
+        from PyQt5.QtWidgets import QMenu, QAction, QApplication
         menu = QMenu()
         act_open = QAction("Open Details", menu)
         act_jump = QAction("Jump To In Gantt", menu)
@@ -3103,7 +3440,7 @@ class ProjectTreeView(QWidget):
             menu.addAction(a)
         if not name:
             act_open.setEnabled(False); act_jump.setEnabled(False); act_copy.setEnabled(False); act_set_parent.setEnabled(False); act_expand.setEnabled(False); act_collapse.setEnabled(False)
-        chosen = menu.exec(screen_pos)
+        chosen = menu.exec_(screen_pos)
         if not chosen or not name:
             return
         if chosen == act_open:
@@ -3132,7 +3469,7 @@ class ProjectTreeView(QWidget):
                     queue.append(r.get('Project Part',''))
         # Persist
         try:
-            from PyQt6.QtCore import QSettings
+            from PyQt5.QtCore import QSettings
             _ts = QSettings('LSI','ProjectApp')
             _ts.setValue('TreeCollapsed', list(self._collapsed))
         except Exception:
@@ -3148,7 +3485,7 @@ class ProjectTreeView(QWidget):
                 if r.get('Parent') == n:
                     queue.append(r.get('Project Part',''))
         try:
-            from PyQt6.QtCore import QSettings
+            from PyQt5.QtCore import QSettings
             _ts = QSettings('LSI','ProjectApp')
             _ts.setValue('TreeCollapsed', list(self._collapsed))
         except Exception:
@@ -3169,7 +3506,7 @@ class ProjectTreeView(QWidget):
 
     # -------- Reparent Dialog --------
     def _set_parent_dialog(self, target_name):
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QDialogButtonBox
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QDialogButtonBox
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Set Parent - {target_name}")
         v = QVBoxLayout(dlg)
@@ -3201,7 +3538,7 @@ class ProjectTreeView(QWidget):
             dlg.accept()
         buttons.accepted.connect(apply)
         buttons.rejected.connect(dlg.reject)
-        dlg.exec()
+        dlg.exec_()
 
     def _collect_descendants(self, name):
         out = set(); queue = [name]
@@ -3217,7 +3554,7 @@ class ProjectTreeView(QWidget):
     def _show_image_for_row(self, row):
         img_path = row.get('Images','')
         if img_path and str(img_path).strip():
-            from PyQt6.QtGui import QPixmap
+            from PyQt5.QtGui import QPixmap
             full = resolve_resource_path(img_path)
             # LRU cache lookup
             pm = None
@@ -3242,7 +3579,7 @@ class ProjectTreeView(QWidget):
             except Exception:
                 pm = QPixmap(full)
             if not pm.isNull():
-                self.preview_label.setPixmap(pm.scaledToHeight(120, Qt.TransformationMode.SmoothTransformation))
+                self.preview_label.setPixmap(pm.scaledToHeight(120, Qt.SmoothTransformation))
                 self.preview_label.setText("")
                 return
         self.preview_label.setText("")
@@ -3256,9 +3593,9 @@ class ProjectTreeView(QWidget):
     # Simple reuse: delegate to Gantt export implementation style if available else fallback
     def _export_scene_with_header(self, scene, title='Export'):
         # Minimal reuse by instantiating a temporary GanttChartView exporter if complexity grows; for now simple call to existing logic
-        from PyQt6.QtCore import QSettings
-        from PyQt6.QtGui import QPainter, QPixmap
-        from PyQt6.QtWidgets import QFileDialog, QApplication
+        from PyQt5.QtCore import QSettings
+        from PyQt5.QtGui import QPainter, QPixmap
+        from PyQt5.QtWidgets import QFileDialog, QApplication
         import os
         s = QSettings('LSI','ProjectPlanner')
         pref_format = s.value('Export/format','PNG')
@@ -3282,7 +3619,7 @@ class ProjectTreeView(QWidget):
         header_is_svg=False; header_svg_renderer=None
         try:
             if os.path.exists(svg_path):
-                from PyQt6.QtSvg import QSvgRenderer
+                from PyQt5.QtSvg import QSvgRenderer
                 r = QSvgRenderer(svg_path)
                 if r.isValid():
                     header_is_svg=True; header_svg_renderer=r
@@ -3290,8 +3627,8 @@ class ProjectTreeView(QWidget):
             pass
         footer_text = "© 2025 LSI – For Internal Use Only"
         if is_pdf:
-            from PyQt6.QtPrintSupport import QPrinter
-            from PyQt6.QtCore import QMarginsF, QRectF
+            from PyQt5.QtPrintSupport import QPrinter
+            from PyQt5.QtCore import QMarginsF, QRectF
             from math import ceil
             printer = QPrinter(QPrinter.HighResolution)
             printer.setOutputFileName(path)
@@ -3322,7 +3659,7 @@ class ProjectTreeView(QWidget):
                     if hh:
                         header_svg_renderer.render(painter, QRectF(0,0,tw,hh)); y_offset=hh+10
                 elif header_pixmap and not header_pixmap.isNull():
-                    sh=header_pixmap.scaledToWidth(page_rect.width(), Qt.TransformationMode.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); y_offset=sh.height()+10
+                    sh=header_pixmap.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh); y_offset=sh.height()+10
             avail_h=max(1,page_rect.height()-y_offset); scale=avail_h/rect.height(); from math import ceil
             scaled_total_w=max(1.0, rect.width()*scale); cols=max(1,int(ceil(scaled_total_w/page_rect.width())))
             for col in range(cols):
@@ -3333,19 +3670,19 @@ class ProjectTreeView(QWidget):
                             tw=page_rect.width(); hh=_svg_h(header_svg_renderer, tw)
                             if hh: header_svg_renderer.render(painter, QRectF(0,0,tw,hh))
                         elif header_pixmap and not header_pixmap.isNull():
-                            sh=header_pixmap.scaledToWidth(page_rect.width(), Qt.TransformationMode.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh)
+                            sh=header_pixmap.scaledToWidth(page_rect.width(), Qt.SmoothTransformation); painter.drawPixmap((page_rect.width()-sh.width())//2,0,sh)
                 painter.save(); painter.translate(0,y_offset); painter.scale(scale,scale)
                 source_x=(col*page_rect.width())/scale
                 scene.render(painter, target=QRectF(0,0,page_rect.width(), rect.height()*scale), source=QRectF(source_x,0,page_rect.width()/scale, rect.height()))
                 painter.restore()
                 # Footer
                 try:
-                    from PyQt6.QtGui import QFont
+                    from PyQt5.QtGui import QFont
                     painter.save()
                     f = QFont(); f.setPointSizeF(f.pointSizeF()*0.85)
                     painter.setFont(f)
                     footer_y = page_rect.height() - 12
-                    painter.drawText(QRectF(0, footer_y, page_rect.width(), 12), Qt.AlignmentFlag.AlignCenter, footer_text)
+                    painter.drawText(QRectF(0, footer_y, page_rect.width(), 12), Qt.AlignCenter, footer_text)
                     painter.restore()
                 except Exception:
                     pass
@@ -3372,14 +3709,14 @@ class ProjectTreeView(QWidget):
                 return max(min_h, int(round(tw*default_ratio))) if tw>0 else None
             tw = content_pix.width(); hh=_svg_h(header_svg_renderer, tw)
             combo = QPixmap(tw, hh+content_pix.height()); combo.fill(); painter=QPainter(combo)
-            from PyQt6.QtCore import QRectF
+            from PyQt5.QtCore import QRectF
             header_svg_renderer.render(painter, QRectF(0,0,tw,hh)); painter.drawPixmap(0,hh,content_pix);
             # Footer
             try:
-                from PyQt6.QtGui import QFont
+                from PyQt5.QtGui import QFont
                 f = QFont(); f.setPointSizeF(f.pointSizeF()*0.85)
                 painter.setFont(f)
-                painter.drawText(0, hh+content_pix.height()-18, tw, 16, Qt.AlignmentFlag.AlignCenter, footer_text)
+                painter.drawText(0, hh+content_pix.height()-18, tw, 16, Qt.AlignCenter, footer_text)
             except Exception:
                 pass
             painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
@@ -3387,42 +3724,38 @@ class ProjectTreeView(QWidget):
             cw = max(header_pixmap.width(), content_pix.width()); combo = QPixmap(cw, header_pixmap.height()+content_pix.height()); combo.fill()
             painter = QPainter(combo); hx=(cw-header_pixmap.width())//2; painter.drawPixmap(hx,0, header_pixmap); painter.drawPixmap(0, header_pixmap.height(), content_pix)
             try:
-                from PyQt6.QtGui import QFont
+                from PyQt5.QtGui import QFont
                 f = QFont(); f.setPointSizeF(f.pointSizeF()*0.85)
                 painter.setFont(f)
-                painter.drawText(0, header_pixmap.height()+content_pix.height()-18, cw, 16, Qt.AlignmentFlag.AlignCenter, footer_text)
+                painter.drawText(0, header_pixmap.height()+content_pix.height()-18, cw, 16, Qt.AlignCenter, footer_text)
             except Exception:
                 pass
             painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
         # Footer only (no header version)
         painter = QPainter(content_pix)
         try:
-            from PyQt6.QtGui import QFont
+            from PyQt5.QtGui import QFont
             f = QFont(); f.setPointSizeF(f.pointSizeF()*0.85)
             painter.setFont(f)
-            painter.drawText(0, content_pix.height()-18, content_pix.width(), 16, Qt.AlignmentFlag.AlignCenter, footer_text)
+            painter.drawText(0, content_pix.height()-18, content_pix.width(), 16, Qt.AlignCenter, footer_text)
         except Exception:
             pass
         painter.end(); content_pix.save(path,'PNG'); print(f'Exported PNG -> {path}')
 
 
 # Add a custom QGraphicsView subclass for zooming
-# (QGraphicsView already imported above under the chosen binding)
-
+from PyQt5.QtWidgets import QGraphicsView
+from PyQt5.QtCore import Qt
 
 class ZoomableGraphicsView(QGraphicsView):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._zoom = 0
-        # --- ZoomableGraphicsView __init__ (drag mode) ---
-        try:
-            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-        except AttributeError:
-            pass
+        self.setDragMode(QGraphicsView.ScrollHandDrag)
         self._settings_key = None  # e.g., 'GanttZoom' or 'TimelineZoom'
 
     def wheelEvent(self, event):
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+        if event.modifiers() & Qt.ControlModifier:
             if event.angleDelta().y() > 0:
                 self.zoomIn()
             else:
@@ -3461,7 +3794,7 @@ class ZoomableGraphicsView(QGraphicsView):
         if not self._settings_key:
             return
         try:
-            from PyQt6.QtCore import QSettings
+            from PyQt5.QtCore import QSettings
             s = QSettings("LSI", "ProjectPlanner")
             # store current scale factor from transform
             s.setValue(self._settings_key, float(self.transform().m11()))
@@ -3472,7 +3805,7 @@ class ZoomableGraphicsView(QGraphicsView):
         if not self._settings_key:
             return
         try:
-            from PyQt6.QtCore import QSettings
+            from PyQt5.QtCore import QSettings
             s = QSettings("LSI", "ProjectPlanner")
             val = s.value(self._settings_key, None)
             if val is not None:
@@ -3573,13 +3906,13 @@ class GanttChartView(QWidget):
         try:
             for item in getattr(self, '_name_to_rect', {}).values():
                 if item and hasattr(item, 'setPen'):
-                    from PyQt6.QtGui import QPen
+                    from PyQt5.QtGui import QPen
                     item.setPen(item.data(99) or QPen(item.pen()))
         except Exception:
             pass
         rect_item = getattr(self, '_name_to_rect', {}).get(part_name)
         if rect_item:
-            from PyQt6.QtGui import QPen, QColor
+            from PyQt5.QtGui import QPen, QColor
             # Store original pen once
             if rect_item.data(99) is None:
                 rect_item.setData(99, rect_item.pen())
@@ -3596,15 +3929,13 @@ class GanttChartView(QWidget):
             print(f"highlight_bar: No bar found for '{part_name}' (may be filtered out)")
    
     def show_edit_dialog(self, row):
-        # Local imports to guarantee symbols even if module-level wildcard changes
-        from PyQt6.QtWidgets import QDialog as _QDialog, QFormLayout as _QFormLayout, QHBoxLayout as _QHBoxLayout
-        dialog = _QDialog(self)
+        dialog = QDialog(self)
         dialog.setWindowTitle(f"Edit Project Part: {row.get('Project Part', '')}")
-        layout = _QFormLayout(dialog)
+        layout = QFormLayout(dialog)
         edits = {}
         # Load pricing settings for suggestions
         try:
-            from PyQt6.QtCore import QSettings
+            from PyQt5.QtCore import QSettings
             _ps = QSettings('LSI','ProjectPlanner')
             target_margin = float(_ps.value('Pricing/target_margin', 35.0)) / 100.0
         except Exception:
@@ -3613,109 +3944,82 @@ class GanttChartView(QWidget):
         for col in self.model.COLUMNS:
             val = row.get(col, "")
             if col == "Dependencies":
-                # Enhanced Dependencies picker with filter persistence, IDs, helpers, and cycle detection
-                from PyQt6.QtWidgets import (
-                    QLineEdit, QPushButton, QHBoxLayout as _HBox, QDialog as _DepDlg, QVBoxLayout as _VB,
-                    QListWidget, QListWidgetItem, QLabel, QMessageBox, QHBoxLayout
-                )
-                from PyQt6.QtCore import QSettings
-                dep_edit = QLineEdit(str(val) if val else "")
+                # Enhanced Dependencies picker with filter persistence, IDs, helper buttons, cycle detection
+                from PyQt5.QtWidgets import QLineEdit as _QLineEdit, QPushButton as _QPushButton, QDialog as _DepDlg, QVBoxLayout as _VB, QListWidget, QListWidgetItem, QHBoxLayout as _HB, QLabel as _Lbl, QMessageBox
+                from PyQt5.QtCore import QSettings as _QS
+                dep_edit = _QLineEdit(str(val) if val else "")
                 dep_edit.setPlaceholderText("Comma-separated part names or numeric IDs")
                 edits[col] = dep_edit
                 def open_dep_picker():
-                    d = _DepDlg(dialog)
-                    d.setWindowTitle("Select Dependencies")
-                    vb = _VB(d)
-                    filter_edit = QLineEdit(); filter_edit.setPlaceholderText("Filter…")
-                    # Restore last filter
+                    d = _DepDlg(dialog); d.setWindowTitle("Select Dependencies"); vb = _VB(d)
+                    filter_edit = _QLineEdit(); filter_edit.setPlaceholderText("Filter…")
+                    # restore last filter
                     try:
-                        s = QSettings('LSI','ProjectPlanner')
-                        prev = s.value('DepsPicker/filter','')
-                        if prev:
-                            filter_edit.setText(prev)
-                    except Exception:
-                        pass
+                        prev = _QS('LSI','ProjectPlanner').value('DepsPicker/filter','')
+                        if prev: filter_edit.setText(prev)
+                    except Exception: pass
                     vb.addWidget(filter_edit)
                     lst = QListWidget(); lst.setSelectionMode(QListWidget.MultiSelection); vb.addWidget(lst,1)
                     cur_tokens = {t.strip() for t in (dep_edit.text() or '').split(',') if t.strip()}
-                    # Load name->id mapping for display of IDs
+                    # id mapping
                     name_to_id = {}
                     try:
                         import os, sqlite3
                         if os.path.exists(self.model.DB_FILE):
                             with self.model._connect() as _c:
                                 cur = _c.cursor(); cur.execute('SELECT id, "Project Part" FROM project_parts')
-                                for rid, pname in cur.fetchall():
-                                    name_to_id[pname] = rid
-                    except Exception:
-                        pass
-                    current_name = row.get("Project Part","")
+                                for rid, pname in cur.fetchall(): name_to_id[pname]=rid
+                    except Exception: pass
+                    current_name = row.get('Project Part','')
                     for r2 in self.model.rows:
-                        pname = r2.get("Project Part","")
-                        if not pname or pname == current_name:
-                            continue
+                        pname = r2.get('Project Part','')
+                        if not pname or pname == current_name: continue
                         disp = f"{pname} ({name_to_id[pname]})" if pname in name_to_id else pname
                         it = QListWidgetItem(disp, lst)
-                        if pname in cur_tokens:
-                            it.setSelected(True)
-                        it.setData(Qt.ItemDataRole.UserRole, pname)
+                        if pname in cur_tokens: it.setSelected(True)
+                        it.setData(Qt.UserRole, pname)
                     def apply_filter():
                         q = filter_edit.text().strip().lower()
                         for i in range(lst.count()):
-                            it = lst.item(i)
-                            it.setHidden(q not in it.text().lower())
+                            it = lst.item(i); it.setHidden(q not in it.text().lower())
                     filter_edit.textChanged.connect(apply_filter)
-                    # Helper buttons
-                    helpers = QHBoxLayout(); btn_parents = QPushButton("Select Parents"); btn_crit = QPushButton("Select Critical Path"); btn_clear = QPushButton("Clear")
-                    helpers.addWidget(btn_parents); helpers.addWidget(btn_crit); helpers.addWidget(btn_clear); helpers.addStretch(1)
-                    vb.addLayout(helpers)
-                    def do_parents():
-                        target = row.get('Parent') or ''
-                        names = set()
-                        name_map = {r.get('Project Part',''): r for r in self.model.rows}
+                    helpers = _HB(); btn_par = _QPushButton('Select Parents'); btn_cp = _QPushButton('Select Critical Path'); btn_clear = _QPushButton('Clear')
+                    for b in (btn_par, btn_cp, btn_clear): helpers.addWidget(b)
+                    helpers.addStretch(1); vb.addLayout(helpers)
+                    def do_par():
+                        target = row.get('Parent') or ''; name_map = {r.get('Project Part',''): r for r in self.model.rows}; names=set()
                         while target:
-                            names.add(target)
-                            target = name_map.get(target,{}).get('Parent') or ''
+                            names.add(target); target = name_map.get(target,{}).get('Parent') or ''
                         for i in range(lst.count()):
                             it = lst.item(i)
-                            if it.data(Qt.ItemDataRole.UserRole) in names:
-                                it.setSelected(True)
-                    btn_parents.clicked.connect(do_parents)
-                    def do_crit():
+                            if it.data(Qt.UserRole) in names: it.setSelected(True)
+                    btn_par.clicked.connect(do_par)
+                    def do_cp():
                         crit = getattr(self, '_current_critical_set', set())
                         for i in range(lst.count()):
                             it = lst.item(i)
-                            if it.data(Qt.ItemDataRole.UserRole) in crit:
-                                it.setSelected(True)
-                    btn_crit.clicked.connect(do_crit)
-                    def do_clear():
-                        for i in range(lst.count()):
-                            lst.item(i).setSelected(False)
-                    btn_clear.clicked.connect(do_clear)
-                    # Buttons row
-                    btn_row = _HBox(); ok_btn = QPushButton("OK"); canc_btn = QPushButton("Cancel"); btn_row.addStretch(1); btn_row.addWidget(ok_btn); btn_row.addWidget(canc_btn); vb.addLayout(btn_row)
+                            if it.data(Qt.UserRole) in crit: it.setSelected(True)
+                    btn_cp.clicked.connect(do_cp)
+                    def do_cl():
+                        for i in range(lst.count()): lst.item(i).setSelected(False)
+                    btn_clear.clicked.connect(do_cl)
+                    btn_row = _HB(); ok=_QPushButton('OK'); canc=_QPushButton('Cancel'); btn_row.addStretch(1); btn_row.addWidget(ok); btn_row.addWidget(canc); vb.addLayout(btn_row)
                     def accept():
-                        sels = []
+                        sels=[]
                         for i in range(lst.count()):
                             it = lst.item(i)
-                            if it.isSelected():
-                                sels.append(it.data(Qt.ItemDataRole.UserRole))
+                            if it.isSelected(): sels.append(it.data(Qt.UserRole))
                         if sels and _would_create_cycle(self.model, row.get('Project Part',''), set(sels)):
-                            resp = QMessageBox.warning(d, "Cycle Detected", "Adding these dependencies introduces a cycle. Proceed anyway?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
-                            if resp != QMessageBox.StandardButton.Yes:
+                            if QMessageBox.warning(d,'Cycle Detected','Cycle introduced. Proceed?', QMessageBox.Yes|QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
                                 return
-                        dep_edit.setText(", ".join(sorted(sels)))
-                        try:
-                            s = QSettings('LSI','ProjectPlanner'); s.setValue('DepsPicker/filter', filter_edit.text())
-                        except Exception:
-                            pass
+                        dep_edit.setText(', '.join(sorted(sels)))
+                        try: _QS('LSI','ProjectPlanner').setValue('DepsPicker/filter', filter_edit.text())
+                        except Exception: pass
                         d.accept()
-                    ok_btn.clicked.connect(accept); canc_btn.clicked.connect(d.reject)
-                    d.setLayout(vb); d.resize(420,500); d.exec()
-                pick_btn = QPushButton("Select…")
-                pick_btn.clicked.connect(open_dep_picker)
-                hb = _HBox(); hb.addWidget(dep_edit,1); hb.addWidget(pick_btn)
-                layout.addRow(col, hb)
+                    ok.clicked.connect(accept); canc.clicked.connect(d.reject)
+                    d.setLayout(vb); d.resize(420,500); d.exec_()
+                pick_btn = _QPushButton('Select…'); pick_btn.clicked.connect(open_dep_picker)
+                hb = QHBoxLayout(); hb.addWidget(dep_edit,1); hb.addWidget(pick_btn); layout.addRow(col, hb)
                 continue
             if col in ("Start Date", "Calculated End Date"):
                 date_edit = QDateEdit()
@@ -3748,13 +4052,14 @@ class GanttChartView(QWidget):
                 edits[col] = combo
                 layout.addRow(col, combo)
             elif col == "% Complete":
-                from PyQt6.QtWidgets import QSpinBox
+                from PyQt5.QtWidgets import QSpinBox
                 spin = QSpinBox()
                 spin.setRange(0, 100)
                 try:
                     spin.setValue(int(val or 0))
                 except Exception:
                     spin.setValue(0)
+                # Disable if this row is a parent (rolled up)
                 name = row.get("Project Part", "")
                 has_children = any(r.get("Parent", "") == name for r in self.model.rows if r is not row)
                 if has_children:
@@ -3762,8 +4067,140 @@ class GanttChartView(QWidget):
                     spin.setToolTip("Parent progress rolls up from children.")
                 edits[col] = spin
                 layout.addRow(col, spin)
+            elif col == "Status":
+                combo = QComboBox()
+                combo.addItems(["Planned", "In Progress", "Blocked", "Done", "Deferred"])
+                if val:
+                    combo.setCurrentText(str(val))
+                name = row.get("Project Part", "")
+                has_children = any(r.get("Parent", "") == name for r in self.model.rows if r is not row)
+                if has_children:
+                    combo.setEnabled(False)
+                    combo.setToolTip("Parent status is derived from children.")
+                edits[col] = combo
+                layout.addRow(col, combo)
+            elif col in ("Actual Start Date", "Actual Finish Date", "Baseline Start Date", "Baseline End Date"):
+                # Show read-only line edits for audit trail
+                from PyQt5.QtWidgets import QLineEdit as _QLineEdit
+                le = _QLineEdit(str(val) if val else "")
+                le.setReadOnly(True)
+                le.setStyleSheet("QLineEdit { background-color: #222; color: #bbb; }")
+                edits[col] = le
+                layout.addRow(col, le)
+            elif col == "Notes":
+                text = QTextEdit()
+                text.setPlainText(val)
+                edits[col] = text
+                layout.addRow(col, text)
+            elif col in ("Fabrication Labor Hours", "Installation Labor Hours"):
+                from PyQt5.QtWidgets import QDoubleSpinBox
+                hrs = QDoubleSpinBox()
+                hrs.setRange(0.0, 10000.0)
+                hrs.setDecimals(1)
+                hrs.setSingleStep(0.5)
+                try:
+                    hrs.setValue(float(val) if val not in (None, "") else 0.0)
+                except Exception:
+                    hrs.setValue(0.0)
+                hrs.setSuffix(" h")
+                hrs.setToolTip("Estimated {} labor hours".format("fabrication" if col.startswith("Fabrication") else "installation"))
+                edits[col] = hrs
+                layout.addRow(col, hrs)
+            elif col == "Images":
+                hbox = QHBoxLayout()
+                img_label = QLabel()
+                if val:
+                    import os
+                    from PyQt5.QtGui import QPixmap
+                    if not os.path.isabs(val):
+                        base_dir = os.path.dirname(os.path.abspath(__file__))
+                        img_path_full = os.path.join(base_dir, val)
+                    else:
+                        img_path_full = val
+                    pixmap = QPixmap(img_path_full)
+                    if not pixmap.isNull():
+                        img_label.setPixmap(pixmap.scaledToHeight(48, Qt.SmoothTransformation))
+                btn = QPushButton("Change Image")
+                def pick_image():
+                    fname, _ = QFileDialog.getOpenFileName(dialog, "Select Image", "", "Image Files (*.png *.jpg *.jpeg *.bmp *.gif)")
+                    if fname:
+                        img_label.setPixmap(QPixmap(fname).scaledToHeight(48, Qt.SmoothTransformation))
+                        edits[col].setText(fname)
+                btn.clicked.connect(pick_image)
+                img_path_edit = QLineEdit(val)
+                edits[col] = img_path_edit
+                hbox.addWidget(img_label)
+                hbox.addWidget(img_path_edit)
+                hbox.addWidget(btn)
+                layout.addRow(col, hbox)
+            elif col == "Pace Link":
+                link_edit = QLineEdit(val)
+                edits[col] = link_edit
+                link_label = QLabel()
+                if val and (val.startswith("http://") or val.startswith("https://")):
+                    link_label.setText(f'<a href="{val}">{val}</a>')
+                    link_label.setOpenExternalLinks(True)
+                else:
+                    link_label.setText("")
+                layout.addRow(col, link_edit)
+                layout.addRow("Link Preview", link_label)
+                def update_link_label():
+                    v = link_edit.text()
+                    if v and (v.startswith("http://") or v.startswith("https://")):
+                        link_label.setText(f'<a href="{v}">{v}</a>')
+                        link_label.setOpenExternalLinks(True)
+                    else:
+                        link_label.setText("")
+                link_edit.textChanged.connect(update_link_label)
+            elif col in ("Production Cost", "Installation Cost", "Production Price", "Installation Price", "Material Cost", "Labor Rate", "Install Labor Rate", "Equipment Cost", "Permit/Eng Cost"):
+                from PyQt5.QtWidgets import QDoubleSpinBox
+                sb = QDoubleSpinBox()
+                sb.setRange(0.0, 10_000_000.0)
+                sb.setDecimals(2)
+                sb.setSingleStep(50.0)
+                try:
+                    sb.setValue(float(val) if val not in (None, "") else 0.0)
+                except Exception:
+                    sb.setValue(0.0)
+                sb.setPrefix("$")
+                if col in ("Production Cost","Installation Cost","Material Cost","Equipment Cost","Permit/Eng Cost"):
+                    if col == "Production Cost":
+                        sb.setToolTip("Internal production cost (auto-derived if Material + Labor provided)")
+                    elif col == "Installation Cost":
+                        sb.setToolTip("Internal install cost (labor + equipment + permit/eng if provided)")
+                    elif col == "Material Cost":
+                        sb.setToolTip("Direct materials cost")
+                    elif col == "Equipment Cost":
+                        sb.setToolTip("Equipment rental or usage cost")
+                    elif col == "Permit/Eng Cost":
+                        sb.setToolTip("Permitting or engineering fees")
+                else:
+                    sb.setToolTip("Charge amount for {}".format("production" if "Production" in col else "installation"))
+                edits[col] = sb
+                layout.addRow(col, sb)
+            elif col in ("Contingency %","Warranty Reserve %"):
+                from PyQt5.QtWidgets import QDoubleSpinBox
+                sb = QDoubleSpinBox(); sb.setRange(0.0,100.0); sb.setDecimals(1); sb.setSingleStep(1.0); sb.setSuffix(" %")
+                try:
+                    sb.setValue(float(val) if val not in (None,"") else 0.0)
+                except Exception:
+                    sb.setValue(0.0)
+                if col == "Contingency %":
+                    sb.setToolTip("Percentage buffer applied to internal cost before margin calc for suggestions")
+                else:
+                    sb.setToolTip("Percentage of price reserved (reduces effective profit)")
+                edits[col]=sb; layout.addRow(col,sb)
+            elif col == "Risk Level":
+                combo = QComboBox(); combo.addItems(["Low","Medium","High"])
+                if val: combo.setCurrentText(str(val))
+                combo.setToolTip("Qualitative risk indicator")
+                edits[col]=combo; layout.addRow(col, combo)
+            elif col == "Quote Version":
+                from PyQt5.QtWidgets import QLineEdit as _QLE
+                le=_QLE(str(val) if val else ""); le.setReadOnly(True); le.setStyleSheet("QLineEdit { background:#222; color:#bbb; }")
+                edits[col]=le; layout.addRow(col, le)
             elif col.startswith("Frozen "):
-                from PyQt6.QtWidgets import QLineEdit as _QLE
+                from PyQt5.QtWidgets import QLineEdit as _QLE
                 le=_QLE(str(val) if val else ""); le.setReadOnly(True); le.setStyleSheet("QLineEdit { background:#222; color:#777; }")
                 edits[col]=le; layout.addRow(col, le)
             else:
@@ -3850,7 +4287,7 @@ class GanttChartView(QWidget):
                     suggest_label.setText(" | ".join(txt) if txt else "")
             except Exception:
                 pass
-        from PyQt6.QtWidgets import QLabel, QHBoxLayout
+        from PyQt5.QtWidgets import QLabel, QHBoxLayout
         suggest_label = QLabel("")
         suggest_label.setStyleSheet("color:#bbb; font-size:11px")
         apply_box = QHBoxLayout()
@@ -3945,7 +4382,7 @@ class GanttChartView(QWidget):
                     pass
                 # Validation: price below cost warning
                 try:
-                    from PyQt6.QtWidgets import QMessageBox as _QB
+                    from PyQt5.QtWidgets import QMessageBox as _QB
                     pcost = float(row.get('Production Cost') or 0)
                     icost = float(row.get('Installation Cost') or 0)
                     pprice = float(row.get('Production Price') or 0)
@@ -4000,17 +4437,13 @@ class GanttChartView(QWidget):
             group.add(parent)
         group.update(children)
         # Highlight bars in group
-        from PyQt6.QtGui import QPen, QColor
+        from PyQt5.QtGui import QPen, QColor
         highlight_color = QColor("#00BFFF")
         for item in self.scene.items():
             if hasattr(item, 'data') and callable(item.data):
                 if item.data(0) in group:
                     item.setPen(QPen(highlight_color, 3))
-                from PyQt6.QtWidgets import (
-                    QLineEdit, QPushButton, QHBoxLayout as _HBox, QDialog as _DepDlg, QVBoxLayout as _VB,
-                    QListWidget, QListWidgetItem, QLabel, QHBoxLayout, QMessageBox
-                )
-                from PyQt6.QtCore import QSettings
+                else:
                     item.setPen(QPen())
             elif hasattr(item, 'toGraphicsObject') and hasattr(item, 'setDefaultTextColor'):
                 if hasattr(item, 'toPlainText') and item.toPlainText() in group:
@@ -4019,76 +4452,25 @@ class GanttChartView(QWidget):
                     item.setDefaultTextColor(QColor("black"))
 
     def export_gantt_chart(self):
-                    # Restore previous filter/geometry
-                    try:
-                        s = QSettings('LSI','ProjectPlanner')
-                        prev = s.value('DepsPicker/filter','')
-                        if prev:
-                            filter_edit.setText(prev)
-                    except Exception:
-                        pass
         self._export_scene_with_header(self.scene, title="Gantt Chart")
 
     def _export_scene_with_header(self, scene, title="Export"):
-        from PyQt6.QtGui import QPainter
-                    name_to_id = {}
-                    try:
-                        import os, sqlite3
-                        if os.path.exists(self.model.DB_FILE):
-                            with self.model._connect() as _c:
-                                cur = _c.cursor(); cur.execute('SELECT id, "Project Part" FROM project_parts')
-                                for rid, pname in cur.fetchall():
-                                    name_to_id[pname] = rid
-                    except Exception:
-                        pass
-                    current_name = row.get("Project Part","")
-                    for r2 in self.model.rows:
-                        pname = r2.get("Project Part","")
-                        if not pname or pname == current_name:
-                            continue
-                        disp = pname
-                        if pname in name_to_id:
-                            disp = f"{pname} ({name_to_id[pname]})"
-                        it = QListWidgetItem(disp, lst)
-                        if pname in cur_tokens:
-                            it.setSelected(True)
-                        it.setData(Qt.ItemDataRole.UserRole, pname)
+        from PyQt5.QtGui import QPainter
+        import os
+        from PyQt5.QtCore import QSettings
+        # Prefer SVG header from repo root; fallback to PNG
+        svg_path = resolve_resource_path("header.svg")
+        header_is_svg = False
+        header_svg_renderer = None
+        try:
+            if os.path.exists(svg_path):
+                from PyQt5.QtSvg import QSvgRenderer  # type: ignore
                 r = QSvgRenderer(svg_path)
                 if r.isValid():
                     header_is_svg = True
                     header_svg_renderer = r
         except Exception:
             header_is_svg = False
-                    # Helper buttons row
-                    helpers = QHBoxLayout();
-                    btn_parents = QPushButton("Select Parents")
-                    btn_crit = QPushButton("Select Critical Path")
-                    btn_clear = QPushButton("Clear")
-                    helpers.addWidget(btn_parents); helpers.addWidget(btn_crit); helpers.addWidget(btn_clear); helpers.addStretch(1)
-                    vb.addLayout(helpers)
-                    def do_parents():
-                        target = row.get('Parent') or ''
-                        names = set()
-                        name_map = {r.get('Project Part',''): r for r in self.model.rows}
-                        while target:
-                            names.add(target)
-                            target = name_map.get(target,{}).get('Parent') or ''
-                        for i in range(lst.count()):
-                            it = lst.item(i)
-                            if it.data(Qt.ItemDataRole.UserRole) in names:
-                                it.setSelected(True)
-                    btn_parents.clicked.connect(do_parents)
-                    def do_crit():
-                        crit = getattr(self, '_current_critical_set', set())
-                        for i in range(lst.count()):
-                            it = lst.item(i)
-                            if it.data(Qt.ItemDataRole.UserRole) in crit:
-                                it.setSelected(True)
-                    btn_crit.clicked.connect(do_crit)
-                    def do_clear():
-                        for i in range(lst.count()):
-                            lst.item(i).setSelected(False)
-                    btn_clear.clicked.connect(do_clear)
             header_svg_renderer = None
         # Read persisted export settings
         s = QSettings("LSI", "ProjectPlanner")
@@ -4096,22 +4478,9 @@ class GanttChartView(QWidget):
         page_size = s.value("Export/page_size", "A4")
         orientation = s.value("Export/orientation", "Portrait")
         ml = float(s.value("Export/margin_left_mm", 8.0))
-                        # Cycle detection: include new selection for this row
-                        if sels:
-                            if _would_create_cycle(self.model, row.get('Project Part',''), set(sels)):
-                                resp = QMessageBox.warning(d, "Cycle Detected",
-                                    "Adding these dependencies introduces a cycle. Proceed anyway?",
-                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                    QMessageBox.StandardButton.No)
-                                if resp != QMessageBox.StandardButton.Yes:
-                                    return
-                        dep_edit.setText(
-                            ", ".join(sorted(sels)))
-                        try:
-                            s = QSettings('LSI','ProjectPlanner'); s.setValue('DepsPicker/filter', filter_edit.text())
-                        except Exception:
-                            pass
-                        d.accept()
+        mt = float(s.value("Export/margin_top_mm", 8.0))
+        mr = float(s.value("Export/margin_right_mm", 8.0))
+        mb = float(s.value("Export/margin_bottom_mm", 8.0))
         include_header = s.value("Export/include_header", True)
         if isinstance(include_header, str):
             include_header = include_header.lower() in ("1","true","yes","on")
@@ -4135,8 +4504,8 @@ class GanttChartView(QWidget):
         header_pixmap = QPixmap(header_path) if os.path.exists(header_path) else None
         if is_pdf:
             # Use QPrinter for PDF
-            from PyQt6.QtPrintSupport import QPrinter
-            from PyQt6.QtCore import QRectF
+            from PyQt5.QtPrintSupport import QPrinter
+            from PyQt5.QtCore import QRectF
             from math import ceil
             printer = QPrinter(QPrinter.HighResolution)
             printer.setOutputFileName(path)
@@ -4152,7 +4521,7 @@ class GanttChartView(QWidget):
             printer.setOrientation(QPrinter.Portrait if orientation == 'Portrait' else QPrinter.Landscape)
             painter = QPainter(printer)
             # Apply margins (mm)
-            from PyQt6.QtCore import QMarginsF
+            from PyQt5.QtCore import QMarginsF
             try:
                 m = QMarginsF(ml, mt, mr, mb)
                 printer.setPageMargins(m)
@@ -4180,12 +4549,12 @@ class GanttChartView(QWidget):
                     y_offset = header_h + 10
                 elif header_pixmap and not header_pixmap.isNull():
                     header_w = page_rect.width()
-                    scaled_header = header_pixmap.scaledToWidth(header_w, Qt.TransformationMode.SmoothTransformation)
+                    scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
                     painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
                     y_offset = scaled_header.height() + 10
             elif include_header and header_pixmap and not header_pixmap.isNull():
                 header_w = page_rect.width()
-                scaled_header = header_pixmap.scaledToWidth(header_w, Qt.TransformationMode.SmoothTransformation)
+                scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
                 painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
                 y_offset = scaled_header.height() + 10
             avail_h = max(1, page_rect.height() - y_offset)
@@ -4205,11 +4574,11 @@ class GanttChartView(QWidget):
                                 header_svg_renderer.render(painter, target_rect)
                             elif header_pixmap and not header_pixmap.isNull():
                                 header_w = page_rect.width()
-                                scaled_header = header_pixmap.scaledToWidth(header_w, Qt.TransformationMode.SmoothTransformation)
+                                scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
                                 painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
                         elif header_pixmap and not header_pixmap.isNull():
                             header_w = page_rect.width()
-                            scaled_header = header_pixmap.scaledToWidth(header_w, Qt.TransformationMode.SmoothTransformation)
+                            scaled_header = header_pixmap.scaledToWidth(header_w, Qt.SmoothTransformation)
                             painter.drawPixmap((header_w - scaled_header.width()) // 2, 0, scaled_header)
                 painter.save()
                 painter.translate(0, y_offset)
@@ -4255,7 +4624,7 @@ class GanttChartView(QWidget):
                 combined.fill()
                 painter = QPainter(combined)
                 # Render SVG centered at top into target rect of width target_w
-                from PyQt6.QtCore import QRectF
+                from PyQt5.QtCore import QRectF
                 target_rect = QRectF((combined_width - target_w) / 2, 0, target_w, header_h)
                 header_svg_renderer.render(painter, target_rect)
                 painter.drawPixmap(0, header_h, content_pixmap)
@@ -4306,7 +4675,7 @@ class GanttChartView(QWidget):
 
         self.preview_label = QLabel()
         self.preview_label.setFixedHeight(140)
-        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setStyleSheet("border:1px solid #666; background:#222;")
 
         # Export / Settings / Refresh
@@ -4317,7 +4686,7 @@ class GanttChartView(QWidget):
         def open_settings():
             try:
                 dlg = ExportSettingsDialog(self)
-                dlg.exec()
+                dlg.exec_()
             except Exception as e:
                 print(f"Open Export Settings failed: {e}")
         settings_btn.clicked.connect(open_settings)
@@ -4328,7 +4697,7 @@ class GanttChartView(QWidget):
         toolbar.addWidget(settings_btn)
         toolbar.addWidget(refresh_btn)
 
-        from PyQt6.QtWidgets import QCheckBox, QComboBox
+        from PyQt5.QtWidgets import QCheckBox, QComboBox
         self.hierarchy_checkbox = QCheckBox("Hierarchy")
         self.hierarchy_checkbox.setChecked(True)
         self.hierarchy_checkbox.stateChanged.connect(lambda _s: self.refresh_gantt())
@@ -4351,7 +4720,7 @@ class GanttChartView(QWidget):
             self.refresh_gantt()
         self.baseline_combo.currentTextChanged.connect(_on_baseline_change)
         def _save_baseline():
-            from PyQt6.QtWidgets import QInputDialog
+            from PyQt5.QtWidgets import QInputDialog
             name, ok = QInputDialog.getText(self, "Save Baseline", "Baseline name:")
             if ok and name:
                 try:
@@ -4384,22 +4753,22 @@ class GanttChartView(QWidget):
         def _fit_all():
             r = self.scene.itemsBoundingRect()
             if not r.isNull():
-                self.view.fitInView(r, Qt.AspectRatioMode.KeepAspectRatio)
+                self.view.fitInView(r, Qt.KeepAspectRatio)
         fit_all_btn.clicked.connect(_fit_all)
         def _fit_sel():
             items = [it for it in self.scene.selectedItems()]
-            from PyQt6.QtCore import QRectF
+            from PyQt5.QtCore import QRectF
             if items:
                 rect = QRectF()
                 for it in items:
                     rect = rect.united(it.sceneBoundingRect())
                 if not rect.isNull():
-                    self.view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+                    self.view.fitInView(rect, Qt.KeepAspectRatio)
                     return
             name = getattr(self, '_locked_label', None)
             if name and name in getattr(self, '_name_to_rect', {}):
                 rect = self._name_to_rect[name].sceneBoundingRect()
-                self.view.fitInView(rect.adjusted(-40, -20, 40, 20), Qt.AspectRatioMode.KeepAspectRatio)
+                self.view.fitInView(rect.adjusted(-40, -20, 40, 20), Qt.KeepAspectRatio)
             else:
                 _fit_all()
         fit_sel_btn.clicked.connect(_fit_sel)
@@ -4415,8 +4784,8 @@ class GanttChartView(QWidget):
 
         # Keyboard shortcuts
         try:
-            from PyQt6.QtWidgets import QShortcut
-            from PyQt6.QtGui import QKeySequence
+            from PyQt5.QtWidgets import QShortcut
+            from PyQt5.QtGui import QKeySequence
             QShortcut(QKeySequence.ZoomIn, self.view, activated=self.view.zoomIn)
             QShortcut(QKeySequence.ZoomOut, self.view, activated=self.view.zoomOut)
             QShortcut(QKeySequence("Ctrl+0"), self.view, activated=self.reset_zoom)
@@ -4431,11 +4800,11 @@ class GanttChartView(QWidget):
         try:
             scale_x = self.view.transform().m11()
             if abs(scale_x - 1.0) < 0.001:
-                from PyQt6.QtCore import QTimer
+                from PyQt5.QtCore import QTimer
                 def do_fit():
                     r = self.scene.itemsBoundingRect()
                     if not r.isNull():
-                        self.view.fitInView(r, Qt.AspectRatioMode.KeepAspectRatio)
+                        self.view.fitInView(r, Qt.KeepAspectRatio)
                 QTimer.singleShot(0, do_fit)
             self._did_initial_fit = True
         except Exception:
@@ -4478,7 +4847,7 @@ class GanttChartView(QWidget):
     # Unified connector + label highlighting
     # Restores original dynamic connector line highlighting AND integrates label font/background highlight.
     def _highlight_connectors(self, part_name, on):
-        from PyQt6.QtGui import QPen, QColor, QFont, QBrush
+        from PyQt5.QtGui import QPen, QColor, QFont, QBrush
         # 1. Connector lines
         if hasattr(self, '_connector_lines_map'):
             lines = self._connector_lines_map.get(part_name, [])
@@ -4693,8 +5062,8 @@ class GanttChartView(QWidget):
         chart_min_date = min_date  # earliest start
 
     # ---------- Draw bars ----------
-        from PyQt6.QtGui import QColor
-        from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsItem
+        from PyQt5.QtGui import QColor
+        from PyQt5.QtWidgets import QGraphicsRectItem, QGraphicsItem
         gantt_color = QColor("#FF8200")
 
         # Optional critical path calculation
@@ -4708,23 +5077,7 @@ class GanttChartView(QWidget):
                 import datetime as _dt_cp
                 for r in rows:
                     name = r.get("Project Part", "")
-                    raw_tokens = [d.strip() for d in (r.get("Dependencies", "") or "").split(',') if d.strip()]
-                    deps = []
-                    for tok in raw_tokens:
-                        if tok in name_to_row:
-                            deps.append(tok); continue
-                        if tok.isdigit():
-                            try:
-                                import os
-                                if os.path.exists(self.model.DB_FILE):
-                                    with self.model._connect() as _c:
-                                        cur = _c.cursor(); cur.execute('SELECT "Project Part" FROM project_parts WHERE id=? LIMIT 1', (int(tok),))
-                                        rr = cur.fetchone()
-                                        if rr and rr[0]:
-                                            deps.append(rr[0]); continue
-                            except Exception:
-                                pass
-                        deps.append(tok)
+                    deps = [d.strip() for d in (r.get("Dependencies", "") or "").split(',') if d.strip()]
                     graph[name] = deps
                     try:
                         if "_auto_start" in r and "_auto_end" in r:
@@ -4790,7 +5143,7 @@ class GanttChartView(QWidget):
                 self.preview_label = preview_label
                 self.gantt_view = gantt_view
                 self.setAcceptHoverEvents(True)
-                self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+                self.setFlag(QGraphicsItem.ItemIsSelectable, True)
 
             # --- Attachment utilities ---
             def _attachments_list(self):
@@ -4814,12 +5167,12 @@ class GanttChartView(QWidget):
                     except Exception as e:
                         print(f"Attachment save failed: {e}")
             def contextMenuEvent(self, event):
-                from PyQt6.QtWidgets import QMenu
+                from PyQt5.QtWidgets import QMenu
                 menu = QMenu()
                 open_action = menu.addAction("Open Attachments…")
                 add_action = menu.addAction("Add Attachment…")
                 open_folder_action = menu.addAction("Open Attachments Folder")
-                chosen = menu.exec(event.screenPos())
+                chosen = menu.exec_(event.screenPos())
                 if chosen == open_action:
                     self.show_attachments_dialog()
                 elif chosen == add_action:
@@ -4827,7 +5180,7 @@ class GanttChartView(QWidget):
                 elif chosen == open_folder_action:
                     self.open_attachments_folder()
             def add_attachment_files(self):
-                from PyQt6.QtWidgets import QFileDialog
+                from PyQt5.QtWidgets import QFileDialog
                 import os, shutil
                 files, _ = QFileDialog.getOpenFileNames(None, "Select Attachment(s)")
                 if not files:
@@ -4866,7 +5219,7 @@ class GanttChartView(QWidget):
                 else:
                     subprocess.Popen(['xdg-open', attach_dir])
             def show_attachments_dialog(self):
-                from PyQt6.QtWidgets import QDialog, QVBoxLayout, QListWidget, QPushButton, QHBoxLayout, QLabel
+                from PyQt5.QtWidgets import QDialog, QVBoxLayout, QListWidget, QPushButton, QHBoxLayout, QLabel
                 import os, webbrowser
                 dlg = QDialog()
                 dlg.setWindowTitle(f"Attachments - {self.row.get('Project Part','')}")
@@ -4882,7 +5235,7 @@ class GanttChartView(QWidget):
                 for p in self._attachments_list():
                     lst.addItem(p)
                 def refresh_thumb():
-                    from PyQt6.QtGui import QPixmap
+                    from PyQt5.QtGui import QPixmap
                     item = lst.currentItem()
                     if not item:
                         thumb.clear(); return
@@ -4892,7 +5245,7 @@ class GanttChartView(QWidget):
                     if os.path.exists(full) and os.path.splitext(full)[1].lower() in ('.png','.jpg','.jpeg','.bmp','.gif'):
                         pm = QPixmap(full)
                         if not pm.isNull():
-                            thumb.setPixmap(pm.scaledToHeight(100, Qt.TransformationMode.SmoothTransformation)); return
+                            thumb.setPixmap(pm.scaledToHeight(100, Qt.SmoothTransformation)); return
                     thumb.setText(os.path.basename(full))
                 def do_add():
                     self.add_attachment_files(); lst.clear(); [lst.addItem(p) for p in self._attachments_list()]; refresh_thumb()
@@ -4917,19 +5270,19 @@ class GanttChartView(QWidget):
                 rem_btn.clicked.connect(do_remove)
                 open_btn.clicked.connect(do_open)
                 refresh_thumb()
-                dlg.exec()
+                dlg.exec_()
             def _set_preview(self):
                 img_path = self.row.get("Images", "")
                 if img_path and str(img_path).strip():
-                    from PyQt6.QtGui import QPixmap
+                    from PyQt5.QtGui import QPixmap
                     img_path_full = resolve_resource_path(img_path)
                     pm = QPixmap(img_path_full)
                     if not pm.isNull():
-                        self.preview_label.setPixmap(pm.scaledToHeight(90, Qt.TransformationMode.SmoothTransformation))
+                        self.preview_label.setPixmap(pm.scaledToHeight(90, Qt.SmoothTransformation))
                         self.preview_label.setText("")
                         return
                 # Ensure QPixmap is imported when clearing
-                from PyQt6.QtGui import QPixmap
+                from PyQt5.QtGui import QPixmap
                 self.preview_label.setText("")
                 self.preview_label.setPixmap(QPixmap())
             def mousePressEvent(self, event):
@@ -4960,12 +5313,12 @@ class GanttChartView(QWidget):
                 if not self.row.get("Images"):
                     atts = self._attachments_list()
                     if atts:
-                        from PyQt6.QtGui import QPixmap
+                        from PyQt5.QtGui import QPixmap
                         full = resolve_resource_path(atts[0])
                         if os.path.exists(full):
                             pm = QPixmap(full)
                             if not pm.isNull():
-                                self.preview_label.setPixmap(pm.scaledToHeight(90, Qt.TransformationMode.SmoothTransformation))
+                                self.preview_label.setPixmap(pm.scaledToHeight(90, Qt.SmoothTransformation))
                                 self.preview_label.setText("")
 
         name_to_bar = {}
@@ -4973,7 +5326,7 @@ class GanttChartView(QWidget):
         bar_items = []
         # (Reverted) Previously labels were placed in a dedicated left column and bars were offset.
         # We now restore inline style with external labels to the right of bars.
-        from PyQt6.QtGui import QFontMetrics, QFont
+        from PyQt5.QtGui import QFontMetrics, QFont
         font = self.font() if hasattr(self, 'font') else None
         fm = QFontMetrics(font) if font else None
         max_chars_fixed = 32  # keep truncation behavior
@@ -4982,7 +5335,7 @@ class GanttChartView(QWidget):
         self._name_to_text_item = {}
         # Weekend/holiday background shading for full chart span
         try:
-            from PyQt6.QtGui import QBrush
+            from PyQt5.QtGui import QBrush
             from datetime import timedelta
             shade_wknd = QBrush(QColor(220,220,220,120))
             holidays = load_holiday_dates()
@@ -4997,12 +5350,12 @@ class GanttChartView(QWidget):
                     run_end = cur
                     x0 = (run_start - chart_min_date).days * 10 + bar_offset_x
                     x1 = (run_end - chart_min_date).days * 10 + bar_offset_x
-                    self.scene.addRect(x0, 0, max(1, x1-x0), len(bars)*(bar_height+bar_gap)+80, pen=Qt.PenStyle.NoPen, brush=shade_wknd)
+                    self.scene.addRect(x0, 0, max(1, x1-x0), len(bars)*(bar_height+bar_gap)+80, pen=Qt.NoPen, brush=shade_wknd)
                 else:
                     # holidays (single days)
                     if cur.date() in holidays:
                         x0 = (cur - chart_min_date).days * 10 + bar_offset_x
-                        self.scene.addRect(x0, 0, 10, len(bars)*(bar_height+bar_gap)+80, pen=Qt.PenStyle.NoPen, brush=shade_hol)
+                        self.scene.addRect(x0, 0, 10, len(bars)*(bar_height+bar_gap)+80, pen=Qt.NoPen, brush=shade_hol)
                     cur += timedelta(days=1)
         except Exception:
             pass
@@ -5013,7 +5366,7 @@ class GanttChartView(QWidget):
             width = max(duration * 10, 10)
             rect = ClickableBar(x, y, width, bar_height, r, self.preview_label, self)
             rect.setBrush(QColor("#333333"))
-            from PyQt6.QtGui import QPen as _QPen4
+            from PyQt5.QtGui import QPen as _QPen4
             import datetime as _dt_ov
             overdue = False; at_risk = False
             try:
@@ -5034,7 +5387,7 @@ class GanttChartView(QWidget):
                     at_risk = True
             except Exception:
                 pass
-            outline_pen = _QPen4(Qt.PenStyle.NoPen)
+            outline_pen = _QPen4(Qt.NoPen)
             if overdue:
                 outline_pen = _QPen4(QColor("red")); outline_pen.setWidth(2)
             elif at_risk:
@@ -5042,8 +5395,6 @@ class GanttChartView(QWidget):
             rect.setPen(outline_pen)
             self.scene.addItem(rect)
             self._name_to_rect[name] = rect
-            # Ensure selectable flag for bar rectangles
-            rect.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
             try:
                 pc = int(r.get("% Complete") or 0)
             except Exception:
@@ -5051,8 +5402,8 @@ class GanttChartView(QWidget):
             if pc > 0:
                 prog_w = max(2, int(width * pc / 100))
                 prog_color = QColor("#DAA520") if name in critical_set else gantt_color
-                from PyQt6.QtGui import QPen as _QPen3
-                prog_rect = self.scene.addRect(x, y, prog_w, bar_height, _QPen3(Qt.PenStyle.NoPen), prog_color)
+                from PyQt5.QtGui import QPen as _QPen3
+                prog_rect = self.scene.addRect(x, y, prog_w, bar_height, _QPen3(Qt.NoPen), prog_color)
                 prog_rect.setAcceptedMouseButtons(Qt.NoButton)
                 prog_rect.setZValue(rect.zValue() + 1)
             full_name = name
@@ -5069,7 +5420,7 @@ class GanttChartView(QWidget):
             if len(display_name) > max_chars_fixed:
                 display_name = display_name[:max_chars_fixed-1] + "…"
             text_item = self.scene.addText(display_name)
-            from PyQt6.QtGui import QColor as _QColor, QFont, QBrush, QPen
+            from PyQt5.QtGui import QColor as _QColor, QFont, QBrush, QPen
             text_item.setDefaultTextColor(_QColor("black"))
             orig_font = text_item.font()
             text_item.setData(1, orig_font)
@@ -5081,14 +5432,14 @@ class GanttChartView(QWidget):
             text_item.setPos(x + width + gap, ty)
             # Always-visible subtle contrasting background for readability
             br = text_item.boundingRect().translated(text_item.pos())
-            from PyQt6.QtGui import QPen as _LblPen, QBrush as _LblBrush, QColor as _LblColor, QPainterPath as _LblPath
+            from PyQt5.QtGui import QPen as _LblPen, QBrush as _LblBrush, QColor as _LblColor, QPainterPath as _LblPath
             bg_color = _LblColor("#FF8200")  # orange background
             padded = br.adjusted(-3,-1,3,1)
             path = _LblPath()
             radius = 6
             path.addRoundedRect(padded, radius, radius)
             bg_brush = _LblBrush(bg_color)
-            bg_rect = self.scene.addPath(path, _LblPen(Qt.PenStyle.NoPen), bg_brush)
+            bg_rect = self.scene.addPath(path, _LblPen(Qt.NoPen), bg_brush)
             bg_rect.setZValue(text_item.zValue()-1)
             text_item.setData(3, bg_rect)  # store bg rect
             text_item.setData(4, bg_brush)  # store original brush
@@ -5101,7 +5452,7 @@ class GanttChartView(QWidget):
             baseline_name = getattr(self, '_selected_baseline_name', None)
             if baseline_name:
                 bmap = self.model.load_baseline_map(baseline_name)
-                from PyQt6.QtGui import QPen
+                from PyQt5.QtGui import QPen
                 pen = QPen(QColor(150,150,150))
                 pen.setStyle(Qt.DashLine); pen.setWidth(1)
                 for name, pos in name_to_bar.items():
@@ -5129,7 +5480,7 @@ class GanttChartView(QWidget):
         # ---------- Selection handling ----------
         self._bar_rect_to_row = {}
         for rect, r in bar_items:
-            rect.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+            rect.setFlag(QGraphicsItem.ItemIsSelectable, True)
             self._bar_rect_to_row[rect] = r
         def on_selection_changed():
             selected = [it for it in self.scene.selectedItems() if it in self._bar_rect_to_row]
@@ -5162,12 +5513,12 @@ class GanttChartView(QWidget):
                 self.scene.addLine(tick_x, axis_y - 5, tick_x, axis_y + 5)
                 tick_date = chart_min_date + _dt2.timedelta(days=d)
                 tick_label = self.scene.addText(tick_date.strftime("%m-%d-%Y"))
-                from PyQt6.QtGui import QColor as _QColor
+                from PyQt5.QtGui import QColor as _QColor
                 tick_label.setDefaultTextColor(_QColor("white"))
                 tick_label.setPos(tick_x - 30, axis_y - 25)
 
         # ---------- Dependency arrows (simple) ----------
-        from PyQt6.QtGui import QPen, QColor as _QColor2
+        from PyQt5.QtGui import QPen, QColor as _QColor2
         import datetime as _dt3
         name_to_dates = {}
         for name, start, duration, i, r in bars:
@@ -5204,9 +5555,9 @@ class GanttChartView(QWidget):
                 self.scene.addLine(start_x, start_y, end_x, start_y, pen)
                 self.scene.addLine(end_x, start_y, end_x, end_y, pen)
         # ---------- Parent-child connectors (hierarchical fan-out, animated) ----------
-        from PyQt6.QtGui import QPen as _QPen, QColor as _QColor3
-        from PyQt6.QtWidgets import QGraphicsLineItem
-        from PyQt6.QtCore import QPropertyAnimation, pyqtProperty
+        from PyQt5.QtGui import QPen as _QPen, QColor as _QColor3
+        from PyQt5.QtWidgets import QGraphicsLineItem
+        from PyQt5.QtCore import QPropertyAnimation, pyqtProperty
         draw_hierarchy = True
         if hasattr(self, 'hierarchy_checkbox'):
             try:
@@ -5335,8 +5686,8 @@ class CalendarView(QWidget):
     def __init__(self, model=None):
         super().__init__()
         self.model = model
-        from PyQt6.QtWidgets import QCalendarWidget, QListWidget, QMessageBox, QPushButton, QHBoxLayout
-        from PyQt6.QtGui import QTextCharFormat, QBrush, QColor
+        from PyQt5.QtWidgets import QCalendarWidget, QListWidget, QMessageBox, QPushButton, QHBoxLayout
+        from PyQt5.QtGui import QTextCharFormat, QBrush, QColor
         layout = QVBoxLayout()
         layout.addWidget(QLabel("Calendar (Click a date to see tasks)"))
         self.calendar = QCalendarWidget()
@@ -5361,7 +5712,7 @@ class CalendarView(QWidget):
 
     def export_calendar_ics(self):
         """Export all tasks as iCalendar (.ics) file, including Pace Link, Responsible, and Type."""
-        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
         import datetime
         if not self.model or not hasattr(self.model, 'rows'):
             QMessageBox.warning(self, "Export Failed", "No data to export.")
@@ -5436,7 +5787,7 @@ class CalendarView(QWidget):
     def highlight_task_dates(self):
         if not self.model:
             return
-        from PyQt6.QtGui import QTextCharFormat, QBrush, QColor
+        from PyQt5.QtGui import QTextCharFormat, QBrush, QColor
         fmt = QTextCharFormat()
         fmt.setBackground(QBrush(QColor("#ffe082")))  # Light yellow
         # Clear previous highlights
@@ -5447,7 +5798,7 @@ class CalendarView(QWidget):
         for row in getattr(self.model, 'rows', []):
             date_str = row.get("Start Date", "")
             if date_str:
-                from PyQt6.QtCore import QDate
+                from PyQt5.QtCore import QDate
                 date = QDate.fromString(date_str, "MM-dd-yyyy")
                 if date.isValid():
                     dates_with_tasks.add(date)
@@ -5478,7 +5829,7 @@ class CalendarView(QWidget):
         QMessageBox.information(self, "Tasks on {}".format(date_str), msg)
 
     def go_to_today(self):
-        from PyQt6.QtCore import QDate
+        from PyQt5.QtCore import QDate
         self.calendar.setSelectedDate(QDate.currentDate())
         self.update_task_list()
         self.calendar.showSelectedDate()
@@ -5489,14 +5840,14 @@ class TimelineView(QWidget):
         self.model = model
         layout = QVBoxLayout()
         layout.addWidget(QLabel("Project Timeline (Read-Only)"))
-        from PyQt6.QtWidgets import QGraphicsScene
+        from PyQt5.QtWidgets import QGraphicsScene
         self.scene = QGraphicsScene()
         self.view = ZoomableGraphicsView()
         self.view.setScene(self.scene)
         self.view.setSettingsKey("TimelineZoom")
         layout.addWidget(self.view)
         # Export buttons
-        from PyQt6.QtWidgets import QHBoxLayout, QPushButton
+        from PyQt5.QtWidgets import QHBoxLayout, QPushButton
         export_row = QHBoxLayout()
         export_png_btn = QPushButton("Export Timeline (PNG/PDF)")
         def _do_export():
@@ -5523,7 +5874,7 @@ class TimelineView(QWidget):
         def _fit_all_tl():
             r = self.scene.itemsBoundingRect()
             if not r.isNull():
-                self.view.fitInView(r, Qt.AspectRatioMode.KeepAspectRatio)
+                self.view.fitInView(r, Qt.KeepAspectRatio)
         fit_all_btn.clicked.connect(_fit_all_tl)
         export_row.addWidget(zoom_in_btn)
         export_row.addWidget(zoom_out_btn)
@@ -5532,13 +5883,13 @@ class TimelineView(QWidget):
         layout.addLayout(export_row)
         self.preview_label = QLabel()
         self.preview_label.setFixedHeight(200)
-        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.preview_label)
         self.setLayout(layout)
         # Keyboard shortcuts for zoom
         try:
-            from PyQt6.QtWidgets import QShortcut
-            from PyQt6.QtGui import QKeySequence
+            from PyQt5.QtWidgets import QShortcut
+            from PyQt5.QtGui import QKeySequence
             QShortcut(QKeySequence.ZoomIn, self.view, activated=self.view.zoomIn)
             QShortcut(QKeySequence.ZoomOut, self.view, activated=self.view.zoomOut)
             QShortcut(QKeySequence("Ctrl+0"), self.view, activated=self.view.resetZoom)
@@ -5604,8 +5955,8 @@ class TimelineView(QWidget):
             critical = set(n for n in order if est.get(n) == lst.get(n))
             return critical
         import datetime
-        from PyQt6.QtGui import QBrush, QColor
-        from PyQt6.QtCore import QDate
+        from PyQt5.QtGui import QBrush, QColor
+        from PyQt5.QtCore import QDate
         self.scene.clear()
         if not self.model or not hasattr(self.model, 'rows'):
             return
@@ -5701,7 +6052,7 @@ class TimelineView(QWidget):
         bar_height = 24
         bar_gap = 12
         # (Reverted) Remove left-column label layout; use a fixed bar offset and put labels on bars.
-        from PyQt6.QtGui import QFontMetrics
+        from PyQt5.QtGui import QFontMetrics
         font = self.font() if hasattr(self, 'font') else None
         fm = QFontMetrics(font) if font else None
         max_chars_fixed_tl = 32
@@ -5716,7 +6067,7 @@ class TimelineView(QWidget):
             # Highlight critical path bars in red
             color = QColor("red") if name in critical_path else QColor("#FF8200")
             # Add hoverable rect for image preview
-            from PyQt6.QtWidgets import QGraphicsRectItem
+            from PyQt5.QtWidgets import QGraphicsRectItem
             class HoverableTimelineBar(QGraphicsRectItem):
                 def __init__(self, x, y, width, height, row, timeline_view):
                     super().__init__(x, y, width, height)
@@ -5739,11 +6090,11 @@ class TimelineView(QWidget):
                         return
                     img_path = self.row.get("Images", "")
                     if img_path and str(img_path).strip():
-                        from PyQt6.QtGui import QPixmap
+                        from PyQt5.QtGui import QPixmap
                         img_path_full = resolve_resource_path(img_path)
                         pixmap = QPixmap(img_path_full)
                         if not pixmap.isNull():
-                            preview_label.setPixmap(pixmap.scaledToHeight(180, Qt.TransformationMode.SmoothTransformation))
+                            preview_label.setPixmap(pixmap.scaledToHeight(180, Qt.SmoothTransformation))
                             preview_label.setText("")
                         else:
                             preview_label.setText("[Image not found]")
@@ -5764,7 +6115,7 @@ class TimelineView(QWidget):
             if len(display_name) > max_chars_fixed_tl:
                 display_name = display_name[:max_chars_fixed_tl-1] + "…"
             text_item = self.scene.addText(display_name)
-            from PyQt6.QtGui import QFont, QPen, QBrush
+            from PyQt5.QtGui import QFont, QPen, QBrush
             text_item.setDefaultTextColor(QColor("white"))
             orig_font = text_item.font()
             text_item.setData(1, orig_font)
@@ -5775,15 +6126,15 @@ class TimelineView(QWidget):
             gap = 6
             text_item.setPos(x + width + gap, ty)
             # Always-visible subtle contrasting background
-            from PyQt6.QtGui import QPen as _LblPen2, QBrush as _LblBrush2, QColor as _LblColor2
+            from PyQt5.QtGui import QPen as _LblPen2, QBrush as _LblBrush2, QColor as _LblColor2
             br = text_item.boundingRect().translated(text_item.pos())
             bg_color = _LblColor2(0,0,0,160)
             padded = br.adjusted(-3,-1,3,1)
-            from PyQt6.QtGui import QPainterPath as _LblPath2
+            from PyQt5.QtGui import QPainterPath as _LblPath2
             path = _LblPath2()
             radius = 6
             path.addRoundedRect(padded, radius, radius)
-            bg_rect = self.scene.addPath(path, _LblPen2(Qt.PenStyle.NoPen), _LblBrush2(bg_color))
+            bg_rect = self.scene.addPath(path, _LblPen2(Qt.NoPen), _LblBrush2(bg_color))
             bg_rect.setZValue(text_item.zValue()-1)
             text_item.setData(3, bg_rect)
             self._timeline_name_to_text[name] = text_item
@@ -5802,7 +6153,7 @@ class TimelineView(QWidget):
                     parent_bottom = py + bar_height
                     child_top = cy
                     # Highlight critical path connectors in red
-                    from PyQt6.QtGui import QPen
+                    from PyQt5.QtGui import QPen
                     pen = QPen(QColor("red"), 2) if name in critical_path and parent_name in critical_path else QPen(QColor("#FF8200"), 2)
                     # Vertical line from parent to horizontal level
                     self.scene.addLine(parent_mid_x, parent_bottom, parent_mid_x, (parent_bottom + child_top) // 2, pen)
@@ -5812,7 +6163,7 @@ class TimelineView(QWidget):
                     self.scene.addLine(child_mid_x, (parent_bottom + child_top) // 2, child_mid_x, child_top, pen)
         # Weekend shading (Sat/Sun) for readability
         try:
-            from PyQt6.QtGui import QBrush, QColor
+            from PyQt5.QtGui import QBrush, QColor
             from datetime import timedelta
             shade = QBrush(QColor(220, 220, 220, 120))
             cur = min_date
@@ -5824,7 +6175,7 @@ class TimelineView(QWidget):
                     run_end = cur
                     x0 = bar_offset_x + (run_start - min_date).days * 8
                     x1 = bar_offset_x + (run_end - min_date).days * 8
-                    self.scene.addRect(x0, 0, max(1, x1 - x0), y + 30, pen=Qt.PenStyle.NoPen, brush=shade)
+                    self.scene.addRect(x0, 0, max(1, x1 - x0), y + 30, pen=Qt.NoPen, brush=shade)
                 else:
                     cur += timedelta(days=1)
         except Exception:
@@ -5858,7 +6209,7 @@ class TimelineView(QWidget):
                                 ti.setFont(f)
                                 bg = ti.data(3)
                                 if bg:
-                                    from PyQt6.QtGui import QColor as _QColorTL, QBrush as _QBrushTL
+                                    from PyQt5.QtGui import QColor as _QColorTL, QBrush as _QBrushTL
                                     bg.setBrush(_QBrushTL(_QColorTL(255,255,255,50)))
                         except Exception:
                             pass
@@ -5875,7 +6226,7 @@ class TimelineView(QWidget):
                                     ti.setFont(base_font)
                                 bg = ti.data(3)
                                 if bg:
-                                    from PyQt6.QtGui import QBrush as _QBrushTL2
+                                    from PyQt5.QtGui import QBrush as _QBrushTL2
                                     bg.setBrush(_QBrushTL2(Qt.transparent))
                         except Exception:
                             pass
@@ -5885,7 +6236,7 @@ class TimelineView(QWidget):
                 item.hoverLeaveEvent = make_leave(original_leave)
         # Click-to-lock for timeline (reusing view mouse events)
         def lock_click_event(event):
-            if event.button() == Qt.MouseButton.LeftButton:
+            if event.button() == Qt.LeftButton:
                 scene_pos = self.view.mapToScene(event.pos())
                 for it in self.scene.items(scene_pos):
                     if hasattr(it, 'row'):
@@ -5900,7 +6251,7 @@ class TimelineView(QWidget):
                                     prev_ti.setFont(orig)
                                 bg = prev_ti.data(3)
                                 if bg:
-                                    from PyQt6.QtGui import QBrush
+                                    from PyQt5.QtGui import QBrush
                                     bg.setBrush(QBrush(Qt.transparent))
                         self._timeline_locked = name
                         ti = self._timeline_name_to_text.get(name)
@@ -5908,7 +6259,7 @@ class TimelineView(QWidget):
                             f = QFont(ti.font()); f.setBold(True); ti.setFont(f)
                             bg = ti.data(3)
                             if bg:
-                                from PyQt6.QtGui import QColor, QBrush
+                                from PyQt5.QtGui import QColor, QBrush
                                 bg.setBrush(QBrush(QColor(255,255,255,70)))
                         break
             return original_mouse_press(event)
@@ -5919,13 +6270,10 @@ class TimelineView(QWidget):
 
 
 # New DatabaseView class
-from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem
+from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem
 
-from PyQt6.QtWidgets import QDateEdit
-from PyQt6.QtCore import QDate
-
-from PyQt6 import QtCore
-Qt = QtCore.Qt  # if you still rely on Qt alias elsewhere
+from PyQt5.QtWidgets import QDateEdit
+from PyQt5.QtCore import QDate
 
 class DatabaseView(QWidget):
     DATE_FIELDS = {"Start Date", "Calculated End Date"}
@@ -5990,9 +6338,9 @@ class DatabaseView(QWidget):
         except Exception:
             pass
         try:
-            from PyQt6.QtWidgets import QAbstractItemView
+            from PyQt5.QtWidgets import QAbstractItemView
             if self._read_only:
-                self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+                self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
             else:
                 self.table.setEditTriggers(QAbstractItemView.AllEditTriggers)
         except Exception:
@@ -6012,10 +6360,10 @@ class DatabaseView(QWidget):
 
     def import_data(self):
         if getattr(self, '_read_only', False):
-            from PyQt6.QtWidgets import QMessageBox
+            from PyQt5.QtWidgets import QMessageBox
             QMessageBox.information(self, "Read-Only", "Import is disabled in read-only mode.")
             return
-        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
         import csv
         path, _ = QFileDialog.getOpenFileName(self, "Import Data", "", "CSV Files (*.csv)")
         if not path:
@@ -6035,7 +6383,7 @@ class DatabaseView(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Import Failed", f"Error importing data: {e}")
     def export_database(self):
-        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
         import csv
         path, _ = QFileDialog.getSaveFileName(self, "Export Database", "database_export.csv", "CSV Files (*.csv)")
         if not path:
@@ -6107,7 +6455,7 @@ class DatabaseView(QWidget):
                     val = rowdata.get(colname, "")
                     self.table.setItem(row, col, QTableWidgetItem(val))
                 elif colname == "% Complete":
-                    from PyQt6.QtWidgets import QSpinBox
+                    from PyQt5.QtWidgets import QSpinBox
                     spin = QSpinBox()
                     spin.setRange(0, 100)
                     try:
@@ -6131,7 +6479,7 @@ class DatabaseView(QWidget):
                     self.table.setCellWidget(row, col, spin)
                     self.table.setItem(row, col, QTableWidgetItem(str(spin.value())))
                 elif colname in self.DROPDOWN_FIELDS or colname == "Parent":
-                    from PyQt6.QtWidgets import QComboBox
+                    from PyQt5.QtWidgets import QComboBox
                     combo = QComboBox()
                     # Prevent wheel events unless focused (clicked)
                     def block_wheel_combo(event):
@@ -6228,7 +6576,7 @@ class DatabaseView(QWidget):
 
     def add_row(self):
         if getattr(self, '_read_only', False):
-            from PyQt6.QtWidgets import QMessageBox
+            from PyQt5.QtWidgets import QMessageBox
             QMessageBox.information(self, "Read-Only", "Add Row is disabled in read-only mode.")
             return
         data = []
@@ -6252,7 +6600,7 @@ class DatabaseView(QWidget):
 
     def delete_row(self):
         if getattr(self, '_read_only', False):
-            from PyQt6.QtWidgets import QMessageBox
+            from PyQt5.QtWidgets import QMessageBox
             QMessageBox.information(self, "Read-Only", "Delete Row is disabled in read-only mode.")
             return
         row = self.table.currentRow()
@@ -6306,7 +6654,7 @@ class DatabaseView(QWidget):
                 remote = self.model.get_row_snapshot(part_name) or {}
                 original = dict(self.model.rows[row])
                 dlg = ConflictResolutionDialog(part_name, original=original, pending=new_values, remote=remote, parent=self)
-                if dlg.exec():
+                if dlg.exec_():
                     if dlg.choice == 'keep':
                         try: log_event('conflict','keep_remote', part=part_name)
                         except Exception: pass
@@ -6368,7 +6716,7 @@ class DatabaseView(QWidget):
                 remote = self.model.get_row_snapshot(part_name) or {}
                 original = dict(self.model.rows[row])
                 dlg = ConflictResolutionDialog(part_name, original=original, pending={colname: date_val}, remote=remote, parent=self)
-                if dlg.exec():
+                if dlg.exec_():
                     if dlg.choice == 'keep':
                         if remote:
                             self.model.rows[row].update(remote)
@@ -6422,7 +6770,7 @@ class DatabaseView(QWidget):
                 remote = self.model.get_row_snapshot(part_name) or {}
                 original = dict(self.model.rows[row])
                 dlg = ConflictResolutionDialog(part_name, original=original, pending=updates, remote=remote, parent=self)
-                if dlg.exec():
+                if dlg.exec_():
                     choice_fields = updates.keys()
                     if dlg.choice == 'keep':
                         if remote:
@@ -6480,7 +6828,7 @@ class DatabaseView(QWidget):
                 remote = self.model.get_row_snapshot(part_name) or {}
                 original = dict(self.model.rows[row])
                 dlg = ConflictResolutionDialog(part_name, original=original, pending=updates, remote=remote, parent=self)
-                if dlg.exec():
+                if dlg.exec_():
                     if dlg.choice == 'keep':
                         if remote:
                             self.model.rows[row].update(remote)
@@ -6517,7 +6865,7 @@ class DatabaseView(QWidget):
 
 class MainWindow(QMainWindow):
     def _open_holidays_manager(self):
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QLineEdit, QMessageBox
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QLineEdit, QMessageBox
         dlg = QDialog(self)
         dlg.setWindowTitle("Manage Holidays")
         v = QVBoxLayout(dlg)
@@ -6581,7 +6929,7 @@ class MainWindow(QMainWindow):
         btns.addWidget(ok); btns.addWidget(cancel)
         v.addLayout(btns)
         dlg.setLayout(v)
-        dlg.exec()
+        dlg.exec_()
     def on_data_changed(self):
         # Refresh all views when data changes
         if hasattr(self, 'project_tree_view'):
@@ -6689,7 +7037,7 @@ class MainWindow(QMainWindow):
                 used_svg = False
                 if svg_path and os.path.exists(svg_path):
                     try:
-                        from PyQt6.QtSvg import QSvgRenderer  # type: ignore
+                        from PyQt5.QtSvg import QSvgRenderer  # type: ignore
                         renderer = QSvgRenderer(svg_path)
                         if renderer.isValid():
                             try:
@@ -6747,11 +7095,11 @@ class MainWindow(QMainWindow):
                 center_col = QVBoxLayout()
                 center_col.setContentsMargins(0, 0, 0, 0)
                 center_col.setSpacing(0)
-                center_col.addWidget(header_widget, alignment=Qt.AlignmentFlag.AlignCenter)
+                center_col.addWidget(header_widget, alignment=Qt.AlignCenter)
                 header_layout.addLayout(center_col)
             except Exception:
                 # Fallback to just adding the header widget centered
-                header_layout.addWidget(header_widget, alignment=Qt.AlignmentFlag.AlignCenter)
+                header_layout.addWidget(header_widget, alignment=Qt.AlignCenter)
             header_layout.addStretch(1)
 
             # Controls row (separate from header row so the logo stays perfectly centered)
@@ -6761,7 +7109,7 @@ class MainWindow(QMainWindow):
             controls_layout.addStretch(1)
 
             # Search field (affects Gantt view)
-            from PyQt6.QtWidgets import QLineEdit, QPushButton
+            from PyQt5.QtWidgets import QLineEdit, QPushButton
             self.search_input = QLineEdit()
             self.search_input.setPlaceholderText("Jump to part (substring)...")
             self.search_input.setFixedWidth(260)
@@ -6805,7 +7153,7 @@ class MainWindow(QMainWindow):
 
             # Tools menu button (moved here from under the header)
             try:
-                from PyQt6.QtWidgets import QToolButton, QMenu, QAction, QInputDialog
+                from PyQt5.QtWidgets import QToolButton, QMenu, QAction, QInputDialog
                 self.tools_btn = QToolButton()
                 self.tools_btn.setText("Tools")
                 self.tools_btn.setToolTip("App tools and utilities")
@@ -6819,7 +7167,7 @@ class MainWindow(QMainWindow):
                 act_reload.triggered.connect(do_reload)
                 tmenu.addSeparator()
                 # Onboarding settings toggle
-                from PyQt6.QtCore import QSettings
+                from PyQt5.QtCore import QSettings
                 s_on = QSettings('LSI','ProjectApp')
                 hide_flag = s_on.value('Onboarding/hide_empty_dialog', False)
                 if isinstance(hide_flag, str):
@@ -6856,7 +7204,7 @@ class MainWindow(QMainWindow):
                         except Exception:
                             pass
                         try:
-                            from PyQt6.QtCore import QSettings
+                            from PyQt5.QtCore import QSettings
                             QSettings('LSI','ProjectApp').setValue('DB/path', path)
                         except Exception:
                             pass
@@ -6888,7 +7236,7 @@ class MainWindow(QMainWindow):
                                 shutil.copy2(src, dest + ext)
                         try:
                             # Record last backup time in QSettings and log
-                            from PyQt6.QtCore import QSettings
+                            from PyQt5.QtCore import QSettings
                             QSettings('LSI','ProjectApp').setValue('Backup/last_backup_utc', datetime.datetime.utcnow().isoformat(timespec='seconds')+'Z')
                             log_event('backup','manual_backup', dest=dest)
                         except Exception:
@@ -6903,7 +7251,7 @@ class MainWindow(QMainWindow):
                 # Create Shared Folder (OneDrive template)
                 def do_create_shared_folder():
                     try:
-                        from PyQt6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
+                        from PyQt5.QtWidgets import QFileDialog, QInputDialog, QMessageBox
                         import os, shutil
                         base_dir = QFileDialog.getExistingDirectory(self, "Choose OneDrive location for shared folder", os.path.expanduser("~"))
                         if not base_dir:
@@ -6975,7 +7323,7 @@ class MainWindow(QMainWindow):
                                 except Exception:
                                     pass
                                 try:
-                                    from PyQt6.QtCore import QSettings
+                                    from PyQt5.QtCore import QSettings
                                     QSettings('LSI','ProjectApp').setValue('DB/path', dest_db)
                                 except Exception:
                                     pass
@@ -7013,7 +7361,7 @@ class MainWindow(QMainWindow):
                                     pass
                                 self.model.read_only = True
                                 try:
-                                    from PyQt6.QtWidgets import QMessageBox
+                                    from PyQt5.QtWidgets import QMessageBox
                                     info = self._read_edit_lock() or {}
                                     holder = info.get('owner', 'someone else')
                                     when = info.get('when', '')
@@ -7031,7 +7379,7 @@ class MainWindow(QMainWindow):
                             except Exception:
                                 pass
                             self.model.read_only = True
-                        from PyQt6.QtCore import QSettings
+                        from PyQt5.QtCore import QSettings
                         QSettings('LSI','ProjectApp').setValue('DB/read_only', bool(self.model.read_only))
                         # Update DatabaseView editability if available
                         if hasattr(self, 'database_view') and hasattr(self.database_view, 'set_read_only'):
@@ -7106,7 +7454,7 @@ class MainWindow(QMainWindow):
                 sync_menu = QMenu("Sync", self)
                 # Load persisted settings
                 try:
-                    from PyQt6.QtCore import QSettings
+                    from PyQt5.QtCore import QSettings
                     s = QSettings('LSI','ProjectApp')
                     self._sync_auto_reload_readonly = bool(s.value('Sync/auto_reload_readonly', True, type=bool))
                     self._sync_prompt_reload_editing = bool(s.value('Sync/prompt_reload_editing', True, type=bool))
@@ -7122,7 +7470,7 @@ class MainWindow(QMainWindow):
                 def on_auto(t):
                     self._sync_auto_reload_readonly = bool(t)
                     try:
-                        from PyQt6.QtCore import QSettings
+                        from PyQt5.QtCore import QSettings
                         QSettings('LSI','ProjectApp').setValue('Sync/auto_reload_readonly', bool(t))
                     except Exception:
                         pass
@@ -7134,7 +7482,7 @@ class MainWindow(QMainWindow):
                 def on_prompt(t):
                     self._sync_prompt_reload_editing = bool(t)
                     try:
-                        from PyQt6.QtCore import QSettings
+                        from PyQt5.QtCore import QSettings
                         QSettings('LSI','ProjectApp').setValue('Sync/prompt_reload_editing', bool(t))
                     except Exception:
                         pass
@@ -7142,7 +7490,7 @@ class MainWindow(QMainWindow):
                 sync_menu.addAction(a_prompt)
                 sync_menu.addSeparator()
                 def change_interval():
-                    from PyQt6.QtWidgets import QInputDialog
+                    from PyQt5.QtWidgets import QInputDialog
                     cur_sec = max(1, int(round(self._sync_watch_ms/1000)))
                     sec, ok = QInputDialog.getInt(self, "Change Watch Interval", "Seconds:", cur_sec, 1, 60, 1)
                     if ok:
@@ -7153,7 +7501,7 @@ class MainWindow(QMainWindow):
                         except Exception:
                             pass
                         try:
-                            from PyQt6.QtCore import QSettings
+                            from PyQt5.QtCore import QSettings
                             QSettings('LSI','ProjectApp').setValue('Sync/watch_interval_ms', int(self._sync_watch_ms))
                         except Exception:
                             pass
@@ -7182,7 +7530,7 @@ class MainWindow(QMainWindow):
                             self.statusBar().showMessage("Edit lock acquired", 2500)
                     else:
                         try:
-                            from PyQt6.QtWidgets import QMessageBox
+                            from PyQt5.QtWidgets import QMessageBox
                             info = self._read_edit_lock() or {}
                             holder = info.get('owner', 'someone else')
                             when = info.get('when', '')
@@ -7211,7 +7559,7 @@ class MainWindow(QMainWindow):
                 lock_menu.addAction("Release Edit Lock", on_release_lock)
                 # Settings inside Edit Lock submenu
                 try:
-                    from PyQt6.QtCore import QSettings
+                    from PyQt5.QtCore import QSettings
                     s = QSettings('LSI','ProjectApp')
                     pt_val = s.value('Lock/prompt_takeover', True)
                     if isinstance(pt_val, str):
@@ -7227,7 +7575,7 @@ class MainWindow(QMainWindow):
                     act_prompt.toggled.connect(toggle_prompt)
                     def change_timeout():
                         try:
-                            from PyQt6.QtWidgets import QInputDialog
+                            from PyQt5.QtWidgets import QInputDialog
                             cur = int(s.value('Lock/stale_minutes', 30))
                             minutes, ok = QInputDialog.getInt(self, 'Stale Lock Timeout', 'Consider lock stale after (minutes):', value=max(1,cur), min=1, max=1440, step=1)
                             if ok:
@@ -7300,7 +7648,7 @@ class MainWindow(QMainWindow):
                         except Exception:
                             pass
                         try:
-                            from PyQt6.QtCore import QSettings
+                            from PyQt5.QtCore import QSettings
                             QSettings('LSI','ProjectApp').setValue('DB/read_only', True)
                         except Exception:
                             pass
@@ -7327,7 +7675,7 @@ class MainWindow(QMainWindow):
             # --- Global Preview Panel setting (applies to all views with preview labels) ---
             def _read_preview_setting_default_true():
                 try:
-                    from PyQt6.QtCore import QSettings
+                    from PyQt5.QtCore import QSettings
                     s = QSettings('LSI','ProjectApp')
                     v = s.value('UI/ShowPreviewPanel', None)
                     if v is None:
@@ -7340,7 +7688,7 @@ class MainWindow(QMainWindow):
                     return True
             def _persist_preview_setting(val: bool):
                 try:
-                    from PyQt6.QtCore import QSettings
+                    from PyQt5.QtCore import QSettings
                     s = QSettings('LSI','ProjectApp')
                     s.setValue('UI/ShowPreviewPanel', bool(val))
                     # Keep tree key in sync for back-compat with internal tree logic
@@ -7404,7 +7752,7 @@ class MainWindow(QMainWindow):
 
             # Footer
             footer_label = QLabel("Copyright 2025 © LSI Graphics, LLC. All Rights Reserved.")
-            footer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            footer_label.setAlignment(Qt.AlignCenter)
             footer_label.setStyleSheet("color: #888; font-size: 11px; margin-top: 8px;")
             main_layout.addWidget(footer_label)
 
@@ -7419,7 +7767,7 @@ class MainWindow(QMainWindow):
                 pass
 
             # Status bar with DB info + quick action
-            from PyQt6.QtWidgets import QStatusBar, QPushButton as _QBtn
+            from PyQt5.QtWidgets import QStatusBar, QPushButton as _QBtn
             sb = QStatusBar()
             self.setStatusBar(sb)
             self.db_status_label = QLabel()
@@ -7470,24 +7818,19 @@ class MainWindow(QMainWindow):
                 pass
             # Initialize DB change watcher (detect OneDrive sync updates)
             try:
-                from PyQt6.QtCore import QTimer
+                from PyQt5.QtCore import QTimer
                 self._db_last_mtime = self._get_db_mtime()
                 self._db_change_prompt_at = 0.0
                 self._db_watch_timer = QTimer(self)
                 # Respect persisted interval
                 try:
-                    from PyQt6.QtCore import QSettings
+                    from PyQt5.QtCore import QSettings
                     self._sync_watch_ms = int(QSettings('LSI','ProjectApp').value('Sync/watch_interval_ms', 2000))
                 except Exception:
                     self._sync_watch_ms = 2000
                 self._db_watch_timer.setInterval(int(self._sync_watch_ms))
                 self._db_watch_timer.timeout.connect(self._check_db_changed)
-                # Avoid starting background timers under pytest to reduce flakiness / access violations
-                import os as _os_guard
-                if not _os_guard.environ.get('PYTEST_CURRENT_TEST'):
-                    self._db_watch_timer.start()
-                else:
-                    self._db_watch_timer = None  # Explicitly disable for tests
+                self._db_watch_timer.start()
                 # Initialize code sync tracking for periodic refresh
                 try:
                     self._last_code_mtime = self._get_code_mtime()
@@ -7508,7 +7851,7 @@ class MainWindow(QMainWindow):
             def _open_pricing_settings():
                 try:
                     dlg = PricingSettingsDialog(self)
-                    dlg.exec()
+                    dlg.exec_()
                 except Exception as e:
                     print(f"Pricing settings dialog failed: {e}")
             act_pricing.triggered.connect(_open_pricing_settings)
@@ -7516,7 +7859,7 @@ class MainWindow(QMainWindow):
             act_sample = tools_menu.addAction("Create Sample Data…")
             def do_sample():
                 try:
-                    from PyQt6.QtWidgets import QMessageBox
+                    from PyQt5.QtWidgets import QMessageBox
                     if self.model.rows:
                         resp = QMessageBox.question(self, "Append Sample Data?", "Existing tasks detected. Append sample tasks anyway?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
                         if resp != QMessageBox.Yes:
@@ -7535,7 +7878,7 @@ class MainWindow(QMainWindow):
 
             # --- Integrity check and backup reminder timers ---
             try:
-                from PyQt6.QtCore import QTimer, QSettings
+                from PyQt5.QtCore import QTimer, QSettings
                 # Perform a quick integrity check shortly after startup (asynchronous so UI shows quickly)
                 def run_integrity_check():
                     try:
@@ -7604,14 +7947,14 @@ class MainWindow(QMainWindow):
 
             # --- First-run onboarding dialog (empty DB) ---
             try:
-                from PyQt6.QtCore import QSettings
+                from PyQt5.QtCore import QSettings
                 s = QSettings('LSI','ProjectApp')
                 hide = s.value('Onboarding/hide_empty_dialog', False)
                 if isinstance(hide, str):
                     hide = hide.lower() in ('1','true','yes','on')
                 if not hide and not self.model.rows:
                     dlg = FirstRunDialog(self)
-                    dlg.exec()
+                    dlg.exec_()
                     if dlg.hide_future():
                         s.setValue('Onboarding/hide_empty_dialog', True)
                     if dlg.selected_action == 'sample':
@@ -7818,7 +8161,7 @@ class MainWindow(QMainWindow):
     def _get_lock_settings(self):
         # Returns (stale_minutes:int, prompt_takeover:bool)
         try:
-            from PyQt6.QtCore import QSettings
+            from PyQt5.QtCore import QSettings
             s = QSettings('LSI','ProjectApp')
             stale_minutes = int(s.value('Lock/stale_minutes', 30))
             pt = s.value('Lock/prompt_takeover', True)
@@ -7851,7 +8194,7 @@ class MainWindow(QMainWindow):
                 _, prompt = self._get_lock_settings()
                 if prompt:
                     try:
-                        from PyQt6.QtWidgets import QMessageBox
+                        from PyQt5.QtWidgets import QMessageBox
                         owner = existing.get('owner') or 'unknown'
                         when = existing.get('when') or ''
                         m = QMessageBox(self)
@@ -7861,7 +8204,7 @@ class MainWindow(QMainWindow):
                         m.setInformativeText(f"Owner: {owner}{' @ ' + when if when else ''}\nTake over the lock?")
                         m.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
                         m.setDefaultButton(QMessageBox.No)
-                        choice = m.exec()
+                        choice = m.exec_()
                         if choice == QMessageBox.Yes:
                             # Forcefully take over (overwrite existing)
                             try:
@@ -7937,15 +8280,11 @@ class MainWindow(QMainWindow):
             pass
     def _check_db_changed(self):
         import time
-        # During pytest runs we disable this logic (timers not started) to avoid
-        # sporadic access violations in headless/offscreen environments.
         try:
+            # Skip heavy file/lock polling during automated tests to avoid race/access issues
             import os as _os_guard
             if _os_guard.environ.get('PYTEST_CURRENT_TEST'):
                 return
-        except Exception:
-            pass
-        try:
             # Refresh lock status every tick; heartbeat our lock every ~10 ticks
             try:
                 self._update_lock_status()
@@ -8035,7 +8374,7 @@ class MainWindow(QMainWindow):
                         if now - getattr(self, '_db_change_prompt_at', 0.0) >= 10.0:
                             self._db_change_prompt_at = now
                             try:
-                                from PyQt6.QtWidgets import QMessageBox
+                                from PyQt5.QtWidgets import QMessageBox
                                 resp = QMessageBox.question(self, "Database Updated",
                                     "The database changed on disk (e.g., via OneDrive sync). Reload now?",
                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
@@ -8089,16 +8428,6 @@ class MainWindow(QMainWindow):
             pass
         try:
             super().closeEvent(event)
-        except Exception:
-            pass
-    def showEvent(self, event):
-        try:
-            if hasattr(self, 'model') and hasattr(self.model, 'ensure_loaded'):
-                self.model.ensure_loaded()
-        except Exception:
-            pass
-        try:
-            super().showEvent(event)
         except Exception:
             pass
     def on_tree_part_selected(self, part_name):
@@ -8192,7 +8521,7 @@ class MainWindow(QMainWindow):
             pass
     # ---------------- Filter Settings Persistence ----------------
     def load_filter_settings(self):
-        from PyQt6.QtCore import QSettings, QTimer
+        from PyQt5.QtCore import QSettings, QTimer
         s = QSettings("LSI", "ProjectPlanner")
         # Statuses
         st_sel = set()
@@ -8214,7 +8543,7 @@ class MainWindow(QMainWindow):
         # Apply after UI settles
         QTimer.singleShot(50, lambda: self._apply_filters())
     def save_filter_settings(self):
-        from PyQt6.QtCore import QSettings
+        from PyQt5.QtCore import QSettings
         s = QSettings("LSI", "ProjectPlanner")
         for st in ["Planned", "In Progress", "Blocked", "Done"]:
             s.setValue(f"filters/status/{st}", st in self._filter_state["statuses"])
@@ -8244,7 +8573,7 @@ class MainWindow(QMainWindow):
                 try:
                     if pixmap.isNull():
                         return pixmap
-                    from PyQt6.QtGui import QImage
+                    from PyQt5.QtGui import QImage
                     img = pixmap.toImage().convertToFormat(QImage.Format_ARGB32_Premultiplied)
                     w, h = img.width(), img.height()
                     left, right, top, bottom = 0, w - 1, 0, h - 1
@@ -8277,7 +8606,7 @@ class MainWindow(QMainWindow):
                                 right = x; found = True; break
                         if found: break
                     if right >= left and bottom >= top:
-                        from PyQt6.QtCore import QRect
+                        from PyQt5.QtCore import QRect
                         cropped = img.copy(QRect(left, top, right - left + 1, bottom - top + 1))
                         pm2 = QPixmap.fromImage(cropped)
                         return pm2
@@ -8289,7 +8618,7 @@ class MainWindow(QMainWindow):
                 try:
                     if pixmap.isNull():
                         return pixmap
-                    from PyQt6.QtGui import QImage
+                    from PyQt5.QtGui import QImage
                     img = pixmap.toImage().convertToFormat(QImage.Format_ARGB32_Premultiplied)
                     w, h = img.width(), img.height()
                     if w <= 2 or h <= 2:
@@ -8337,7 +8666,7 @@ class MainWindow(QMainWindow):
                     right = min(w - 1, right + 1)
                     bottom = min(h - 1, bottom + 1)
                     if right > left and bottom > top:
-                        from PyQt6.QtCore import QRect
+                        from PyQt5.QtCore import QRect
                         cropped = img.copy(QRect(left, top, right - left + 1, bottom - top + 1))
                         return QPixmap.fromImage(cropped)
                 except Exception:
@@ -8346,7 +8675,7 @@ class MainWindow(QMainWindow):
             if self._header_is_svg:
                 # Render SVG to a pixmap at target height, trim transparent, then optionally crop percent
                 try:
-                    from PyQt6.QtGui import QPainter
+                    from PyQt5.QtGui import QPainter
                     r = self._header_svg_renderer
                     ds = r.defaultSize(); w, h = ds.width(), ds.height()
                     if w <= 0 or h <= 0:
@@ -8367,12 +8696,12 @@ class MainWindow(QMainWindow):
                         pm_trim = trim_uniform_color(pm_trim, 10)
                     # Enforce width cap
                     if pm_trim.width() > max_w:
-                        pm_trim = pm_trim.scaled(max_w, target_h, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        pm_trim = pm_trim.scaled(max_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                     if getattr(self, '_header_label', None):
                         try:
-                            from PyQt6.QtWidgets import QSizePolicy
+                            from PyQt5.QtWidgets import QSizePolicy
                             self._header_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-                            self._header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                            self._header_label.setAlignment(Qt.AlignCenter)
                         except Exception:
                             pass
                         self._header_label.setPixmap(pm_trim)
@@ -8401,14 +8730,16 @@ class MainWindow(QMainWindow):
 # ------------------------------------------------------------
 if __name__ == "__main__":
     try:
+        import sys
+        from PyQt5.QtWidgets import QApplication
         app = QApplication(sys.argv)
         model = ProjectDataModel()
         window = MainWindow(model)
         window.show()
-        sys.exit(app.exec())
+        exit_code = app.exec_()
+        sys.exit(exit_code)
     except Exception as e:
-        import traceback
-        print("FATAL: Startup error:", e)
+        import traceback, sys
+        print("FATAL: Unhandled exception during startup:", e)
         traceback.print_exc()
         sys.exit(1)
-

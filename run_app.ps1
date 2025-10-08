@@ -96,3 +96,9 @@ try {
   Write-Error "Failed to launch: $($_.Exception.Message)"
   exit 1
 }
+
+if (Test-Path '.\shared_db_path.txt') {
+    $dbTarget = Get-Content '.\shared_db_path.txt' -Raw
+    $env:PROJECT_DB_PATH = $dbTarget.Trim()
+    Write-Host "Using shared DB override: $env:PROJECT_DB_PATH" -ForegroundColor Yellow
+}
