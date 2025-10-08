@@ -30,9 +30,8 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # Explicitly exclude PyQt5 to prevent PyInstaller from attempting to run its hook
-    # in case any stale bytecode or tooling scripts reference the name.
-    excludes=['PyQt5'],
+    # No binding exclusions required (pure PyQt6). If a stale hook reappears, temporarily re-add 'PyQt5'.
+    excludes=[],
     noarchive=False,
     optimize=0,
 )

@@ -21,8 +21,8 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # Pure PyQt6 build; force exclude PyQt5 to avoid dual-binding hook attempt
-    excludes=['PyQt5'],
+    # Pure PyQt6 build (no excludes). Reintroduce 'PyQt5' here only if a stale shim ever resurfaces.
+    excludes=[],
     noarchive=False,
     optimize=0,
 )

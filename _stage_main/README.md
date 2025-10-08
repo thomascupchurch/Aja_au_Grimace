@@ -1,6 +1,6 @@
 # ProjectPlanner
 
-PyQt6/PySide6-based project management application with Gantt charts, timelines, and tree views.
+PyQt6-based project management application with Gantt charts, timelines, and tree views.
 
 ## Features
 - ✅ Editable Project Tree view
@@ -12,7 +12,7 @@ PyQt6/PySide6-based project management application with Gantt charts, timelines,
 
 ## Requirements
 - **Python 3.8-3.12** (3.11 recommended for best compatibility)
-- PySide6 6.6.3+ (auto-installed) or PyQt6 6.6.1+
+- PyQt6 >= 6.7.0
 
 ## Quick Setup
 
@@ -147,12 +147,12 @@ ProjectPlanner/
 ```
 
 ## Migration Status
-- ✅ PyQt5 → PyQt6/PySide6 migration complete
-- ✅ Python version compatibility checks  
-- ✅ Automatic Qt binding detection
+- ✅ PyQt5 → PyQt6 migration complete (legacy shims removed)
 - ✅ Cross-platform build workflow
 - ✅ Version-locked dependencies
-- ✅ Compatibility layer for enum changes
+- ✅ Icon pipeline & deterministic packaging
+
+The codebase no longer supports PyQt5 or PySide6 fallbacks; ensure your environment installs only PyQt6 as specified in `requirements.txt`.
 
 ## Usage
 1. **First Launch**: App creates `project_data.db` database
@@ -168,9 +168,8 @@ ProjectPlanner/
 - **Database issues**: Delete `project_data.db` to reset (loses data)
 
 ## Development
-- Auto-detects PySide6 or PyQt6 at runtime
-- Backward compatibility layer for PyQt5→PyQt6 migration
-- Cross-platform GitHub Actions build workflow
+- Pure PyQt6 runtime (no multi-binding auto-detect logic)
+- Cross-platform packaging via PyInstaller spec files (`main.spec`, `main_onefile.spec`)
 - Comprehensive error handling and logging
 
 ## License
@@ -180,24 +179,9 @@ Internal LSI Graphics project management tool.
 
 Generated & maintained with assistance from GitHub Copilot Chat.
 
-## Qt Binding Strategy (PyQt6 Migration Shim)
+## Qt Binding Notes
 
-The codebase now standardizes on PyQt6 while legacy import statements (`from PyQt5...`) still appear in modules. A migration shim at the very top of `main.py` imports PyQt6 and then dynamically inserts PyQt6 modules into `sys.modules` under `PyQt5.*` keys (e.g. `PyQt5.QtWidgets`). This lets older code paths run unmodified during the transition.
-
-Packaging detail:
-* The PyInstaller spec files explicitly set `excludes=['PyQt5']` so that only PyQt6 binaries are collected. The shim ensures any `PyQt5` imports resolve to PyQt6 objects at runtime.
-* This prevents PyInstaller from attempting to gather both bindings (which otherwise triggers a multi-binding conflict or inflated bundle size).
-
-If you observe build logs referencing both `hook-PyQt5.py` and `hook-PyQt6.py`, a stale `build/` cache is likely. Fix by removing `build/` & `dist/` and rebuilding:
-```powershell
-Remove-Item -Recurse -Force build, dist
-./build_release.ps1 -OneFile -ForceIcon
-```
-
-Future cleanup plan:
-1. Replace any lingering `from PyQt5...` imports with their PyQt6 counterparts.
-2. Remove the shim block from `main.py`.
-3. Drop the `excludes=['PyQt5']` entry from the spec files.
+ProjectPlanner is now a single-Qt binding codebase (PyQt6). The PyInstaller spec files currently exclude `PyQt5` defensively; this can be relaxed after several clean builds confirm no stale artifacts remain. If a build ever shows `hook-PyQt5.py` in logs, remove `build/` and `dist/` and rebuild. Multi-binding shims have been fully removed.
 
 ## Pillow `_imaging` Import Troubleshooting
 
