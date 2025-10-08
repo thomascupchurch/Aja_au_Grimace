@@ -74,10 +74,7 @@ if (-not $SkipClean) {
 
 # After determining $pythonExe and before invoking PyInstaller:
 Write-Host "=== Ensure PyInstaller present ==="
-& $pythonExe - <<'PY'
-import importlib, sys
-sys.exit(0 if importlib.util.find_spec("PyInstaller") else 1)
-PY
+& $pythonExe -c "import importlib,sys; sys.exit(0 if importlib.util.find_spec('PyInstaller') else 1)"
 if ($LASTEXITCODE -ne 0) {
   Write-Host "[build] Installing PyInstaller..." -ForegroundColor Cyan
   & $pythonExe -m pip install --upgrade pip

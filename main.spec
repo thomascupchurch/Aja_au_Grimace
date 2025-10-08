@@ -35,6 +35,14 @@ a = Analysis(
 pyz = PYZ(a.pure)
 
 # Onedir build: produce a folder (dist/main/) instead of single exe.
+# Auto-detect macOS to prefer header.icns if present
+import platform
+_icon_choice = None
+if os.path.exists('header.icns') and platform.system() == 'Darwin':
+    _icon_choice = 'header.icns'
+elif os.path.exists('header.ico'):
+    _icon_choice = 'header.ico'
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -54,7 +62,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='header.ico' if os.path.exists('header.ico') else None,
+    icon=_icon_choice,
 )
 
 coll = COLLECT(
