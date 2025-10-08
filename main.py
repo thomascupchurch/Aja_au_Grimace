@@ -4779,6 +4779,16 @@ class GanttChartView(QWidget):
         zoom_layout.addWidget(fit_sel_btn)
         layout.addLayout(zoom_layout)
         layout.addWidget(self.preview_label)
+        # Mini legend (hierarchy vs dependency vs highlight colors)
+        self.legend_label = QLabel()
+        self.legend_label.setFixedHeight(24)
+        self.legend_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.legend_label.setStyleSheet("font-size:11px; padding:2px 6px; background:#1a1a1a; border:1px solid #444;")
+        try:
+            self.legend_label.setTextFormat(Qt.RichText)
+        except Exception:
+            pass
+        layout.addWidget(self.legend_label)
         self.setLayout(layout)
         self._did_initial_fit = False
 
@@ -4852,15 +4862,25 @@ class GanttChartView(QWidget):
         if hasattr(self, '_connector_lines_map'):
             lines = self._connector_lines_map.get(part_name, [])
             if lines:
-                if on:
-                    pen = QPen(QColor("#00BFFF"))  # bright cyan accent
-                    pen.setWidth(2)
-                else:
-                    pen = QPen(QColor("#888"))
-                    pen.setWidth(1)
                 for ln in lines:
                     try:
-                        ln.setPen(pen)
+                        # Animated hierarchy connector support
+                        if hasattr(ln, 'set_highlight') and callable(getattr(ln, 'set_highlight')):
+                            ln.set_highlight(on)
+                            continue
+                        kind = ln.data(50)  # 'dep' or 'hier'
+                        if on:
+                            pen = QPen(QColor("#00BFFF"))
+                            pen.setWidth(2)
+                            ln.setPen(pen)
+                        else:
+                            if kind == 'dep':
+                                pen = QPen(QColor("#FFAA28"))  # dependency base color
+                                pen.setWidth(2)
+                            else:  # hierarchy or default
+                                pen = QPen(QColor(180,180,180))
+                                pen.setWidth(1)
+                            ln.setPen(pen)
                     except Exception:
                         pass
         # 2. Label font + background (preserve original orange bg when turning off)
@@ -5334,6 +5354,18 @@ class GanttChartView(QWidget):
                 parent = self.row.get("Parent", "")
                 if parent:
                     self.gantt_view._highlight_connectors(parent, True)
+                # Reverse lookup: also highlight dependency neighbors (incoming & outgoing)
+                try:
+                    if hasattr(self.gantt_view, '_connector_lines_map'):
+                        # Incoming: tasks that depend on this part (edges src->part)
+                        for name, lines in self.gantt_view._connector_lines_map.items():
+                            if name == part:
+                                continue
+                            if any(getattr(ln, 'data', lambda *_: None)(50) == 'dep' and part == part for ln in lines):
+                                # If shared line between name and part, highlight neighbor
+                                self.gantt_view._highlight_connectors(name, True)
+                except Exception:
+                    pass
             def hoverLeaveEvent(self, event):
                 self.preview_label.clear()
                 part = self.row.get("Project Part", "")
@@ -5342,6 +5374,14 @@ class GanttChartView(QWidget):
                 parent = self.row.get("Parent", "")
                 if parent:
                     self.gantt_view._highlight_connectors(parent, False)
+                # Remove dependency neighbor highlights
+                try:
+                    if hasattr(self.gantt_view, '_connector_lines_map'):
+                        for name in list(self.gantt_view._connector_lines_map.keys()):
+                            if name != part:
+                                self.gantt_view._highlight_connectors(name, False)
+                except Exception:
+                    pass
                 # Fallback to first image attachment preview if no explicit image assigned
                 if not self.row.get("Images"):
                     atts = self._attachments_list()
@@ -5719,64 +5759,82 @@ class GanttChartView(QWidget):
                     # Build quick lookup: name -> (x,y,w,h)
                     name_rect = {n: name_to_bar.get(n) for n in name_to_bar}
                     # Collect dependency edges (A depends on B => arrow B -> A)
-                    dep_edges = []
+                    dep_edges = []  # list of (src,dst)
                     for r in raw_rows:
                         a = r.get('Project Part','')
-                        if not a: continue
+                        if not a:
+                            continue
                         deps_txt = r.get('Dependencies') or ''
                         for d in [x.strip() for x in deps_txt.split(',') if x.strip()]:
                             if d and d in name_rect and a in name_rect and d != a:
-                                dep_edges.append((d,a))  # d -> a
-                    # Limit drawing if dependency edges alone exceed hard threshold
+                                dep_edges.append((d, a))
                     if len(dep_edges) > MAX_CONNECTOR_EDGES:
-                        if hasattr(self,'preview_label'):
+                        if hasattr(self, 'preview_label'):
                             try:
                                 prev = self.preview_label.text() or ''
                                 self.preview_label.setText(prev + f"  (dep edges {len(dep_edges)} skipped)")
-                            except Exception: pass
-                    else:
-                        dep_pen = _QPen(dep_color); dep_pen.setWidth(2)
-                        for src,dst in dep_edges:
-                            sx, sy, sw, sh = name_rect[src]
-                            dx, dy, dw, dh = name_rect[dst]
-                            # route: right edge of src to left edge of dst (simple L path) unless overlapping vertically
-                            start_x = sx + sw
-                            start_y = sy + sh/2
-                            end_x = dx
-                            end_y = dy + dh/2
-                            # Horizontal + vertical segments
-                            mid_x = (start_x + end_x)/2
-                            line1 = self.scene.addLine(start_x, start_y, mid_x, start_y, dep_pen)
-                            line2 = self.scene.addLine(mid_x, start_y, mid_x, end_y, dep_pen)
-                            line3 = self.scene.addLine(mid_x, end_y, end_x, end_y, dep_pen)
-                            for ln in (line1,line2,line3):
-                                _register(src, ln); _register(dst, ln)
-                                try:
-                                    ln.setToolTip(f"{src} → {dst}")
-                                except Exception:
-                                    pass
-                            # Arrow head at destination (triangle)
-                            try:
-                                angle = atan2(end_y - start_y, end_x - start_x)
-                                ah = 8.0
-                                a1 = angle + pi - 0.45
-                                a2 = angle + pi + 0.45
-                                p1x = end_x; p1y = end_y
-                                p2x = end_x + ah*cos(a1); p2y = end_y + ah*sin(a1)
-                                p3x = end_x + ah*cos(a2); p3y = end_y + ah*sin(a2)
-                                from PyQt5.QtGui import QPolygonF
-                                from PyQt5.QtCore import QPointF
-                                poly = QPolygonF([QPointF(p1x,p1y), QPointF(p2x,p2y), QPointF(p3x,p3y)])
-                                item = self.scene.addPolygon(poly, dep_pen, dep_color)
-                                _register(dst, item); _register(src, item)
-                                try:
-                                    item.setToolTip(f"{src} → {dst}")
-                                except Exception:
-                                    pass
                             except Exception:
                                 pass
+                    else:
+                        # Collision-aware lane assignment: spread mid_x offsets per destination
+                        from collections import defaultdict
+                        edges_by_dst = defaultdict(list)
+                        for s, d in dep_edges:
+                            edges_by_dst[d].append(s)
+                        dep_pen_template = _QPen(dep_color); dep_pen_template.setWidth(2)
+                        lane_spacing = 26  # px separation between vertical lanes
+                        for dst, srcs in edges_by_dst.items():
+                            srcs_sorted = sorted(srcs, key=lambda n: name_rect[n][1])  # order by y to keep stable
+                            count = len(srcs_sorted)
+                            for idx_src, src in enumerate(srcs_sorted):
+                                sx, sy, sw, sh = name_rect[src]
+                                dx, dy, dw, dh = name_rect[dst]
+                                start_x = sx + sw
+                                start_y = sy + sh / 2
+                                end_x = dx
+                                end_y = dy + dh / 2
+                                base_mid = (start_x + end_x) / 2
+                                offset = (idx_src - (count - 1) / 2.0) * lane_spacing
+                                mid_x = base_mid + offset
+                                # Build segmented path (could be curved later)
+                                from PyQt5.QtGui import QPainterPath, QPen as _QPenDep
+                                path = QPainterPath()
+                                path.moveTo(start_x, start_y)
+                                path.lineTo(mid_x, start_y)
+                                path.lineTo(mid_x, end_y)
+                                path.lineTo(end_x, end_y)
+                                dep_pen = _QPenDep(dep_color); dep_pen.setWidth(2)
+                                path_item = self.scene.addPath(path, dep_pen)
+                                # Mark as dependency for legend/highlight restore
+                                try:
+                                    path_item.setData(50, 'dep')
+                                    path_item.setToolTip(f"{src} → {dst}")
+                                except Exception:
+                                    pass
+                                _register(src, path_item); _register(dst, path_item)
+                                # Arrow head (centered on final segment)
+                                try:
+                                    angle = atan2(0, end_x - mid_x)  # horizontal final segment
+                                    ah = 8.0
+                                    a1 = angle + pi - 0.45
+                                    a2 = angle + pi + 0.45
+                                    p1x = end_x; p1y = end_y
+                                    p2x = end_x + ah * cos(a1); p2y = end_y + ah * sin(a1)
+                                    p3x = end_x + ah * cos(a2); p3y = end_y + ah * sin(a2)
+                                    from PyQt5.QtGui import QPolygonF
+                                    from PyQt5.QtCore import QPointF
+                                    poly = QPolygonF([QPointF(p1x, p1y), QPointF(p2x, p2y), QPointF(p3x, p3y)])
+                                    arrow_item = self.scene.addPolygon(poly, dep_pen, dep_color)
+                                    try:
+                                        arrow_item.setData(50, 'dep')
+                                        arrow_item.setToolTip(f"{src} → {dst}")
+                                    except Exception:
+                                        pass
+                                    _register(src, arrow_item); _register(dst, arrow_item)
+                                except Exception:
+                                    pass
                         # Legend / mode message
-                        if hasattr(self,'preview_label'):
+                        if hasattr(self, 'preview_label'):
                             try:
                                 prev = self.preview_label.text() or ''
                                 mode_note = f"Mode: {self._connector_mode} (hierarchy {'on' if self._connector_mode=='all' else 'off'}, deps {len(dep_edges)})"
@@ -5790,6 +5848,22 @@ class GanttChartView(QWidget):
                     pass
             # (Future) Could draw dependency arrows separately when _connector_mode == 'deps'
             # Currently dependency visualization is label highlighting; expand later for explicit edges.
+
+        # Update legend label
+        try:
+            if hasattr(self, 'legend_label'):
+                if self._enable_connectors and not skip_connectors:
+                    self.legend_label.setVisible(True)
+                    self.legend_label.setText(
+                        "Legend: "
+                        "<span style='display:inline-block; padding:2px 6px; background:#b4b4b4; color:#000; border-radius:4px;'>Hierarchy</span> "
+                        "<span style='display:inline-block; padding:2px 6px; background:#FFAA28; color:#000; border-radius:4px;'>Dependency</span> "
+                        "<span style='display:inline-block; padding:2px 6px; background:#00BFFF; color:#000; border-radius:4px;'>Highlight</span>"
+                    )
+                else:
+                    self.legend_label.setVisible(False)
+        except Exception:
+            pass
 
         # ---------- Scene rect ----------
         self.view.setSceneRect(0, 0, 800, max(300, len(bars)*(bar_height+bar_gap)+60))
