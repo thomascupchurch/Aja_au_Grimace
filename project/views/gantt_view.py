@@ -12,7 +12,7 @@ try:
     from PyQt6.QtPrintSupport import QPrinter
 except Exception:  # pragma: no cover
     QPrinter = None  # type: ignore
-from project.helpers import resolve_resource_path, load_holiday_dates
+from project.helpers import resolve_resource_path, load_holiday_dates, build_printer
 try:
     from project.dialogs.export_settings import ExportSettingsDialog
 except Exception:  # Fallback if dialog not yet extracted
@@ -188,30 +188,18 @@ class GanttChartView(QWidget):
     def _export_pdf(self, path: str, page_size: str, orientation: str, margins, include_header: bool):
         if QPrinter is None:
             raise RuntimeError('QPrinter unavailable')
-        printer = QPrinter(QPrinter.HighResolution)
-        # Map page size
-        page_map = {
-            'A4': QPrinter.A4,
-            'Letter': QPrinter.Letter,
-            'Legal': QPrinter.Legal,
-            'Tabloid': QPrinter.Tabloid,
-        }
-        printer.setPageSize(page_map.get(page_size, QPrinter.A4))
-        if orientation == 'Landscape':
-            printer.setOrientation(QPrinter.Landscape)
-        else:
-            printer.setOrientation(QPrinter.Portrait)
-        printer.setOutputFormat(QPrinter.PdfFormat)
-        printer.setOutputFileName(path)
-        ml, mt, mr, mb = margins
-        # Render to pixmap first (simpler than direct painter coordinate math w/ scaling)
+        # Build a unit-aware printer via helper
+        printer = build_printer(page_size, orientation, margins, path)
+        # Render to pixmap first (simpler coordinate math)
         pix = self._render_pixmap(include_header=include_header, margins=margins)
-        # Start painting
+        # Paint into page's paint rect with aspect-fit
         p = QPainter(printer)
         try:
-            page_rect = printer.pageRect()
-            target = page_rect
-            # scale maintaining aspect
+            try:
+                page_rect = printer.pageLayout().paintRectPixels(printer.resolution())
+            except Exception:
+                page_rect = printer.pageRect()  # Fallback
+            # Enable smooth transforms
             try:
                 _smooth = Qt.TransformationMode.SmoothTransformation
             except Exception:
@@ -220,9 +208,9 @@ class GanttChartView(QWidget):
                 _keep_ar = Qt.AspectRatioMode.KeepAspectRatio
             except Exception:
                 _keep_ar = getattr(Qt, 'KeepAspectRatio', 1)
-            scaled = pix.scaled(target.width(), target.height(), _keep_ar, _smooth)
-            x = target.x() + (target.width() - scaled.width()) // 2
-            y = target.y() + (target.height() - scaled.height()) // 2
+            scaled = pix.scaled(page_rect.width(), page_rect.height(), _keep_ar, _smooth)
+            x = page_rect.x() + (page_rect.width() - scaled.width()) // 2
+            y = page_rect.y() + (page_rect.height() - scaled.height()) // 2
             p.drawPixmap(x, y, scaled)
         finally:
             p.end()

@@ -13,6 +13,7 @@ try:
     from project.dialogs.export_settings import ExportSettingsDialog
 except Exception:
     ExportSettingsDialog = None  # type: ignore
+from project.helpers import build_printer
 
 import datetime
 from dataclasses import dataclass
@@ -142,21 +143,14 @@ class TimelineView(QWidget):
     def _export_pdf(self, path: str, page_size: str, orientation: str, margins, include_header: bool):
         if QPrinter is None:
             raise RuntimeError('QPrinter unavailable')
-        printer = QPrinter(QPrinter.HighResolution)
-        page_map = {
-            'A4': QPrinter.A4,
-            'Letter': QPrinter.Letter,
-            'Legal': QPrinter.Legal,
-            'Tabloid': QPrinter.Tabloid,
-        }
-        printer.setPageSize(page_map.get(page_size, QPrinter.A4))
-        printer.setOrientation(QPrinter.Landscape if orientation == 'Landscape' else QPrinter.Portrait)
-        printer.setOutputFormat(QPrinter.PdfFormat)
-        printer.setOutputFileName(path)
+        printer = build_printer(page_size, orientation, margins, path)
         pix = self._render_pixmap(include_header=include_header, margins=margins)
         p = QPainter(printer)
         try:
-            rect = printer.pageRect()
+            try:
+                rect = printer.pageLayout().paintRectPixels(printer.resolution())
+            except Exception:
+                rect = printer.pageRect()
             try:
                 _smooth = Qt.TransformationMode.SmoothTransformation
             except Exception:  # PyQt5 fallback

@@ -1,0 +1,368 @@
+diff --git a/.gitignore b/.gitignore
+index 222db2c..692629b 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -12,3 +12,15 @@ __pycache__/
+ .env
+ *.bak
+ *.swp
++
++# Build artifacts and packaged outputs
++build/
++dist/
++_stage_main/
++dist/
++
++# Release bundles and checksums (keep them out of Git; use Releases or LFS instead)
++release/
++/release_*.zip
++/release_*.zip.sha256
++/pa_upload_*.zip
+diff --git a/project/helpers.py b/project/helpers.py
+index af17ec5..a68e701 100644
+--- a/project/helpers.py
++++ b/project/helpers.py
+@@ -1,4 +1,124 @@
+ import os, sys, json, datetime
++from typing import Optional, Tuple
++
++def build_printer(
++    *,
++    page_size: Optional[str] = None,
++    orientation: Optional[str] = None,
++    margins_mm: Optional[Tuple[float, float, float, float]] = None,
++    output_path: Optional[str] = None,
++    output_format: str = 'PDF'
++):
++    """Construct a QPrinter with PyQt6-friendly enums and fallbacks.
++
++    Args:
++      page_size: 'A4' | 'Letter' | 'Legal' | 'Tabloid' | None
++      orientation: 'Portrait' | 'Landscape' | None
++      margins_mm: (left, top, right, bottom) in millimeters
++      output_path: when provided, set as output file name
++      output_format: 'PDF' currently supported
++
++    Returns:
++      QPrinter instance (or raises RuntimeError if QtPrintSupport missing)
++    """
++    try:
++        from PyQt6.QtPrintSupport import QPrinter
++    except Exception as e:  # pragma: no cover
++        raise RuntimeError('QPrinter not available') from e
++
++    # Mode
++    try:
++        mode = QPrinter.PrinterMode.HighResolution
++    except Exception:
++        mode = getattr(QPrinter, 'HighResolution', getattr(QPrinter, 'PrinterResolution', None))
++    printer = QPrinter(mode) if mode is not None else QPrinter()
++
++    # Output format
++    if (output_format or '').upper() == 'PDF':
++        try:
++            pdf_fmt = QPrinter.OutputFormat.PdfFormat
++        except Exception:
++            pdf_fmt = getattr(QPrinter, 'PdfFormat', None)
++        try:
++            if pdf_fmt is not None:
++                printer.setOutputFormat(pdf_fmt)
++        except Exception:
++            pass
++
++    # Page size
++    if page_size:
++        try:
++            size_map = {
++                'A4': QPrinter.PageSize.A4,
++                'LETTER': QPrinter.PageSize.Letter,
++                'LEGAL': QPrinter.PageSize.Legal,
++                'TABLOID': QPrinter.PageSize.Tabloid,
++            }
++        except Exception:
++            size_map = {
++                'A4': getattr(QPrinter, 'A4', None),
++                'LETTER': getattr(QPrinter, 'Letter', None),
++                'LEGAL': getattr(QPrinter, 'Legal', None),
++                'TABLOID': getattr(QPrinter, 'Tabloid', None),
++            }
++        try:
++            psize = size_map.get(str(page_size).upper()) or size_map.get('A4')
++            if psize is not None:
++                # setPageSize for PyQt6; fallback to setPaperSize for PyQt5
++                try:
++                    printer.setPageSize(psize)  # type: ignore[arg-type]
++                except Exception:
++                    printer.setPaperSize(psize)  # type: ignore[arg-type]
++        except Exception:
++            pass
++
++    # Orientation
++    if orientation:
++        try:
++            portrait = QPrinter.Orientation.Portrait
++            landscape = QPrinter.Orientation.Landscape
++        except Exception:
++            portrait = getattr(QPrinter, 'Portrait', None)
++            landscape = getattr(QPrinter, 'Landscape', None)
++        try:
++            ori = str(orientation).upper()
++            if ori == 'LANDSCAPE' and landscape is not None:
++                printer.setOrientation(landscape)
++            elif portrait is not None:
++                printer.setOrientation(portrait)
++        except Exception:
++            pass
++
++    # Margins
++    if margins_mm:
++        try:
++            from PyQt6.QtCore import QMarginsF
++            try:
++                # Prefer specifying units explicitly to avoid DPI/points confusion
++                from PyQt6.QtGui import QPageLayout
++                unit_mm = QPageLayout.Unit.Millimeter
++            except Exception:
++                unit_mm = None
++            l, t, r, b = margins_mm
++            marginsf = QMarginsF(float(l), float(t), float(r), float(b))
++            if unit_mm is not None:
++                try:
++                    printer.setPageMargins(marginsf, unit_mm)
++                except Exception:
++                    printer.setPageMargins(marginsf)
++            else:
++                printer.setPageMargins(marginsf)
++        except Exception:
++            pass
++
++    # Output path
++    if output_path:
++        try:
++            printer.setOutputFileName(output_path)
++        except Exception:
++            pass
++
++    return printer
+ 
+ def resolve_resource_path(path: str) -> str:
+     if not path: return path
+diff --git a/project/views/gantt_view.py b/project/views/gantt_view.py
+index 2f28c1e..b97e39c 100644
+--- a/project/views/gantt_view.py
++++ b/project/views/gantt_view.py
+@@ -61,6 +61,13 @@ class GanttChartView(QWidget):
+         if not self.model:
+             return
+         try:
++            _log = False
++            try:
++                from project.qt_bindings import QSettings
++                s = QSettings('LSI','ProjectPlanner')
++                _log = bool(s.value('Debug/LogGantt', False))
++            except Exception:
++                _log = False
+             for row in self.model.parts:  # Expect model.parts list of dicts
+                 start = row.get('start_date') or row.get('start')
+                 end = row.get('end_date') or row.get('end')
+@@ -79,6 +86,11 @@ class GanttChartView(QWidget):
+                     self._date_min = start
+                 if not self._date_max or end > self._date_max:
+                     self._date_max = end
++            if _log:
++                try:
++                    print(f"[Gantt] refresh: bars={len(self._bars)} range={self._date_min}..{self._date_max}")
++                except Exception:
++                    pass
+         except Exception as e:
+             self._label.setText(f"Gantt load error: {e}")
+ 
+@@ -151,6 +163,13 @@ class GanttChartView(QWidget):
+         pix.fill(Qt.white)
+         p = QPainter(pix)
+         try:
++            _log = False
++            try:
++                from project.qt_bindings import QSettings
++                s = QSettings('LSI','ProjectPlanner')
++                _log = bool(s.value('Debug/LogGantt', False))
++            except Exception:
++                _log = False
+             y_offset = mt
+             # Header
+             if include_header:
+@@ -181,6 +200,11 @@ class GanttChartView(QWidget):
+                 if prog_w > 0:
+                     p.setBrush(QBrush(QColor('#38761d')))
+                     p.drawRect(x1 + 1, y + 1, prog_w, row_h - 10)
++            if _log:
++                try:
++                    print(f"[Gantt] render: size={width}x{height} bars={len(self._bars)}")
++                except Exception:
++                    pass
+         finally:
+             p.end()
+         return pix
+@@ -188,42 +212,62 @@ class GanttChartView(QWidget):
+     def _export_pdf(self, path: str, page_size: str, orientation: str, margins, include_header: bool):
+         if QPrinter is None:
+             raise RuntimeError('QPrinter unavailable')
+-        printer = QPrinter(QPrinter.HighResolution)
+-        # Map page size
+-        page_map = {
+-            'A4': QPrinter.A4,
+-            'Letter': QPrinter.Letter,
+-            'Legal': QPrinter.Legal,
+-            'Tabloid': QPrinter.Tabloid,
+-        }
+-        printer.setPageSize(page_map.get(page_size, QPrinter.A4))
+-        if orientation == 'Landscape':
+-            printer.setOrientation(QPrinter.Landscape)
+-        else:
+-            printer.setOrientation(QPrinter.Portrait)
+-        printer.setOutputFormat(QPrinter.PdfFormat)
+-        printer.setOutputFileName(path)
++        from project.helpers import build_printer
++        printer = build_printer(page_size=page_size, orientation=orientation, output_path=path, output_format='PDF')
+         ml, mt, mr, mb = margins
+         # Render to pixmap first (simpler than direct painter coordinate math w/ scaling)
+         pix = self._render_pixmap(include_header=include_header, margins=margins)
+         # Start painting
+         p = QPainter(printer)
+         try:
+-            page_rect = printer.pageRect()
+-            target = page_rect
+-            # scale maintaining aspect
++            # Use point units for a PDF device to get a stable logical size
++            try:
++                unit_pts = QPrinter.Unit.Point
++            except Exception:
++                unit_pts = getattr(QPrinter, 'Point', None)
++            try:
++                page_rect = printer.pageRect(unit_pts) if unit_pts is not None else printer.pageRect()
++            except TypeError:
++                page_rect = printer.pageRect()
++
++            pw, ph = float(page_rect.width()), float(page_rect.height())
++            iw, ih = float(pix.width()), float(pix.height())
++            if iw <= 0 or ih <= 0 or pw <= 0 or ph <= 0:
++                # Fallback: draw at origin with no scaling
++                p.drawPixmap(0, 0, pix)
++                return
++
++            sx = pw / iw
++            sy = ph / ih
++            s = min(sx, sy)
++            tw = iw * s
++            th = ih * s
++            tx = page_rect.x() + (pw - tw) / 2.0
++            ty = page_rect.y() + (ph - th) / 2.0
++
++            # Smooth transform hint for high quality
+             try:
+                 _smooth = Qt.TransformationMode.SmoothTransformation
+             except Exception:
+                 _smooth = getattr(Qt, 'SmoothTransformation', 1)
++
++            # Draw into a target rect without pre-scaling to avoid rounding issues
+             try:
+-                _keep_ar = Qt.AspectRatioMode.KeepAspectRatio
++                from PyQt6.QtCore import QRectF
++                target_rect = QRectF(tx, ty, tw, th)
+             except Exception:
+-                _keep_ar = getattr(Qt, 'KeepAspectRatio', 1)
+-            scaled = pix.scaled(target.width(), target.height(), _keep_ar, _smooth)
+-            x = target.x() + (target.width() - scaled.width()) // 2
+-            y = target.y() + (target.height() - scaled.height()) // 2
+-            p.drawPixmap(x, y, scaled)
++                target_rect = None
++            if target_rect is not None:
++                p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
++                p.drawPixmap(target_rect, pix)
++            else:
++                # Fallback to pre-scaled draw
++                try:
++                    _keep_ar = Qt.AspectRatioMode.KeepAspectRatio
++                except Exception:
++                    _keep_ar = getattr(Qt, 'KeepAspectRatio', 1)
++                scaled = pix.scaled(int(tw), int(th), _keep_ar, _smooth)
++                p.drawPixmap(int(tx), int(ty), scaled)
+         finally:
+             p.end()
+ 
+diff --git a/project/views/timeline_view.py b/project/views/timeline_view.py
+index f437978..200d6e0 100644
+--- a/project/views/timeline_view.py
++++ b/project/views/timeline_view.py
+@@ -142,32 +142,50 @@ class TimelineView(QWidget):
+     def _export_pdf(self, path: str, page_size: str, orientation: str, margins, include_header: bool):
+         if QPrinter is None:
+             raise RuntimeError('QPrinter unavailable')
+-        printer = QPrinter(QPrinter.HighResolution)
+-        page_map = {
+-            'A4': QPrinter.A4,
+-            'Letter': QPrinter.Letter,
+-            'Legal': QPrinter.Legal,
+-            'Tabloid': QPrinter.Tabloid,
+-        }
+-        printer.setPageSize(page_map.get(page_size, QPrinter.A4))
+-        printer.setOrientation(QPrinter.Landscape if orientation == 'Landscape' else QPrinter.Portrait)
+-        printer.setOutputFormat(QPrinter.PdfFormat)
+-        printer.setOutputFileName(path)
++        from project.helpers import build_printer
++        printer = build_printer(page_size=page_size, orientation=orientation, output_path=path, output_format='PDF')
+         pix = self._render_pixmap(include_header=include_header, margins=margins)
+         p = QPainter(printer)
+         try:
+-            rect = printer.pageRect()
++            # Use point units to get a consistent PDF page rectangle
+             try:
+-                _smooth = Qt.TransformationMode.SmoothTransformation
+-            except Exception:  # PyQt5 fallback
+-                _smooth = getattr(Qt, 'SmoothTransformation', 1)
++                unit_pts = QPrinter.Unit.Point
++            except Exception:
++                unit_pts = getattr(QPrinter, 'Point', None)
++            try:
++                rect = printer.pageRect(unit_pts) if unit_pts is not None else printer.pageRect()
++            except TypeError:
++                rect = printer.pageRect()
++
++            pw, ph = float(rect.width()), float(rect.height())
++            iw, ih = float(pix.width()), float(pix.height())
++            if iw <= 0 or ih <= 0 or pw <= 0 or ph <= 0:
++                p.drawPixmap(0, 0, pix)
++                return
++
++            s = min(pw / iw, ph / ih)
++            tw, th = iw * s, ih * s
++            tx = rect.x() + (pw - tw) / 2.0
++            ty = rect.y() + (ph - th) / 2.0
+             try:
+-                _keep_ar = Qt.AspectRatioMode.KeepAspectRatio
++                from PyQt6.QtCore import QRectF
++                target = QRectF(tx, ty, tw, th)
+             except Exception:
+-                _keep_ar = getattr(Qt, 'KeepAspectRatio', 1)
+-            scaled = pix.scaled(rect.width(), rect.height(), _keep_ar, _smooth)
+-            x = rect.x() + (rect.width() - scaled.width()) // 2
+-            y = rect.y() + (rect.height() - scaled.height()) // 2
+-            p.drawPixmap(x, y, scaled)
++                target = None
++
++            try:
++                _smooth = Qt.TransformationMode.SmoothTransformation
++            except Exception:
++                _smooth = getattr(Qt, 'SmoothTransformation', 1)
++            if target is not None:
++                p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
++                p.drawPixmap(target, pix)
++            else:
++                try:
++                    _keep_ar = Qt.AspectRatioMode.KeepAspectRatio
++                except Exception:
++                    _keep_ar = getattr(Qt, 'KeepAspectRatio', 1)
++                scaled = pix.scaled(int(tw), int(th), _keep_ar, _smooth)
++                p.drawPixmap(int(tx), int(ty), scaled)
+         finally:
+             p.end()

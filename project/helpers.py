@@ -42,3 +42,57 @@ def save_holiday_dates(dates_iter):
         json.dump(sorted(list(dates_iter)), open(p,'w',encoding='utf-8'), ensure_ascii=False, indent=2)
     except:
         pass
+
+# ---------------------------------------------------------------------------
+# Printing / Export helpers (PyQt6)
+def build_printer(page_size: str, orientation: str, margins_mm: tuple[float, float, float, float], output_path: str):
+    """Create and configure a QPrinter with unit-aware margins.
+
+    Args:
+        page_size: One of 'A4', 'Letter', 'Legal', 'Tabloid'.
+        orientation: 'Portrait' or 'Landscape'.
+        margins_mm: (left, top, right, bottom) in millimeters.
+        output_path: File path for PDF output.
+
+    Returns:
+        Configured QPrinter instance ready for painting.
+    """
+    try:
+        from PyQt6.QtPrintSupport import QPrinter
+        from PyQt6.QtGui import QPageLayout, QPageSize
+        from PyQt6.QtCore import QMarginsF
+    except Exception as e:  # pragma: no cover
+        raise RuntimeError(f"Printing not available: {e}")
+
+    # Instantiate high-resolution printer
+    try:
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+    except Exception:
+        printer = QPrinter()  # Fallback
+
+    # Map page sizes
+    page_map = {
+        'A4': QPageSize.PageSizeId.A4,
+        'Letter': QPageSize.PageSizeId.Letter,
+        'Legal': QPageSize.PageSizeId.Legal,
+        'Tabloid': QPageSize.PageSizeId.Tabloid,
+    }
+    qps = QPageSize(page_map.get(page_size, QPageSize.PageSizeId.A4))
+
+    orient = QPageLayout.Orientation.Landscape if orientation == 'Landscape' else QPageLayout.Orientation.Portrait
+    ml, mt, mr, mb = margins_mm
+    margins = QMarginsF(float(ml), float(mt), float(mr), float(mb))
+
+    # Apply page layout with explicit millimeter units
+    layout = QPageLayout(qps, orient, margins, QPageLayout.Unit.Millimeter)
+    printer.setPageLayout(layout)
+
+    # Output PDF
+    try:
+        printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+    except Exception:
+        # Older API name fallback
+        printer.setOutputFormat(QPrinter.PdfFormat)  # type: ignore[attr-defined]
+    printer.setOutputFileName(output_path)
+
+    return printer
