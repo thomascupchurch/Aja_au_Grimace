@@ -47,6 +47,13 @@ def _smooth_mode():
     except Exception:
         return getattr(Qt, 'SmoothTransformation', 1)
 
+# Unified helper for aspect ratio mode (PyQt6-safe)
+def _keep_ar():
+    try:
+        return Qt.AspectRatioMode.KeepAspectRatio
+    except Exception:
+        return getattr(Qt, 'KeepAspectRatio', 1)
+
 # --- Central JSON lines logger -------------------------------------------------
 # Lightweight, dependency-free structured logging. Writes JSON objects one per
 # line to app.log (sibling to the active DB file). Rotates when file exceeds
@@ -2926,7 +2933,7 @@ class ProjectTreeView(QWidget):
             if hasattr(self, 'view'):
                 r = self.scene.itemsBoundingRect()
                 if not r.isNull():
-                    self.view.fitInView(r, Qt.KeepAspectRatio)
+                    self.view.fitInView(r, _keep_ar())
         def do_refresh():
             self.refresh()
         def do_toggle_preview():
@@ -2969,7 +2976,7 @@ class ProjectTreeView(QWidget):
                     if not r.isNull():
                         target_rect = r
                 if target_rect is not None and not target_rect.isNull():
-                    self.view.fitInView(target_rect, Qt.KeepAspectRatio)
+                    self.view.fitInView(target_rect, _keep_ar())
                     # Persist the resulting zoom factor after fit
                     if hasattr(self.view, '_persist_zoom'):
                         self.view._persist_zoom()
@@ -3129,7 +3136,11 @@ class ProjectTreeView(QWidget):
         try:
             orig_press = self._mini_view.mousePressEvent
             def mini_click(ev):
-                if ev.button() == Qt.LeftButton:
+                try:
+                    _left_btn = Qt.MouseButton.LeftButton
+                except Exception:
+                    _left_btn = getattr(Qt, 'LeftButton', 1)
+                if ev.button() == _left_btn:
                     scene_pt = self._mini_view.mapToScene(ev.pos())
                     # scale factor used in _update_minimap
                     scale_factor = 0.12
@@ -3341,9 +3352,9 @@ class ProjectTreeView(QWidget):
         # Initial fit
         try:
             try:
-                self.view.fitInView(self.scene.sceneRect(), getattr(Qt, 'AspectRatioMode', Qt).KeepAspectRatio)
+                self.view.fitInView(self.scene.sceneRect(), _keep_ar())
             except Exception:
-                self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+                self.view.fitInView(self.scene.sceneRect(), _keep_ar())
         except Exception:
             pass
         # After initial fit, apply persisted zoom scale (if user had manual zoom). Re-run restore.
@@ -3406,9 +3417,9 @@ class ProjectTreeView(QWidget):
                                 if hasattr(self.view, 'smoothFocusRect'):
                                     self.view.smoothFocusRect(rect_focus)
                                 else:
-                                    self.view.fitInView(rect_focus, getattr(Qt, 'AspectRatioMode', Qt).KeepAspectRatio)
+                                    self.view.fitInView(rect_focus, _keep_ar())
                             except Exception:
-                                self.view.fitInView(rect_focus, getattr(Qt, 'AspectRatioMode', Qt).KeepAspectRatio)
+                                self.view.fitInView(rect_focus, _keep_ar())
                     except Exception:
                         pass
                     # preview image
@@ -3492,7 +3503,7 @@ class ProjectTreeView(QWidget):
             pass
         # Fit minimap view
         try:
-            self._mini_view.fitInView(self._mini_scene.itemsBoundingRect().adjusted(-4,-4,4,4), Qt.KeepAspectRatio)
+            self._mini_view.fitInView(self._mini_scene.itemsBoundingRect().adjusted(-4,-4,4,4), _keep_ar())
         except Exception:
             pass
 
@@ -4933,7 +4944,7 @@ class GanttChartView(QWidget):
         def _fit_all():
             r = self.scene.itemsBoundingRect()
             if not r.isNull():
-                self.view.fitInView(r, Qt.KeepAspectRatio)
+                self.view.fitInView(r, _keep_ar())
         fit_all_btn.clicked.connect(_fit_all)
         def _fit_sel():
             items = [it for it in self.scene.selectedItems()]
@@ -4943,12 +4954,12 @@ class GanttChartView(QWidget):
                 for it in items:
                     rect = rect.united(it.sceneBoundingRect())
                 if not rect.isNull():
-                    self.view.fitInView(rect, Qt.KeepAspectRatio)
+                    self.view.fitInView(rect, _keep_ar())
                     return
             name = getattr(self, '_locked_label', None)
             if name and name in getattr(self, '_name_to_rect', {}):
                 rect = self._name_to_rect[name].sceneBoundingRect()
-                self.view.fitInView(rect.adjusted(-40, -20, 40, 20), Qt.KeepAspectRatio)
+                self.view.fitInView(rect.adjusted(-40, -20, 40, 20), _keep_ar())
             else:
                 _fit_all()
         fit_sel_btn.clicked.connect(_fit_sel)
@@ -4994,7 +5005,7 @@ class GanttChartView(QWidget):
                 def do_fit():
                     r = self.scene.itemsBoundingRect()
                     if not r.isNull():
-                        self.view.fitInView(r, Qt.KeepAspectRatio)
+                        self.view.fitInView(r, _keep_ar())
                 QTimer.singleShot(0, do_fit)
             self._did_initial_fit = True
         except Exception:
@@ -6681,7 +6692,11 @@ class TimelineView(QWidget):
                 item.hoverLeaveEvent = make_leave(original_leave)
         # Click-to-lock for timeline (reusing view mouse events)
         def lock_click_event(event):
-            if event.button() == Qt.LeftButton:
+            try:
+                _left_btn2 = Qt.MouseButton.LeftButton
+            except Exception:
+                _left_btn2 = getattr(Qt, 'LeftButton', 1)
+            if event.button() == _left_btn2:
                 scene_pos = self.view.mapToScene(event.pos())
                 for it in self.scene.items(scene_pos):
                     if hasattr(it, 'row'):
@@ -7355,7 +7370,7 @@ class MainWindow(QMainWindow):
                                     _smooth = Qt.TransformationMode.SmoothTransformation
                                 except Exception:
                                     _smooth = getattr(Qt, 'SmoothTransformation', 1)
-                                pm_scaled = pm.scaled(sz, sz, Qt.KeepAspectRatio, _smooth)
+                                pm_scaled = pm.scaled(sz, sz, _keep_ar(), _smooth)
                                 p.drawPixmap(0,0, pm_scaled)
                         p.end()
                         images.append(img)
@@ -9447,7 +9462,7 @@ class MainWindow(QMainWindow):
                             _smooth = Qt.TransformationMode.SmoothTransformation
                         except Exception:
                             _smooth = getattr(Qt, 'SmoothTransformation', 1)
-                        pm_trim = pm_trim.scaled(max_w, target_h, Qt.KeepAspectRatio, _smooth)
+                        pm_trim = pm_trim.scaled(max_w, target_h, _keep_ar(), _smooth)
                     if getattr(self, '_header_label', None):
                         try:
                             from PyQt6.QtWidgets import QSizePolicy
