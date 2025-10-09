@@ -407,12 +407,11 @@ class ImageCellWidget(QWidget):
             img_path_full = os.path.join(base_dir, img_path)
             pixmap = QPixmap(img_path_full)
             if not pixmap.isNull():
-                aspect_ratio_mode = getattr(Qt, 'AspectRatioMode', Qt)
-                transformation_mode = getattr(Qt, 'TransformationMode', Qt)
-                keep_ar = getattr(aspect_ratio_mode, 'KeepAspectRatio', getattr(Qt, 'KeepAspectRatio', None))
-                smooth_tx = getattr(transformation_mode, 'SmoothTransformation', getattr(Qt, 'SmoothTransformation', None))
-                self.img_label.setPixmap(pixmap.scaled(48, 48, keep_ar, smooth_tx))
-                self.img_label.setCursor(getattr(Qt,'CursorShape', Qt).PointingHandCursor)
+                self.img_label.setPixmap(pixmap.scaled(48, 48, _keep_ar(), _smooth_mode()))
+                try:
+                    self.img_label.setCursor(getattr(Qt,'CursorShape', Qt).PointingHandCursor)
+                except Exception:
+                    pass
                 self.img_label.mousePressEvent = lambda event, p=img_path_full: self.show_full_image(p)
             else:
                 self.img_label.setText("[Image not found]")
@@ -3161,9 +3160,9 @@ class ProjectTreeView(QWidget):
                         if hasattr(self.view, 'smoothFocusRect'):
                             self.view.smoothFocusRect(new_rect)
                         else:
-                            self.view.fitInView(new_rect, Qt.KeepAspectRatio)
+                            self.view.fitInView(new_rect, _keep_ar())
                     except Exception:
-                        self.view.fitInView(new_rect, Qt.KeepAspectRatio)
+                        self.view.fitInView(new_rect, _keep_ar())
                     self._update_minimap()
                 orig_press(ev)
             from PyQt6.QtCore import QPointF
@@ -3951,9 +3950,11 @@ class GanttChartView(QWidget):
         self._filter_critical_only = False     # boolean
         self._filter_risk_only = False         # boolean (overdue OR at-risk)
         self._current_critical_set = set()     # populated during render
+    # Feature toggles
+    self._show_unscheduled = True
 
     def set_filters(self, statuses=None, internal_external=None, responsible_substr=None,
-                    critical_only=None, risk_only=None):
+                    critical_only=None, risk_only=None, show_unscheduled=None):
         """Update filter criteria and refresh the Gantt chart.
         Parameters are optional; pass None to leave unchanged, pass empty iterable/string to clear.
         """
@@ -3968,6 +3969,8 @@ class GanttChartView(QWidget):
             self._filter_critical_only = bool(critical_only)
         if risk_only is not None:
             self._filter_risk_only = bool(risk_only)
+        if show_unscheduled is not None:
+            self._show_unscheduled = bool(show_unscheduled)
         if hasattr(self, 'model') and self.model:
             self.render_gantt(self.model)
 
@@ -4913,6 +4916,33 @@ class GanttChartView(QWidget):
         self.critical_path_checkbox.stateChanged.connect(lambda _s: self.refresh_gantt())
         toolbar.addWidget(self.critical_path_checkbox)
 
+        # Unscheduled toggle
+        self.unscheduled_checkbox = QCheckBox("Show Unscheduled")
+        # Load persisted setting (default true)
+        try:
+            from PyQt6.QtCore import QSettings as _QS
+            _ps = _QS('LSI','ProjectPlanner')
+            val = _ps.value('Gantt/ShowUnscheduled', 'true')
+            def _b(v):
+                if isinstance(v, bool): return v
+                if isinstance(v, str): return v.lower() in ('1','true','yes','on')
+                return True
+            self._show_unscheduled = _b(val)
+            self.unscheduled_checkbox.setChecked(self._show_unscheduled)
+        except Exception:
+            self._show_unscheduled = True
+            self.unscheduled_checkbox.setChecked(True)
+        def _toggle_unscheduled():
+            self._show_unscheduled = self.unscheduled_checkbox.isChecked()
+            try:
+                from PyQt6.QtCore import QSettings as _QS2
+                _QS2('LSI','ProjectPlanner').setValue('Gantt/ShowUnscheduled', self._show_unscheduled)
+            except Exception:
+                pass
+            self.refresh_gantt()
+        self.unscheduled_checkbox.stateChanged.connect(lambda _s: _toggle_unscheduled())
+        toolbar.addWidget(self.unscheduled_checkbox)
+
         # Baseline controls
         baseline_row = QHBoxLayout()
         self.baseline_combo = QComboBox()
@@ -5288,6 +5318,32 @@ class GanttChartView(QWidget):
         min_date = None
         max_date = None
         bars = []  # (name, start, duration, index, row_dict)
+        # Flexible parsers to maximize inclusion of valid rows
+        def _parse_date_flex(s: str):
+            s = (s or "").strip()
+            if not s:
+                return None
+            for fmt in ("%m-%d-%Y", "%m/%d/%Y", "%Y-%m-%d", "%Y/%m/%d"):
+                try:
+                    return datetime.datetime.strptime(s, fmt)
+                except Exception:
+                    pass
+            return None
+        def _parse_duration_flex(v):
+            if v in (None, ""):
+                return None
+            try:
+                return int(str(v).strip())
+            except Exception:
+                # Try float, or extract first numeric token (e.g., "10 d", "7.5")
+                try:
+                    import re
+                    m = re.search(r"-?\d+(\.\d+)?", str(v))
+                    if m:
+                        return int(round(float(m.group(0))))
+                except Exception:
+                    pass
+            return None
         for idx, r in enumerate(rows):
             if "_auto_start" in r and "_auto_end" in r:
                 start = r["_auto_start"]
@@ -5300,21 +5356,10 @@ class GanttChartView(QWidget):
                     start_str = (r.get("Start Date") or r.get("Actual Start Date") or r.get("Baseline Start Date") or "").strip()
                     end_str = (r.get("Calculated End Date") or r.get("Actual Finish Date") or r.get("Baseline End Date") or "").strip()
                     dur_val = r.get("Duration (days)")
-                    if start_str:
-                        try:
-                            start = datetime.datetime.strptime(start_str, "%m-%d-%Y")
-                        except Exception:
-                            start = None
-                    if end_str:
-                        try:
-                            end = datetime.datetime.strptime(end_str, "%m-%d-%Y")
-                        except Exception:
-                            end = None
-                    if dur_val not in (None, ""):
-                        try:
-                            duration = int(dur_val)
-                        except Exception:
-                            duration = None
+                    # Flexible parsing for dates and duration
+                    start = _parse_date_flex(start_str)
+                    end = _parse_date_flex(end_str)
+                    duration = _parse_duration_flex(dur_val)
                     # Derive one missing piece when possible
                     if start and duration is not None and duration >= 0:
                         end = start + datetime.timedelta(days=duration)
@@ -5322,6 +5367,13 @@ class GanttChartView(QWidget):
                         start = end - datetime.timedelta(days=duration)
                     elif start and end:
                         duration = max(0, (end - start).days)
+                    elif start and not end:
+                        # Default to 1-day bar when only a single boundary exists
+                        duration = 1
+                        end = start + datetime.timedelta(days=1)
+                    elif end and not start:
+                        duration = 1
+                        start = end - datetime.timedelta(days=1)
                     else:
                         continue
                 except Exception:
@@ -5349,6 +5401,20 @@ class GanttChartView(QWidget):
                 print(f"[Gantt] built {len(bars)} bars from {total_rows} rows")
             if missing and sample_missing:
                 print(f"[Gantt] missing (no sched) examples: {sample_missing}")
+        except Exception:
+            pass
+
+        # Include unscheduled items as label-only markers at chart start for visibility
+        try:
+            if min_date and rows:
+                name_set = {n for (n, *_rest) in bars}
+                for idx, r in enumerate(rows):
+                    n = r.get("Project Part", "")
+                    if not n or n in name_set:
+                        continue
+                    # Mark unscheduled; draw as tiny marker with label
+                    r["_unscheduled"] = True
+                    bars.append((n, min_date, 0, idx, r))
         except Exception:
             pass
 
@@ -5701,6 +5767,30 @@ class GanttChartView(QWidget):
         for name, start, duration, i, r in bars:
             x = (start - chart_min_date).days * 10 + bar_offset_x
             y = i * (bar_height + bar_gap) + 40
+            # Unscheduled rows: draw a small tick and label only
+            if r.get("_unscheduled"):
+                width = 2
+                from PyQt6.QtGui import QPen as _MarkerPen
+                marker = self.scene.addLine(x, y, x, y + bar_height, _MarkerPen(QColor("#777777")))
+                # Label to the right, italic to indicate unscheduled
+                text_item = self.scene.addText(name)
+                from PyQt6.QtGui import QFont as _QFontLab, QColor as _QColor, QBrush as _QBrush, QPen as _QPen
+                f = text_item.font(); f.setItalic(True); text_item.setFont(f)
+                text_item.setDefaultTextColor(_QColor("white"))
+                ty = y + (bar_height - text_item.boundingRect().height())/2
+                text_item.setPos(x + 6, ty)
+                # Subtle pill background
+                br = text_item.boundingRect().translated(text_item.pos())
+                from PyQt6.QtGui import QPainterPath as _LblPath
+                padded = br.adjusted(-3,-1,3,1)
+                path = _LblPath(); path.addRoundedRect(padded, 6, 6)
+                bg_brush = _QBrush(QColor(80,80,80,180))
+                bg_rect = self.scene.addPath(path, _QPen(Qt.PenStyle.NoPen if hasattr(Qt,'PenStyle') else getattr(Qt,'NoPen',0)), bg_brush)
+                bg_rect.setZValue(text_item.zValue()-1)
+                self._name_to_text_item[name] = text_item
+                name_to_bar[name] = (x, y, width, bar_height)
+                bar_items.append((marker, r))
+                continue
             width = max(duration * 10, 10)
             rect = ClickableBar(x, y, width, bar_height, r, self.preview_label, self)
             rect.setBrush(QColor("#333333"))
@@ -6378,7 +6468,7 @@ class TimelineView(QWidget):
         def _fit_all_tl():
             r = self.scene.itemsBoundingRect()
             if not r.isNull():
-                self.view.fitInView(r, Qt.KeepAspectRatio)
+                self.view.fitInView(r, _keep_ar())
         fit_all_btn.clicked.connect(_fit_all_tl)
         export_row.addWidget(zoom_in_btn)
         export_row.addWidget(zoom_out_btn)
