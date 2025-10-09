@@ -22,7 +22,11 @@ class ExportSettingsDialog(QDialog):
         form.addRow("Right Margin", self.margin_right)
         form.addRow("Bottom Margin", self.margin_bottom)
         form.addRow("Header", self.include_header_cb)
-        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        try:
+            std = QDialogButtonBox.StandardButton
+            self.buttons = QDialogButtonBox(std.Ok | std.Cancel)
+        except Exception:
+            self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         form.addRow(self.buttons)

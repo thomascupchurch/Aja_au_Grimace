@@ -24,7 +24,11 @@ class PricingSettingsDialog(QDialog):
             self.install_labor_rate.setValue(float(s.value("Pricing/install_labor_rate",65)))
         except Exception:
             pass
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        try:
+            std = QDialogButtonBox.StandardButton
+            buttons = QDialogButtonBox(std.Ok | std.Cancel)
+        except Exception:
+            buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         form.addWidget(buttons)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)

@@ -224,7 +224,11 @@ class ExportSettingsDialog(QDialog):
         self.include_header_cb.setToolTip("If unchecked, exports omit the header.svg/header.png banner.")
         self.form.addRow("Header", self.include_header_cb)
         # Buttons
-        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        try:
+            std = QDialogButtonBox.StandardButton
+            self.buttons = QDialogButtonBox(std.Ok | std.Cancel)
+        except Exception:
+            self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         self.form.addRow(self.buttons)
@@ -296,7 +300,11 @@ class PricingSettingsDialog(QDialog):
             self.install_labor_rate.setValue(float(s.value("Pricing/install_labor_rate", 65)))
         except Exception:
             pass
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        try:
+            std = QDialogButtonBox.StandardButton
+            buttons = QDialogButtonBox(std.Ok | std.Cancel)
+        except Exception:
+            buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         form.addWidget(buttons)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -917,7 +925,7 @@ class ProjectDataModel:
             try: log_event('db','save_skipped_read_only')
             except Exception: pass
             return
-        # Enforce single-editor lock: if a lock file exists and we are not the owner, prevent writes
+            # Enforce single-editor lock: if a lock file exists and we are not the owner, prevent writes
         try:
             dbp = getattr(self, 'DB_FILE', None) or ''
             if dbp:
@@ -3600,7 +3608,11 @@ class ProjectTreeView(QWidget):
             if n and n != target_name and n not in descendants:
                 combo.addItem(n)
         v.addWidget(combo)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        try:
+            std = QDialogButtonBox.StandardButton
+            buttons = QDialogButtonBox(std.Ok | std.Cancel)
+        except Exception:
+            buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         v.addWidget(buttons)
         def apply():
             new_parent = combo.currentText()
@@ -5282,14 +5294,36 @@ class GanttChartView(QWidget):
                 end = r["_auto_end"]
                 duration = (end - start).days
             else:
+                # Be flexible: include parts that have Start+Duration OR End+Duration OR Start+End
+                start = None; end = None; duration = None
                 try:
-                    start_str = r.get("Start Date", "")
-                    dur_val = r.get("Duration (days)", 0)
-                    if not start_str or not dur_val:
+                    start_str = (r.get("Start Date") or r.get("Actual Start Date") or r.get("Baseline Start Date") or "").strip()
+                    end_str = (r.get("Calculated End Date") or r.get("Actual Finish Date") or r.get("Baseline End Date") or "").strip()
+                    dur_val = r.get("Duration (days)")
+                    if start_str:
+                        try:
+                            start = datetime.datetime.strptime(start_str, "%m-%d-%Y")
+                        except Exception:
+                            start = None
+                    if end_str:
+                        try:
+                            end = datetime.datetime.strptime(end_str, "%m-%d-%Y")
+                        except Exception:
+                            end = None
+                    if dur_val not in (None, ""):
+                        try:
+                            duration = int(dur_val)
+                        except Exception:
+                            duration = None
+                    # Derive one missing piece when possible
+                    if start and duration is not None and duration >= 0:
+                        end = start + datetime.timedelta(days=duration)
+                    elif end and duration is not None and duration >= 0:
+                        start = end - datetime.timedelta(days=duration)
+                    elif start and end:
+                        duration = max(0, (end - start).days)
+                    else:
                         continue
-                    start = datetime.datetime.strptime(start_str, "%m-%d-%Y")
-                    duration = int(dur_val)
-                    end = start + datetime.timedelta(days=duration)
                 except Exception:
                     continue
             if not start:
@@ -6682,8 +6716,9 @@ class TimelineView(QWidget):
                                     ti.setFont(base_font)
                                 bg = ti.data(3)
                                 if bg:
-                                    from PyQt6.QtGui import QBrush as _QBrushTL2
-                                    bg.setBrush(_QBrushTL2(Qt.transparent))
+                                    from PyQt6.QtGui import QBrush as _QBrushTL2, QColor as _QColorTL2
+                                    # PyQt6-safe transparent brush (no Qt.transparent constant)
+                                    bg.setBrush(_QBrushTL2(_QColorTL2(0, 0, 0, 0)))
                         except Exception:
                             pass
                         return orig_leave(ev)
@@ -6711,8 +6746,9 @@ class TimelineView(QWidget):
                                     prev_ti.setFont(orig)
                                 bg = prev_ti.data(3)
                                 if bg:
-                                    from PyQt6.QtGui import QBrush
-                                    bg.setBrush(QBrush(Qt.transparent))
+                                    from PyQt6.QtGui import QBrush, QColor as _QColorTL3
+                                    # PyQt6-safe transparent brush (no Qt.transparent constant)
+                                    bg.setBrush(QBrush(_QColorTL3(0, 0, 0, 0)))
                         self._timeline_locked = name
                         ti = self._timeline_name_to_text.get(name)
                         if ti:
@@ -9330,6 +9366,10 @@ class MainWindow(QMainWindow):
             max_w = max(1, int(self.width() * 0.98))
             # Make the logo taller without distorting: use a larger fraction of window height (cap kept reasonable)
             target_h = max(128, min(int(self.height() * 0.22), 360))
+            try:
+                print(f"[UI] _resize_header: win=({self.width()}x{self.height()}) max_w={max_w} target_h={target_h} svg={self._header_is_svg}")
+            except Exception:
+                pass
             # Helper: trim transparent borders
             def trim_transparent(pixmap: QPixmap) -> QPixmap:
                 try:
@@ -9448,14 +9488,45 @@ class MainWindow(QMainWindow):
                     render_w = max(1, int(round(w * scale)))
                     render_h = max(1, int(round(h * scale)))
                     pm = QPixmap(render_w, render_h)
-                    pm.fill(Qt.transparent)
+                    # PyQt6: use QColor(0,0,0,0) for transparent fill
+                    from PyQt6.QtGui import QColor as _QCol
+                    pm.fill(_QCol(0, 0, 0, 0))
                     p = QPainter(pm)
-                    r.render(p)
+                    try:
+                        from PyQt6.QtCore import QRectF
+                    except Exception:
+                        QRectF = None  # type: ignore
+                    if QRectF is not None:
+                        r.render(p, QRectF(0, 0, float(render_w), float(render_h)))
+                    else:
+                        # Fallback if QRectF import fails
+                        r.render(p)
                     p.end()
-                    # Trim transparent borders; if minimal effect, try uniform color border trim (e.g., solid white)
+                    # Trim transparent borders only; avoid uniform-color trim to prevent over-cropping
                     pm_trim = trim_transparent(pm)
-                    if pm_trim.width() >= pm.width() * 0.98 and pm_trim.height() >= pm.height() * 0.98:
-                        pm_trim = trim_uniform_color(pm_trim, 10)
+                    try:
+                        print(f"[UI] header render: base=({w}x{h}) scaled=({render_w}x{render_h}) after-trim=({pm_trim.width()}x{pm_trim.height()})")
+                    except Exception:
+                        pass
+                    # Fallback to PNG if SVG rasterization produced an unexpectedly tiny/empty image
+                    if pm_trim.isNull() or pm_trim.width() < 8 or pm_trim.height() < 8:
+                        try:
+                            png_path = resolve_resource_path("header.png")
+                            from PyQt6.QtGui import QPixmap as _QPM
+                            if png_path and os.path.exists(png_path):
+                                alt = _QPM(png_path)
+                                if not alt.isNull():
+                                    try:
+                                        _smooth = Qt.TransformationMode.SmoothTransformation
+                                    except Exception:
+                                        _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                                    pm_trim = alt.scaledToHeight(target_h, _smooth)
+                                    print(f"[UI] header fallback to PNG -> {png_path}")
+                        except Exception as _e_fallback:
+                            try:
+                                print(f"[UI] header PNG fallback error: {_e_fallback}")
+                            except Exception:
+                                pass
                     # Enforce width cap
                     if pm_trim.width() > max_w:
                         try:
@@ -9472,7 +9543,15 @@ class MainWindow(QMainWindow):
                             pass
                         self._header_label.setPixmap(pm_trim)
                         self._header_label.setFixedHeight(target_h)
-                except Exception:
+                        try:
+                            print(f"[UI] label set: pix=({pm_trim.width()}x{pm_trim.height()}) fixed_h={target_h}")
+                        except Exception:
+                            pass
+                except Exception as e:
+                    try:
+                        print(f"[UI] header render error: {e}")
+                    except Exception:
+                        pass
                     # Fallback: just set height of widget
                     self._header_widget.setFixedHeight(target_h)
             else:
