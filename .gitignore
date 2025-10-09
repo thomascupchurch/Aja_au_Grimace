@@ -12,3 +12,14 @@ __pycache__/
 .env
 *.bak
 *.swp
+
+# Build and distribution artifacts
+build/
+dist/
+_stage_main/
+
+# Release bundles and checksums
+release/
+/release_*.zip
+/release_*.zip.sha256
+/pa_upload_*.zip
