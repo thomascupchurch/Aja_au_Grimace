@@ -3,7 +3,8 @@ param(
   [switch]$DryRun,
   [switch]$PassThru,
   [switch]$Wait,
-  [switch]$Diag
+  [switch]$Diag,
+  [switch]$Source
 )
 $ErrorActionPreference = 'Stop'
 
@@ -46,6 +47,18 @@ except Exception as e:
 }
 
 # MAIN
+
+# If -Source is specified, run from source directly
+if ($Source) {
+  $mainPy = Join-Path (Get-Location) 'main.py'
+  if (-not (Test-Path $mainPy)) { Write-Error "main.py not found at $mainPy"; exit 1 }
+  $venvPy = "$PSScriptRoot\.venv\Scripts\python.exe"
+  if (-not (Test-Path $venvPy)) { Write-Error "Missing .venv. Create with: python -m venv .venv"; exit 1 }
+  if ($DryRun) { Write-Host "[dry-run] Would run $venvPy $mainPy"; exit 0 }
+  & $venvPy $mainPy
+  exit $LASTEXITCODE
+}
+
 try {
   $exe = Resolve-AppExe -ForceOneFile:$OneFile
 } catch {
@@ -54,31 +67,20 @@ try {
   Write-Warning "No packaged executable; running source."
   $venvPy = "$PSScriptRoot\.venv\Scripts\python.exe"
   if (-not (Test-Path $venvPy)) { Write-Error "Missing .venv. Create with: python -m venv .venv"; exit 1 }
-
-  if ($Diag) {
-    Write-Host "Running PyQt5 diagnostics..." -ForegroundColor Cyan
-    if (-not (Test-PyQt5 $venvPy)) {
-      Write-Error @"
-PyQt5 import failed.
-Repair steps:
-  Remove-Item -Recurse -Force .venv
-  (ensure official python.org Python first in PATH)
-  python -m venv .venv
-  .\.venv\Scripts\python.exe -m pip install --upgrade pip
-  .\.venv\Scripts\pip.exe install --no-cache-dir --force-reinstall PyQt5 PyQt5-Qt5 PyQt5-sip
-"@
-      exit 1
-    } else {
-      Write-Host "PyQt5 OK." -ForegroundColor Green
-    }
-  }
-
   if ($DryRun) { Write-Host "[dry-run] Would run $venvPy $mainPy"; exit 0 }
   & $venvPy $mainPy
   exit $LASTEXITCODE
 }
 
 $exeDir = Split-Path $exe -Parent
+
+# Apply shared DB override BEFORE launching so the child inherits the env var
+if (Test-Path '.\shared_db_path.txt') {
+  $dbTarget = Get-Content '.\shared_db_path.txt' -Raw
+  $env:PROJECT_DB_PATH = $dbTarget.Trim()
+  Write-Host "Using shared DB override: $env:PROJECT_DB_PATH" -ForegroundColor Yellow
+}
+
 Write-Host "Launcher: using '$exe'" -ForegroundColor Cyan
 if ($DryRun) { exit 0 }
 
@@ -91,14 +93,16 @@ if ($PassThru -or $Wait) { $startInfo.Add('PassThru', $true) }
 
 try {
   $p = Start-Process @startInfo
-  if ($PassThru -or $Wait) { return $p }
+  if ($PassThru -or $Wait) {
+    if ($Wait) {
+      # If waiting, report exit code for diagnostics
+      Write-Host "Process exited with code $($p.ExitCode)" -ForegroundColor DarkGray
+    }
+    return $p
+  }
 } catch {
   Write-Error "Failed to launch: $($_.Exception.Message)"
   exit 1
 }
 
-if (Test-Path '.\shared_db_path.txt') {
-    $dbTarget = Get-Content '.\shared_db_path.txt' -Raw
-    $env:PROJECT_DB_PATH = $dbTarget.Trim()
-    Write-Host "Using shared DB override: $env:PROJECT_DB_PATH" -ForegroundColor Yellow
-}
+Write-Host "Hint: run with -Wait to block until the app exits, or -Source to run from Python." -ForegroundColor DarkGray
