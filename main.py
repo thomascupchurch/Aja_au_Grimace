@@ -5334,6 +5334,24 @@ class GanttChartView(QWidget):
                 max_date = end
             bars.append((r.get("Project Part", ""), start, duration, idx, r))
 
+        # Debug: quick coverage summary for Gantt
+        try:
+            name_set = {n for (n, *_rest) in bars}
+            total_rows = len(rows)
+            missing = [r.get("Project Part", "") for r in rows if r.get("Project Part", "") not in name_set]
+            sample_missing = ", ".join([m for m in missing if m][:8])
+            if min_date and max_date:
+                try:
+                    print(f"[Gantt] built {len(bars)} bars from {total_rows} rows; date range {min_date.strftime('%m-%d-%Y')}..{max_date.strftime('%m-%d-%Y')}")
+                except Exception:
+                    print(f"[Gantt] built {len(bars)} bars from {total_rows} rows")
+            else:
+                print(f"[Gantt] built {len(bars)} bars from {total_rows} rows")
+            if missing and sample_missing:
+                print(f"[Gantt] missing (no sched) examples: {sample_missing}")
+        except Exception:
+            pass
+
         if not bars:
             return
 
@@ -7721,7 +7739,7 @@ class MainWindow(QMainWindow):
             # File-based edit lock ownership flag
             self._own_lock = False
 
-            # Header with centered header.svg only (no PNG fallback in UI)
+            # Header with centered header.svg; PNG fallback if SVG missing/invalid
             header_layout = QHBoxLayout()
             # Eliminate extra margins/spacing around the header row
             header_layout.setContentsMargins(0, 0, 0, 0)
@@ -7732,7 +7750,7 @@ class MainWindow(QMainWindow):
             self._header_widget = None
             self._header_is_svg = False
             self._header_svg_renderer = None
-            self._header_png_pixmap = None  # deprecated: no PNG fallback in UI
+            self._header_png_pixmap = None  # if set, use PNG-based header in UI
             self._header_aspect = None  # width / height (unused after trim logic)
             self._header_label = None  # QLabel used to display trimmed pixmap
             try:
@@ -7768,19 +7786,45 @@ class MainWindow(QMainWindow):
                             pass
                         used_svg = False
                 if not used_svg:
-                    # No SVG available: show a small placeholder text instead of falling back to PNG
+                    # Try PNG fallback before giving up
                     try:
-                        _msg = f"[UI] header.svg missing or invalid at path: {svg_path if svg_path else '(none)'}"
-                        print(_msg)
+                        png_path = resolve_resource_path("header.png")
+                        from PyQt6.QtGui import QPixmap as _QPM
+                        if png_path and os.path.exists(png_path):
+                            pm = _QPM(png_path)
+                            if not pm.isNull():
+                                try:
+                                    print(f"[UI] Using header.png fallback -> {png_path}")
+                                except Exception:
+                                    pass
+                                lbl = QLabel()
+                                try:
+                                    lbl.setStyleSheet("background: transparent; margin:0; padding:0; border:0;")
+                                    lbl.setAttribute(Qt.WA_TranslucentBackground, True)
+                                except Exception:
+                                    pass
+                                header_widget = lbl
+                                # Save for dynamic resizing
+                                self._header_widget = lbl
+                                self._header_label = lbl
+                                self._header_is_svg = False
+                                self._header_png_pixmap = pm
                     except Exception:
                         pass
-                    lbl = QLabel("[header.svg not found]")
-                    header_widget = lbl
-                    # Save for dynamic sizing
-                    self._header_widget = lbl
-                    self._header_label = lbl
-                    self._header_is_svg = False
-                    self._header_aspect = 4.0
+                    # If still no header, show a small placeholder text
+                    if header_widget is None:
+                        try:
+                            _msg = f"[UI] header.svg missing or invalid at path: {svg_path if svg_path else '(none)'}"
+                            print(_msg)
+                        except Exception:
+                            pass
+                        lbl = QLabel("[header.svg not found]")
+                        header_widget = lbl
+                        # Save for dynamic sizing
+                        self._header_widget = lbl
+                        self._header_label = lbl
+                        self._header_is_svg = False
+                        self._header_aspect = 4.0
             except Exception:
                 # Final fallback
                 lbl = QLabel("[header load error]")
@@ -9555,9 +9599,33 @@ class MainWindow(QMainWindow):
                     # Fallback: just set height of widget
                     self._header_widget.setFixedHeight(target_h)
             else:
-                # No SVG (placeholder label): just update height to keep spacing consistent
+                # PNG fallback or placeholder
                 try:
-                    self._header_widget.setFixedHeight(target_h)
+                    if getattr(self, '_header_png_pixmap', None) is not None and getattr(self, '_header_label', None) is not None:
+                        # Scale PNG to target height while keeping aspect ratio, cap width
+                        try:
+                            _smooth = Qt.TransformationMode.SmoothTransformation
+                        except Exception:
+                            _smooth = getattr(Qt, 'SmoothTransformation', 1)
+                        pm = self._header_png_pixmap
+                        scaled = pm.scaledToHeight(target_h, _smooth)
+                        if scaled.width() > max_w:
+                            scaled = scaled.scaled(max_w, target_h, _keep_ar(), _smooth)
+                        try:
+                            from PyQt6.QtWidgets import QSizePolicy
+                            self._header_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                            self._header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                        except Exception:
+                            pass
+                        self._header_label.setPixmap(scaled)
+                        self._header_label.setFixedHeight(target_h)
+                        try:
+                            print(f"[UI] header PNG set: pix=({scaled.width()}x{scaled.height()}) fixed_h={target_h}")
+                        except Exception:
+                            pass
+                    else:
+                        # Placeholder label: just update height for consistent spacing
+                        self._header_widget.setFixedHeight(target_h)
                 except Exception:
                     pass
         except Exception:
