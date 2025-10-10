@@ -119,7 +119,9 @@ if ($Mode -eq 'source') {
 
 } else {
     Write-Host '[1/5] Preparing onedir build...' -ForegroundColor Cyan
-    $exePath = Join-Path $PSScriptRoot 'dist\main\main.exe'
+    $exePathNew = Join-Path $PSScriptRoot 'dist\Vols Signage\Vols Signage.exe'
+    $exePathOld = Join-Path $PSScriptRoot 'dist\main\main.exe'
+    $exePath = if (Test-Path $exePathNew) { $exePathNew } else { $exePathOld }
     if (-not (Test-Path $exePath)) {
         if (Test-Path (Join-Path $PSScriptRoot 'build_release.ps1')) {
             Write-Host '[info] Building via build_release.ps1 (onedir)' -ForegroundColor Yellow
@@ -139,9 +141,15 @@ if ($Mode -eq 'source') {
     if (-not (Test-Path $exePath)) { throw 'PyInstaller build not found after attempt.' }
 
     Write-Host '[2/5] Copying onedir build...' -ForegroundColor Cyan
-    $destApp = Join-Path $dest 'main'
+    $destApp = Join-Path $dest 'Vols Signage'
     if (Test-Path $destApp) { Remove-Item -Recurse -Force $destApp }
-    Copy-Item (Join-Path $PSScriptRoot 'dist\main') $dest -Recurse -Force
+    if (Test-Path (Join-Path $PSScriptRoot 'dist\Vols Signage')) {
+        Copy-Item (Join-Path $PSScriptRoot 'dist\Vols Signage') $dest -Recurse -Force
+    } else {
+        # Legacy fallback
+        Copy-Item (Join-Path $PSScriptRoot 'dist\main') $dest -Recurse -Force
+        $destApp = Join-Path $dest 'main'
+    }
 
     Write-Host '[3/5] Copying supplemental files...' -ForegroundColor Cyan
     Copy-IfExists (Join-Path $PSScriptRoot 'README.md') $dest
@@ -190,9 +198,15 @@ if ($Mode -eq 'source') {
     }
 
     Write-Host '[5/5] Creating run_app.ps1 launcher...' -ForegroundColor Cyan
-    $runner = @"
+        $runner = @"
 # Runs the packaged app from OneDrive (onedir)
-Start-Process -FilePath "`"$(Join-Path $PSScriptRoot 'main\main.exe')`""
+if (Test-Path (Join-Path $PSScriptRoot 'Vols Signage\Vols Signage.exe')) {
+    Start-Process -FilePath "`"$(Join-Path $PSScriptRoot 'Vols Signage\Vols Signage.exe')`""
+} elseif (Test-Path (Join-Path $PSScriptRoot 'main\main.exe')) {
+    Start-Process -FilePath "`"$(Join-Path $PSScriptRoot 'main\main.exe')`""
+} else {
+    Write-Error 'No packaged exe found to run.'
+}
 "@
     Set-Content -Path (Join-Path $dest 'run_app.ps1') -Value $runner -Encoding UTF8
 

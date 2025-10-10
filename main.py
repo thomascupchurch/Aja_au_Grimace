@@ -3950,8 +3950,9 @@ class GanttChartView(QWidget):
         self._filter_critical_only = False     # boolean
         self._filter_risk_only = False         # boolean (overdue OR at-risk)
         self._current_critical_set = set()     # populated during render
-    # Feature toggles
-    self._show_unscheduled = True
+        # Feature toggles (default; may be overridden by settings/checkbox in __init__)
+        if not hasattr(self, '_show_unscheduled'):
+            self._show_unscheduled = True
 
     def set_filters(self, statuses=None, internal_external=None, responsible_substr=None,
                     critical_only=None, risk_only=None, show_unscheduled=None):
@@ -5146,6 +5147,13 @@ class GanttChartView(QWidget):
         self.preview_label.clear()
         if not hasattr(model, 'rows'):
             return
+        # Clear any stale unscheduled flags from prior renders
+        try:
+            for _r in getattr(model, 'rows', []) or []:
+                if isinstance(_r, dict) and '_unscheduled' in _r:
+                    _r.pop('_unscheduled', None)
+        except Exception:
+            pass
         # Performance guard rails and feature toggles
         # Allow external toggle of connector rendering via attribute set by MainWindow
         # Connector enable & mode (restored by MainWindow after construction)
@@ -5404,17 +5412,18 @@ class GanttChartView(QWidget):
         except Exception:
             pass
 
-        # Include unscheduled items as label-only markers at chart start for visibility
+        # Include unscheduled items as label-only markers at chart start for visibility (when enabled)
         try:
-            if min_date and rows:
-                name_set = {n for (n, *_rest) in bars}
-                for idx, r in enumerate(rows):
-                    n = r.get("Project Part", "")
-                    if not n or n in name_set:
-                        continue
-                    # Mark unscheduled; draw as tiny marker with label
-                    r["_unscheduled"] = True
-                    bars.append((n, min_date, 0, idx, r))
+            if getattr(self, '_show_unscheduled', True):
+                if min_date and rows:
+                    name_set = {n for (n, *_rest) in bars}
+                    for idx, r in enumerate(rows):
+                        n = r.get("Project Part", "")
+                        if not n or n in name_set:
+                            continue
+                        # Mark unscheduled; draw as tiny marker with label
+                        r["_unscheduled"] = True
+                        bars.append((n, min_date, 0, idx, r))
         except Exception:
             pass
 
@@ -6232,12 +6241,19 @@ class GanttChartView(QWidget):
             if hasattr(self, 'legend_label'):
                 if self._enable_connectors and not skip_connectors:
                     self.legend_label.setVisible(True)
-                    self.legend_label.setText(
+                    legend_html = (
                         "Legend: "
                         "<span style='display:inline-block; padding:2px 6px; background:#b4b4b4; color:#000; border-radius:4px;'>Hierarchy</span> "
                         "<span style='display:inline-block; padding:2px 6px; background:#FFAA28; color:#000; border-radius:4px;'>Dependency</span> "
                         "<span style='display:inline-block; padding:2px 6px; background:#00BFFF; color:#000; border-radius:4px;'>Highlight</span>"
                     )
+                    # Show Unscheduled chip when toggle enabled
+                    try:
+                        if getattr(self, '_show_unscheduled', True):
+                            legend_html += " " + "<span style='display:inline-block; padding:2px 6px; background:#888; color:#fff; border-radius:4px;'>Unscheduled</span>"
+                    except Exception:
+                        pass
+                    self.legend_label.setText(legend_html)
                 else:
                     self.legend_label.setVisible(False)
         except Exception:

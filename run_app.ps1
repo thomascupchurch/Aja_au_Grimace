@@ -11,14 +11,19 @@ $ErrorActionPreference = 'Stop'
 function Resolve-AppExe {
   param([switch]$ForceOneFile)
   $root = Get-Location
-  $oneDirExe = Join-Path $root 'dist/main/main.exe'
-  $oneFileExe = Join-Path $root 'dist/main.exe'
+  $oneDirPreferred = Join-Path $root 'dist/Vols Signage/Vols Signage.exe'
+  $oneDirFallback = Join-Path $root 'dist/main/main.exe'
+  $oneFilePreferred = Join-Path $root 'dist/Vols Signage.exe'
+  $oneFileFallback = Join-Path $root 'dist/main.exe'
   if ($ForceOneFile) {
-    if (Test-Path $oneFileExe) { return $oneFileExe }
-    throw 'One-file executable not found (expected dist/main.exe). Build with build_release.ps1 -OneFile.'
+    if (Test-Path $oneFilePreferred) { return $oneFilePreferred }
+    if (Test-Path $oneFileFallback) { return $oneFileFallback }
+    throw 'One-file executable not found (expected dist/"Vols Signage".exe or dist/main.exe). Build with build_release.ps1 -OneFile.'
   }
-  if (Test-Path $oneDirExe) { return $oneDirExe }
-  if (Test-Path $oneFileExe) { return $oneFileExe }
+  if (Test-Path $oneDirPreferred) { return $oneDirPreferred }
+  if (Test-Path $oneDirFallback) { return $oneDirFallback }
+  if (Test-Path $oneFilePreferred) { return $oneFilePreferred }
+  if (Test-Path $oneFileFallback) { return $oneFileFallback }
   throw 'No executable found.'
 }
 

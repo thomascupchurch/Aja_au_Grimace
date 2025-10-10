@@ -41,14 +41,54 @@ python main.py
 
 ## Building Executables
 
-### Windows
+### Enhanced Build Script (`build_release.py`)
+An extended helper wraps PyInstaller with cross‑platform conveniences.
+
+Capabilities:
+- Multi-size icon generation from `header.svg` / `header.png` (Windows `.ico`; macOS `.icns` when `--mac-bundle` and `iconutil` available)
+- Pillow self-test (detect corrupted installs early)
+- Dry-run mode (prints planned actions only)
+- Deterministic output staging under `release/<Platform>/`
+- Optional macOS bundle metadata injection (`Info.plist`, retina icons)
+
+Key flags:
+```
+--name <AppName>                Executable / bundle name (default ProjectPlanner)
+--onefile / --no-onefile        Toggle PyInstaller one-file vs onedir (default one-file)
+--mac-bundle                    Post-process macOS .app (icon + Info.plist)
+--icon-source <path>            SVG or PNG (default header.svg)
+--icon-out <path>               Output .ico path (default build/generated/icon.ico)
+--skip-icon                     Skip icon generation
+--dry-run                       Plan only; no build artifacts
+--clean                         Remove existing build/ and dist/ first
+--noconsole                     Add --noconsole (Windows GUI)
+--extra-pyinstaller-arg ARG     Pass extra PyInstaller arg (repeatable)
+--skip-pillow-self-test         Bypass the Pillow round-trip test
+--force-pillow-self-test        Force the test even if future defaults change
+```
+
+Examples:
+```
+python build_release.py --dry-run
+python build_release.py --noconsole
+python build_release.py --skip-icon --extra-pyinstaller-arg --hidden-import=packagename
+python build_release.py --mac-bundle   # run on macOS host
+python build_release.py --skip-pillow-self-test
+```
+
+Notes:
+- If `cairosvg` is missing and an SVG is used, a warning is emitted (install via `pip install cairosvg`).
+- macOS `.icns` creation requires `iconutil`; absence logs a warning and continues.
+- Pillow self-test draws & reopens a small RGBA image then writes it to `build/selftest/`.
+
+### Windows (Direct PyInstaller)
 ```bash
 pip install pyinstaller
 pyinstaller --onefile --windowed --name ProjectPlanner main.py
 # Executable created in dist/ProjectPlanner.exe
 ```
 
-### macOS
+### macOS (Direct PyInstaller)
 ```bash
 pip install pyinstaller
 pyinstaller --onefile --windowed --name ProjectPlanner main.py
@@ -151,8 +191,12 @@ ProjectPlanner/
 - ✅ Cross-platform build workflow
 - ✅ Version-locked dependencies
 - ✅ Icon pipeline & deterministic packaging
+- ✅ Extended build script (icons, dry-run, mac bundle, Pillow self-test)
 
 The codebase no longer supports PyQt5 or PySide6 fallbacks; ensure your environment installs only PyQt6 as specified in `requirements.txt`.
+
+### Enum Fallback Cleanup (Future)
+Defensive `getattr` / `try: ... except` guards around PyQt enums remain for safety. Once several more clean release cycles pass, these can be simplified to direct `Qt.*` / namespaced enum references for readability.
 
 ## Usage
 1. **First Launch**: App creates `project_data.db` database

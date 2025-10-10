@@ -18,7 +18,8 @@ function Write-Info($msg){ if(-not $Quiet){ Write-Host $msg -ForegroundColor Cya
 
 $root = Get-Location
 $distMain = Join-Path $root 'dist/main'
-$oneFile = Join-Path $root 'dist/main.exe'
+$oneFilePreferred = Join-Path $root 'dist/Vols Signage.exe'
+$oneFileFallback = Join-Path $root 'dist/main.exe'
 $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $zipName = "portable_${stamp}.zip"
 
@@ -27,12 +28,14 @@ if (Test-Path $zipName) { Remove-Item $zipName -Force }
 if (Test-Path $distMain) {
   Write-Info "Zipping onedir dist/main -> $zipName"
   Compress-Archive -Path (Join-Path $distMain '*') -DestinationPath $zipName -Force
-} elseif (Test-Path $oneFile) {
+} elseif (Test-Path $oneFilePreferred -or Test-Path $oneFileFallback) {
   Write-Info "Zipping one-file essentials -> $zipName"
   $temp = Join-Path $root "_portable_stage"
   if (Test-Path $temp) { Remove-Item $temp -Recurse -Force }
   New-Item -ItemType Directory -Path $temp | Out-Null
-  Copy-Item $oneFile (Join-Path $temp 'main.exe')
+  $exeToZip = if (Test-Path $oneFilePreferred) { $oneFilePreferred } else { $oneFileFallback }
+  $destName = Split-Path $exeToZip -Leaf
+  Copy-Item $exeToZip (Join-Path $temp $destName)
   foreach($p in @('project_data.db','images','attachments','README.md')){
     if (Test-Path (Join-Path $root $p)) { Copy-Item (Join-Path $root $p) $temp -Recurse -Force }
   }

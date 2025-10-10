@@ -196,9 +196,11 @@ try {
 
 # If ForceKill specified, attempt to terminate any running instance of prior exe (common cause of WinError 5)
 if ($ForceKill) {
-  $possibleExe = Join-Path (Get-Location) 'dist/main.exe'
-  $possibleOneDirExe = Join-Path (Get-Location) 'dist/main/main.exe'
-  $targets = @($possibleExe,$possibleOneDirExe) | Where-Object { Test-Path $_ }
+  $possibleExe = Join-Path (Get-Location) 'dist/Vols Signage.exe'
+  $possibleExeOld = Join-Path (Get-Location) 'dist/main.exe'
+  $possibleOneDirExe = Join-Path (Get-Location) 'dist/Vols Signage/Vols Signage.exe'
+  $possibleOneDirExeOld = Join-Path (Get-Location) 'dist/main/main.exe'
+  $targets = @($possibleExe,$possibleExeOld,$possibleOneDirExe,$possibleOneDirExeOld) | Where-Object { Test-Path $_ }
   if ($targets.Count -gt 0) {
     Write-Host "Attempting to terminate running processes locking previous build..." -ForegroundColor Yellow
     foreach ($t in $targets) {
@@ -237,8 +239,10 @@ if ($DryRun) {
 $distRoot = Join-Path (Get-Location) 'dist'
 
 # PyInstaller spec currently builds one-file (main.exe in dist) or one-dir (dist/main/). Detect.
-$oneFileExe = Join-Path $distRoot 'main.exe'
-$oneDirFolder = Join-Path $distRoot 'main'
+$oneFileExeNew = Join-Path $distRoot 'Vols Signage.exe'
+$oneFileExeOld = Join-Path $distRoot 'main.exe'
+$oneDirFolderNew = Join-Path $distRoot 'Vols Signage'
+$oneDirFolderOld = Join-Path $distRoot 'main'
 
 $staging = Join-Path (Get-Location) "_stage_main"
 if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
@@ -247,14 +251,36 @@ New-Item -ItemType Directory -Path $staging | Out-Null
 if ($DryRun) {
   Write-Host "[dryrun] Would detect build layout (expect dist/main or dist/main.exe)" -ForegroundColor DarkGray
 }
-if (-not $DryRun -and (Test-Path $oneDirFolder)) {
-  Write-Host "Detected one-dir build layout (dist/main/)." -ForegroundColor Green
-  Copy-Item (Join-Path $oneDirFolder '*') $staging -Recurse -Force
-} elseif (-not $DryRun -and (Test-Path $oneFileExe)) {
-  Write-Host "Detected one-file build layout (dist/main.exe)." -ForegroundColor Green
-  Copy-Item $oneFileExe (Join-Path $staging 'main.exe')
+if (-not $DryRun -and (Test-Path $oneDirFolderNew)) {
+  Write-Host "Detected onedir build layout (dist/Vols Signage/)." -ForegroundColor Green
+  Copy-Item (Join-Path $oneDirFolderNew '*') $staging -Recurse -Force
+} elseif (-not $DryRun -and (Test-Path $oneDirFolderOld)) {
+  Write-Host "Detected legacy onedir build layout (dist/main/)." -ForegroundColor Yellow
+  Copy-Item (Join-Path $oneDirFolderOld '*') $staging -Recurse -Force
+} elseif (-not $DryRun -and (Test-Path $oneFileExeNew)) {
+  Write-Host "Detected one-file build layout (dist/Vols Signage.exe)." -ForegroundColor Green
+  Copy-Item $oneFileExeNew (Join-Path $staging 'Vols Signage.exe')
+} elseif (-not $DryRun -and (Test-Path $oneFileExeOld)) {
+  Write-Host "Detected legacy one-file build layout (dist/main.exe)." -ForegroundColor Yellow
+  Copy-Item $oneFileExeOld (Join-Path $staging 'main.exe')
 } elseif (-not $DryRun) {
   throw "Neither dist/main folder nor dist/main.exe found. Build layout unexpected."
+}
+
+# Standardize Windows app filename for distribution to "Vols Signage.exe"
+if (-not $DryRun) {
+  $stagedMainExe = Join-Path $staging 'main.exe'
+  $desiredName = 'Vols Signage.exe'
+  $stagedDesiredExe = Join-Path $staging $desiredName
+  if (Test-Path $stagedMainExe) {
+    try {
+      if (Test-Path $stagedDesiredExe) { Remove-Item $stagedDesiredExe -Force }
+      Rename-Item -Path $stagedMainExe -NewName $desiredName -Force
+      Write-Host "Renamed staged executable to: $desiredName" -ForegroundColor Green
+    } catch {
+      Write-Host "[warn] Failed to rename main.exe to '$desiredName': $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+  }
 }
 
 if ($Version) {
@@ -305,7 +331,9 @@ if ($MacBundle) {
   if (-not $isMac) {
     Write-Host "[warn] -MacBundle specified but host is not macOS (skipping)." -ForegroundColor Yellow
   } else {
-    $appName = 'ProjectPlanner'
+    $appName = 'Vols Signage'
+    # Sanitize bundle identifier component from app name (replace spaces with hyphen, strip invalid chars)
+    $bundleIdName = (($appName -replace '\s+','-') -replace '[^A-Za-z0-9.-]','').ToLower()
     $bundleRoot = Join-Path (Get-Location) "$appName.app"
     if ($DryRun) {
       Write-Host "[dryrun] Would create bundle directories $bundleRoot/Contents/..." -ForegroundColor DarkGray
@@ -337,7 +365,7 @@ if ($MacBundle) {
       '<dict>',
       '  <key>CFBundleName</key><string>' + $appName + '</string>',
       '  <key>CFBundleExecutable</key><string>' + $appName + '</string>',
-      '  <key>CFBundleIdentifier</key><string>com.lsi.' + $appName.ToLower() + '</string>',
+      '  <key>CFBundleIdentifier</key><string>com.lsi.' + $bundleIdName + '</string>',
       '  <key>CFBundleVersion</key><string>' + ($Version -replace '"','') + '</string>',
       '  <key>CFBundleShortVersionString</key><string>' + ($Version -replace '"','') + '</string>',
       '  <key>LSMinimumSystemVersion</key><string>10.13</string>',

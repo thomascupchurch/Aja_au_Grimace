@@ -19,12 +19,15 @@ if (-not $DbPath) {
 $env:PROJECT_DB_PATH = $DbPath
 
 # Prefer packaged exe if present, else fall back to venv/python
-$exe = Join-Path $PSScriptRoot 'main.exe'
+$exePreferred = Join-Path $PSScriptRoot 'Vols Signage.exe'
+$exeFallback = Join-Path $PSScriptRoot 'main.exe'
 $venvPy = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
 $script = Join-Path $PSScriptRoot 'main.py'
 
-if (Test-Path $exe) {
-    & $exe
+if (Test-Path $exePreferred) {
+    & $exePreferred
+} elseif (Test-Path $exeFallback) {
+    & $exeFallback
 } elseif (Test-Path $venvPy) {
     & $venvPy $script
 } else {
