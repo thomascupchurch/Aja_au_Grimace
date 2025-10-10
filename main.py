@@ -9503,6 +9503,10 @@ class MainWindow(QMainWindow):
             sb.addPermanentWidget(self.db_warning_label, 0)
             sb.addPermanentWidget(self.db_ro_label, 0)
             sb.addPermanentWidget(self.open_folder_btn, 0)
+            # Active view/zoom label
+            self.view_status_label = QLabel("Zoom: —")
+            self.view_status_label.setStyleSheet("color:#ccc; font-size:11px")
+            sb.addPermanentWidget(self.view_status_label, 0)
             self._update_db_status()
             # Initialize code sync status once at startup
             try:
@@ -9655,6 +9659,49 @@ class MainWindow(QMainWindow):
             if self.sidebar.currentRow() == 1:
                 if hasattr(self.gantt_chart_view, 'scene') and self.gantt_chart_view.scene is not None:
                     self.gantt_chart_view.render_gantt(self.model)
+            # Wire zoom updates to status bar
+            try:
+                def _set_zoom_label_from_view(view, name):
+                    try:
+                        sf = float(view.transform().m11())
+                        from math import isfinite
+                        pct = f"{int(round(sf*100))}%" if isfinite(sf) else "—"
+                    except Exception:
+                        pct = "—"
+                    sel = 0
+                    try:
+                        scn = view.scene()
+                        if scn is not None:
+                            sel = len([it for it in scn.selectedItems()])
+                    except Exception:
+                        pass
+                    txt = f"{name}: {pct}"
+                    if sel:
+                        txt += f"  (selected: {sel})"
+                    self.view_status_label.setText(txt)
+                # Connect signals
+                if hasattr(self, 'project_tree_view') and hasattr(self.project_tree_view, 'view'):
+                    self.project_tree_view.view.zoomChanged.connect(lambda sf: _set_zoom_label_from_view(self.project_tree_view.view, 'Tree'))
+                if hasattr(self, 'gantt_chart_view') and hasattr(self.gantt_chart_view, 'view'):
+                    self.gantt_chart_view.view.zoomChanged.connect(lambda sf: _set_zoom_label_from_view(self.gantt_chart_view.view, 'Gantt'))
+                if hasattr(self, 'timeline_view') and hasattr(self.timeline_view, 'view'):
+                    self.timeline_view.view.zoomChanged.connect(lambda sf: _set_zoom_label_from_view(self.timeline_view.view, 'Timeline'))
+                # Update on tab change
+                def _on_tab_change(idx):
+                    name = {0:'Tree',1:'Gantt',2:'Timeline',3:'',4:'DB',5:'Dashboard',6:'Pricing'}.get(idx, '')
+                    v = None
+                    if idx == 0 and hasattr(self.project_tree_view,'view'): v = self.project_tree_view.view
+                    elif idx == 1 and hasattr(self.gantt_chart_view,'view'): v = self.gantt_chart_view.view
+                    elif idx == 2 and hasattr(self.timeline_view,'view'): v = self.timeline_view.view
+                    if v is not None:
+                        _set_zoom_label_from_view(v, name)
+                    else:
+                        self.view_status_label.setText(f"{name or 'View'}")
+                self.sidebar.currentRowChanged.connect(_on_tab_change)
+                # Seed with current
+                _on_tab_change(self.sidebar.currentRow())
+            except Exception:
+                pass
 
             # --- First-run onboarding dialog (empty DB) ---
             try:
