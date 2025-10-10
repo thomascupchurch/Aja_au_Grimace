@@ -94,7 +94,9 @@ if ($Mode -eq 'source') {
                 }
             }
         }
-        Set-Content -Path (Join-Path $dest 'db_path.txt') -Value (Join-Path $shared 'project_data.db') -Encoding UTF8
+    # Write relative db path so it works across users' OneDrive roots
+    $relDb = "..\$SharedDataName\project_data.db"
+    Set-Content -Path (Join-Path $dest 'db_path.txt') -Value $relDb -Encoding UTF8
         Write-Host '[3/3] Source deployment complete (shared data).' -ForegroundColor Green
 
     } elseif ($CopyDB) {
@@ -107,7 +109,9 @@ if ($Mode -eq 'source') {
                     Copy-Item $side (Join-Path $dest ("project_data.db$ext")) -Force
                 }
             }
-            Set-Content -Path (Join-Path $dest 'db_path.txt') -Value (Join-Path $dest 'project_data.db') -Encoding UTF8
+            # Local data path (relative within app folder)
+            $relLocal = '.\project_data.db'
+            Set-Content -Path (Join-Path $dest 'db_path.txt') -Value $relLocal -Encoding UTF8
         } else {
             Write-Warning 'No project_data.db found to copy.'
         }
@@ -177,7 +181,9 @@ if ($Mode -eq 'source') {
                 if (Test-Path $side) { Copy-Item $side (Join-Path $shared ("project_data.db$ext")) -Force }
             }
         }
-        Set-Content -Path (Join-Path $dest 'db_path.txt') -Value (Join-Path $shared 'project_data.db') -Encoding UTF8
+    # Write relative db path so it works across users' OneDrive roots
+    $relDb = "..\$SharedDataName\project_data.db"
+    Set-Content -Path (Join-Path $dest 'db_path.txt') -Value $relDb -Encoding UTF8
     } elseif ($CopyDB) {
         Write-Host '[4/5] Copying DB locally into onedir app data...' -ForegroundColor Cyan
         $data = Join-Path $dest 'data'
@@ -198,16 +204,36 @@ if ($Mode -eq 'source') {
     }
 
     Write-Host '[5/5] Creating run_app.ps1 launcher...' -ForegroundColor Cyan
-        $runner = @"
+    $runner = @'
 # Runs the packaged app from OneDrive (onedir)
-if (Test-Path (Join-Path $PSScriptRoot 'Vols Signage\Vols Signage.exe')) {
-    Start-Process -FilePath "`"$(Join-Path $PSScriptRoot 'Vols Signage\Vols Signage.exe')`""
-} elseif (Test-Path (Join-Path $PSScriptRoot 'main\main.exe')) {
-    Start-Process -FilePath "`"$(Join-Path $PSScriptRoot 'main\main.exe')`""
+$ErrorActionPreference = 'Stop'
+
+# Resolve shared DB from db_path.txt if present (supports relative path)
+$dbTxt = Join-Path $PSScriptRoot 'db_path.txt'
+if (Test-Path $dbTxt) {
+    $raw = (Get-Content $dbTxt -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
+    if ($raw) {
+        if ([System.IO.Path]::IsPathRooted($raw)) {
+            $dbResolved = $raw
+        } else {
+            $dbResolved = (Join-Path $PSScriptRoot $raw)
+        }
+        try { $dbResolved = (Resolve-Path $dbResolved -ErrorAction Stop).Path } catch {}
+        $env:PROJECT_DB_PATH = $dbResolved
+        Write-Host "[info] PROJECT_DB_PATH: $env:PROJECT_DB_PATH" -ForegroundColor Yellow
+    }
+}
+
+$exePreferred = Join-Path $PSScriptRoot 'Vols Signage\Vols Signage.exe'
+$exeFallback  = Join-Path $PSScriptRoot 'main\main.exe'
+if (Test-Path $exePreferred) {
+    Start-Process -FilePath "`"$exePreferred`""
+} elseif (Test-Path $exeFallback) {
+    Start-Process -FilePath "`"$exeFallback`""
 } else {
     Write-Error 'No packaged exe found to run.'
 }
-"@
+'@
     Set-Content -Path (Join-Path $dest 'run_app.ps1') -Value $runner -Encoding UTF8
 
     Write-Host "[done] Onedir deployment complete. Run: $(Join-Path $dest 'run_app.ps1')" -ForegroundColor Green

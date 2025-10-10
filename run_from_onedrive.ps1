@@ -47,10 +47,16 @@ if ($py -eq 'py') {
 # If there's a db_path.txt alongside this script, use it
 $dbTxt = Join-Path $PSScriptRoot 'db_path.txt'
 if (Test-Path $dbTxt) {
-    $dbPath = (Get-Content $dbTxt -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
-    if ($dbPath) {
-        Write-Host "[info] PROJECT_DB_PATH from db_path.txt: $dbPath" -ForegroundColor Yellow
-        $env:PROJECT_DB_PATH = $dbPath
+    $raw = (Get-Content $dbTxt -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
+    if ($raw) {
+        if ([System.IO.Path]::IsPathRooted($raw)) {
+            $dbResolved = $raw
+        } else {
+            $dbResolved = (Join-Path $PSScriptRoot $raw)
+        }
+        try { $dbResolved = (Resolve-Path $dbResolved -ErrorAction Stop).Path } catch {}
+        Write-Host "[info] PROJECT_DB_PATH from db_path.txt: $dbResolved" -ForegroundColor Yellow
+        $env:PROJECT_DB_PATH = $dbResolved
     }
 }
 
