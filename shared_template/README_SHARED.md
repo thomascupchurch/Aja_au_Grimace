@@ -1,4 +1,4 @@
-# Project Planner Shared Folder (OneDrive)
+# Vols Signage Shared Folder (OneDrive)
 
 This folder is designed to be placed in OneDrive so a small team can view/edit the same project data.
 

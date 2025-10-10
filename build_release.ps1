@@ -1,6 +1,6 @@
 <#!
 .SYNOPSIS
-  Build and package a timestamped release archive for the Project Planner.
+  Build and package a timestamped release archive for Vols Signage.
 .DESCRIPTION
   Performs a clean PyInstaller build using main.spec, copies optional extras (cli.py, project_data.db, README.md),
   optionally generates a manifest.json with SHA256 hashes of all packaged files, and creates a zip archive named:

@@ -172,6 +172,40 @@ The application offers to create a desktop shortcut on first run and will use `h
 
 ---
 
+## Locking & Read‑Only (OneDrive/SharePoint)
+
+When using a shared database over cloud sync (e.g., OneDrive/SharePoint), the app provides two complementary safety features:
+
+- Read‑Only Mode: View without changing the DB. Uses a true SQLite read‑only connection under the hood so no writes or locks occur.
+- Advisory Edit Lock: A small JSON sidecar file next to the DB coordinates a single active editor across the team.
+
+### Selecting the Database
+- Environment variable: set `PROJECT_DB_PATH` to a full path (UNC or local) of `project_data.db` before launching.
+- Config file: place a `db_path.txt` file either in the current working directory or next to `main.py` containing a single path.
+
+Path resolution expands `%VARS%` and `~` on Windows/macOS. If multiple sources exist, `PROJECT_DB_PATH` wins.
+
+### Read‑Only Mode Details
+- Toggle via Tools → Read‑Only Mode.
+- Force via environment: set `PROJECTAPP_READ_ONLY=1` (any truthy value) before launch.
+- Connection behavior: the DB is opened using a SQLite file: URI with `mode=ro`, which guarantees no writes. If the DB file is missing, no new DB is created in read‑only sessions.
+- Writes are skipped: schema migrations, saves, and updates are all no‑ops in read‑only and are logged as such.
+
+### Advisory Edit Lock
+- Location: a sidecar file named like `project_data.db.lock.json` is placed next to the DB.
+- Ownership: when you disable Read‑Only Mode and begin editing, the app attempts to acquire the edit lock; when you re‑enable Read‑Only or exit, it releases the lock.
+- Enforcement: if a lock exists and you are not the owner, save operations are blocked even if you toggled off Read‑Only.
+- Stale locks: the app tracks last‑heartbeat time in the lock file. You can configure staleness and takeover prompts under Tools → Edit Lock:
+    - “Prompt to Take Over Stale Lock” (toggle)
+    - “Change Stale Timeout…” (default 30 minutes, range 1–1440)
+
+Notes and caveats:
+- Cloud sync latency can delay lock visibility; always respect the UI lock indicator in the status bar.
+- SQLite WAL (`-wal`/`-shm`) files may appear alongside the DB; this is normal in read‑write sessions. Read‑only sessions do not write these files.
+- For high‑conflict environments, encourage viewers to keep Read‑Only on and reserve edits to one person at a time.
+
+---
+
 ## Project Structure
 ```
 ProjectPlanner/
@@ -371,4 +405,46 @@ Strategy notes:
 - Use `update_onedrive.ps1` for rapid iteration (faster, fine-grained copying).
 - Use `deploy.ps1` when you want a fresh canonical snapshot or to produce a zip artifact with identical contents.
 - Always check `-DryRun` output before a destructive prune or DB-inclusive action.
+
+### Prune Old Releases (helper)
+
+To remove older release archives/checksums and optionally their folders, use the included helper:
+
+Keep the latest 3 zips (dry-run):
+```powershell
+./prune_releases.ps1 -Keep 3 -DryRun
+```
+
+Prune for real and also remove old `release\\release_*` folders:
+```powershell
+./prune_releases.ps1 -Keep 5 -PruneFolders
+```
+
+The script supports `-WhatIf` for safe simulation and defaults to `release_*.zip` naming.
+
+## Windows Desktop Shortcut Helper
+
+If Windows doesn’t automatically show the embedded app icon for your shortcut, use the included helper to create a .lnk with an explicit icon.
+
+Create a shortcut to the executable (or to `run_app.ps1`) on your desktop with `header.ico` as the icon:
+
+PowerShell (from the repo root):
+
+```
+./scripts/Create-Shortcut.ps1 -TargetPath ".\release\Vols Signage\Vols Signage.exe"
+```
+
+Common variations:
+- Onedir build in `dist/`: `-TargetPath ".\dist\Vols Signage\Vols Signage.exe"`
+- One-file build next to repo root: `-TargetPath ".\Vols Signage.exe"`
+- Launcher script: `-TargetPath ".\run_app.ps1"`
+
+Parameters (optional):
+- `-Name "Vols Signage"`        Shortcut display name (defaults to folder/target name)
+- `-ShortcutPath <.lnk path>`   Override output path (default is Desktop)
+- `-IconPath .\header.ico`      Explicit icon file; by default the script uses `header.ico` if present or the target EXE’s embedded icon
+- `-Arguments "..."`            Extra arguments (e.g., when targeting `powershell.exe` directly)
+- `-WorkingDirectory "..."`     Start in directory (defaults to target’s folder)
+
+Tip: Windows sometimes caches shortcut icons; after changing icons, delete and recreate the shortcut or clear the icon cache to refresh.
 

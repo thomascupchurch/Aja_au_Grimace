@@ -487,6 +487,14 @@ class ProjectDataModel:
             self.read_only = bool(ro)
         except Exception:
             self.read_only = False
+        # Allow environment to force read-only explicitly (e.g., for viewers)
+        try:
+            import os
+            env_ro = os.environ.get('PROJECTAPP_READ_ONLY','')
+            if env_ro and str(env_ro).lower() in ('1','true','yes','on'):
+                self.read_only = True
+        except Exception:
+            pass
         # Resolve DB path with simple override mechanisms suitable for a shared network DB scenario.
         # Precedence:
         #  1) Environment variable PROJECT_DB_PATH (UNC or local; supports %VAR% and ~)
@@ -594,24 +602,40 @@ class ProjectDataModel:
         import sqlite3
         # Ensure parent exists (defensive guard for scenarios where DB path dir was missing)
         try:
-            import os
             db_dir = os.path.dirname(os.path.abspath(self.DB_FILE))
             if db_dir and not os.path.exists(db_dir):
                 os.makedirs(db_dir, exist_ok=True)
         except Exception:
             pass
         # Use check_same_thread=False to allow background UI operations if needed (Qt timers)
-        conn = sqlite3.connect(self.DB_FILE, timeout=5.0, check_same_thread=False)
-        try:
-            cur = conn.cursor()
-            cur.execute("PRAGMA journal_mode=WAL")
-            cur.execute("PRAGMA synchronous=NORMAL")
-            cur.execute("PRAGMA busy_timeout=5000")
-            cur.execute("PRAGMA foreign_keys=ON")
-            conn.commit()
-        except Exception:
-            pass
-        return conn
+        if getattr(self, 'read_only', False):
+            try:
+                # Attempt read-only connection via URI
+                uri = f"file:{self.DB_FILE}?mode=ro"
+                conn = sqlite3.connect(uri, uri=True, timeout=5.0, check_same_thread=False)
+                try:
+                    cur = conn.cursor()
+                    cur.execute("PRAGMA foreign_keys=ON")
+                    cur.execute("PRAGMA busy_timeout=5000")
+                    conn.commit()
+                except Exception:
+                    pass
+                return conn
+            except Exception:
+                # Fallback to normal connect (may still be readable)
+                return sqlite3.connect(self.DB_FILE, timeout=5.0, check_same_thread=False)
+        else:
+            conn = sqlite3.connect(self.DB_FILE, timeout=5.0, check_same_thread=False)
+            try:
+                cur = conn.cursor()
+                cur.execute("PRAGMA journal_mode=WAL")
+                cur.execute("PRAGMA synchronous=NORMAL")
+                cur.execute("PRAGMA busy_timeout=5000")
+                cur.execute("PRAGMA foreign_keys=ON")
+                conn.commit()
+            except Exception:
+                pass
+            return conn
 
     # --- Schema migration to add progress columns if missing ---
     def ensure_schema(self):
@@ -620,6 +644,13 @@ class ProjectDataModel:
             # Table will be created later in create_table()
             try:
                 log_event('schema','db_missing', path=self.DB_FILE)
+            except Exception:
+                pass
+            return
+        # In read-only mode, skip schema migrations to avoid errors on shared DBs
+        if getattr(self, 'read_only', False):
+            try:
+                log_event('schema','skip_read_only')
             except Exception:
                 pass
             return
@@ -737,6 +768,10 @@ class ProjectDataModel:
         expected_version: caller's last known row_version
         Returns (True, new_version) on success; (False, reason) on conflict/error."""
         import datetime, os
+        if getattr(self, 'read_only', False):
+            try: log_event('concurrency','update_read_only', part=part_name)
+            except Exception: pass
+            return False, "Read-only mode (shared lock active)"
         if not part_name or not new_values:
             try: log_event('concurrency','update_invalid_params', part=part_name)
             except Exception: pass
@@ -820,6 +855,13 @@ class ProjectDataModel:
         import sqlite3
         self.rows.clear()
         if not os.path.exists(self.DB_FILE):
+            # In read-only mode, don't attempt to create a new DB/schema
+            if getattr(self, 'read_only', False):
+                try:
+                    log_event('db','skip_create_missing_read_only', path=self.DB_FILE)
+                except Exception:
+                    pass
+                return
             self.create_table()
             return
         with self._connect() as conn:
@@ -7582,7 +7624,7 @@ class MainWindow(QMainWindow):
         stem = base_name
         return (os.path.exists(os.path.join(desk, stem + '.lnk')) or
                 os.path.exists(os.path.join(desk, stem + '.url')))
-    def _create_desktop_shortcut(self, base_name: str = 'Project Planner'):
+    def _create_desktop_shortcut(self, base_name: str = 'Vols Signage'):
         """Create a desktop shortcut to the current executable or launcher script.
         Attempts .lnk via COM (win32com) first; falls back to .url if COM not available.
         Safe no-op on non-Windows.
@@ -7617,7 +7659,7 @@ class MainWindow(QMainWindow):
                 sc.TargetPath = target
                 sc.WorkingDirectory = os.path.dirname(target)
                 sc.IconLocation = icon_path
-                sc.Description = 'Launch Project Planner'
+                sc.Description = 'Launch Vols Signage'
                 sc.save()
                 return True, lnk_path
             except Exception:
@@ -7661,13 +7703,13 @@ class MainWindow(QMainWindow):
             if isinstance(already_prompted, str):
                 already_prompted = already_prompted.lower() in ('1','true','yes','on')
             # Only prompt if not prompted before AND no shortcut exists
-            base_name = 'Project Planner'
+            base_name = 'Vols Signage'
             if already_prompted or self._shortcut_exists(base_name):
                 return
             def _ask():
                 try:
                     ret = QMessageBox.question(self, 'Add Desktop Shortcut?',
-                        'Would you like to add a Project Planner shortcut to your Desktop?',
+                        'Would you like to add a Vols Signage shortcut to your Desktop?',
                         QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
                     if ret == QMessageBox.Yes:
                         ok, info = self._create_desktop_shortcut(base_name)
@@ -8230,7 +8272,7 @@ class MainWindow(QMainWindow):
                         try:
                             readme = os.path.join(target, "README_SHARED.md")
                             with open(readme, "w", encoding="utf-8") as f:
-                                f.write("""# Project Planner Shared Folder (OneDrive)\n\nThis folder is designed to be placed in OneDrive so a small team can view/edit the same project data.\n\nRecommended contents:\n- `project_data.db` – SQLite database used by the desktop app\n- `holidays.json` – Shared holidays used for weekend/holiday shading\n- `images/` – Any task-linked images\n- `attachments/` – Optional linked files\n- `backups/` – Destination for timestamped database backups (optional)\n\nThe app may also create/manage:\n- `project_data.db.lock.json` – Lightweight edit lock file\n- `project_data.db-wal` / `project_data.db-shm` – SQLite WAL sidecar files\n\nHow to wire it up:\n1. Each teammate runs the desktop app locally (not from this folder).\n2. In the app: Tools → Switch Data File… → select `project_data.db` here.\n3. Viewers use Read-Only Mode; editors toggle it off to acquire the edit lock.\n""")
+                                f.write("""# Vols Signage Shared Folder (OneDrive)\n\nThis folder is designed to be placed in OneDrive so a small team can view/edit the same project data.\n\nRecommended contents:\n- `project_data.db` – SQLite database used by the desktop app\n- `holidays.json` – Shared holidays used for weekend/holiday shading\n- `images/` – Any task-linked images\n- `attachments/` – Optional linked files\n- `backups/` – Destination for timestamped database backups (optional)\n\nThe app may also create/manage:\n- `project_data.db.lock.json` – Lightweight edit lock file\n- `project_data.db-wal` / `project_data.db-shm` – SQLite WAL sidecar files\n\nHow to wire it up:\n1. Each teammate runs the desktop app locally (not from this folder).\n2. In the app: Tools → Switch Data File… → select `project_data.db` here.\n3. Viewers use Read-Only Mode; editors toggle it off to acquire the edit lock.\n""")
                         except Exception:
                             pass
                         try:
@@ -8526,7 +8568,7 @@ class MainWindow(QMainWindow):
                 try:
                     act_shortcut = tmenu.addAction('Create Desktop Shortcut Now')
                     def _do_shortcut():
-                        ok, info = self._create_desktop_shortcut('Project Planner')
+                        ok, info = self._create_desktop_shortcut('Vols Signage')
                         if self.statusBar():
                             self.statusBar().showMessage(('Shortcut created: ' if ok else 'Shortcut failed: ') + info, 5000)
                     act_shortcut.triggered.connect(_do_shortcut)
