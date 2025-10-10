@@ -1,5 +1,9 @@
 # Run the app directly from a OneDrive-shared source folder
-# - Resolves Python (prefers local .venv if present)
+# Interpreter search order (to avoid syncing huge .venv into OneDrive):
+#   1) Per-user venv at %LocalAppData%\Vols_Signage\venv\Scripts\python.exe
+#   2) Adjacent .venv (repo-local) \Scripts\python.exe (not recommended on OneDrive)
+#   3) 'py' launcher
+#   4) system 'python.exe'
 # - Reads db_path.txt if present and sets PROJECT_DB_PATH
 # - Launches main.py
 param(
@@ -10,7 +14,10 @@ $ErrorActionPreference = "Stop"
 function Resolve-Python {
     param([string]$Preferred)
     if ($Preferred -and (Test-Path $Preferred)) { return $Preferred }
+    # Prefer a per-user venv outside OneDrive to reduce sync size
+    $userVenv = Join-Path $env:LocalAppData 'Vols_Signage\venv\Scripts\python.exe'
     $candidates = @(
+        $userVenv,
         "$PSScriptRoot\.venv\Scripts\python.exe",
         "py",
         "python.exe"
@@ -26,7 +33,7 @@ function Resolve-Python {
             }
         } catch {}
     }
-    throw "No Python interpreter found. Create .venv with quickstart.ps1 or install Python 3.9+."
+    throw "No Python interpreter found. Create a per-user venv at %LocalAppData%\\Vols_Signage\\venv or install Python 3.9+."
 }
 
 $py = Resolve-Python -Preferred $Python
