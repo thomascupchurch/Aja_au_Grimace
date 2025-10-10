@@ -2965,6 +2965,14 @@ class ProjectTreeView(QWidget):
         header.addWidget(title)
         from PyQt6.QtWidgets import QPushButton, QCheckBox
         fit_btn = QPushButton("Fit")
+        # Add explicit zoom controls for Project Tree
+        zoom_in_btn = QPushButton("Zoom In")
+        zoom_in_btn.setToolTip("Zoom in (also Ctrl + '+')")
+        zoom_out_btn = QPushButton("Zoom Out")
+        zoom_out_btn.setToolTip("Zoom out (also Ctrl + '-')")
+        from PyQt6.QtWidgets import QLabel as _QLabel
+        zoom_label = _QLabel("100%")
+        zoom_label.setToolTip("Current zoom")
         refresh_btn = QPushButton("Refresh")
         toggle_img_btn = QPushButton("Previews: On")
         export_btn = QPushButton("Export")
@@ -2978,6 +2986,46 @@ class ProjectTreeView(QWidget):
         settings_btn.setToolTip("Open export settings dialog")
         reset_btn.setToolTip("Reset zoom and fit entire tree")
         clear_cache_btn.setToolTip("Clear preview image cache")
+        # Links toggle (persisted, shared with other views)
+        from PyQt6.QtWidgets import QPushButton as _QPB_links
+        try:
+            from PyQt6.QtCore import QSettings as _QS_links
+            _ps_links = _QS_links('LSI','ProjectPlanner')
+            val_links = _ps_links.value('UI/ShowLinks', 'true')
+            def _b_l(v):
+                if isinstance(v, bool): return v
+                if isinstance(v, str): return v.lower() in ('1','true','yes','on')
+                return True
+            self._show_links = _b_l(val_links)
+        except Exception:
+            self._show_links = True
+        links_btn = _QPB_links('Links: On' if self._show_links else 'Links: Off')
+        links_btn.setCheckable(True)
+        links_btn.setChecked(self._show_links)
+        links_btn.setToolTip('Show link indicators; click nodes to open Pace Link')
+        def _toggle_links_tree():
+            self._show_links = links_btn.isChecked()
+            links_btn.setText('Links: On' if self._show_links else 'Links: Off')
+            try:
+                from PyQt6.QtCore import QSettings as _QS_links2
+                _QS_links2('LSI','ProjectPlanner').setValue('UI/ShowLinks', self._show_links)
+            except Exception:
+                pass
+            # Propagate to other views
+            try:
+                mw = self.window()
+                if hasattr(mw, 'gantt_chart_view') and mw.gantt_chart_view:
+                    mw.gantt_chart_view._show_links = self._show_links
+                    mw.gantt_chart_view.links_checkbox.setChecked(self._show_links)
+                    mw.gantt_chart_view.refresh_gantt()
+                if hasattr(mw, 'timeline_view') and mw.timeline_view:
+                    mw.timeline_view._show_links = self._show_links
+                    mw.timeline_view._sync_links_checkbox()
+                    mw.timeline_view.render_timeline()
+            except Exception:
+                pass
+            self.refresh()
+        links_btn.clicked.connect(_toggle_links_tree)
         def do_fit():
             if hasattr(self, 'view'):
                 r = self.scene.itemsBoundingRect()
@@ -3051,12 +3099,16 @@ class ProjectTreeView(QWidget):
         settings_btn.clicked.connect(open_settings)
         header.addStretch(1)
         header.addWidget(fit_btn)
+        header.addWidget(zoom_in_btn)
+        header.addWidget(zoom_out_btn)
         header.addWidget(refresh_btn)
         header.addWidget(toggle_img_btn)
         header.addWidget(export_btn)
         header.addWidget(reset_btn)
         header.addWidget(clear_cache_btn)
         header.addWidget(settings_btn)
+        header.addWidget(links_btn)
+        header.addWidget(zoom_label)
         # Panel visibility toggles
         self.preview_panel_cb = QCheckBox("Preview")
         self.minimap_panel_cb = QCheckBox("Minimap")
@@ -3093,7 +3145,35 @@ class ProjectTreeView(QWidget):
             self.view.setSettingsKey('TreeZoom')
         except Exception:
             pass
+        # Wire up zoom buttons now that view exists
+        try:
+            zoom_in_btn.clicked.connect(self.view.zoomIn)
+            zoom_out_btn.clicked.connect(self.view.zoomOut)
+        except Exception:
+            pass
+        # Update label on zoom changes
+        try:
+            def _set_zoom_label(sf: float|int):
+                try:
+                    pct = int(round(float(sf)*100))
+                    zoom_label.setText(f"{pct}%")
+                except Exception:
+                    pass
+            self.view.zoomChanged.connect(_set_zoom_label)
+            # Seed with restored value
+            _set_zoom_label(self.view.transform().m11())
+        except Exception:
+            pass
         layout.addWidget(self.view, 1)
+        # Keyboard shortcuts for zoom
+        try:
+            from PyQt6.QtWidgets import QShortcut
+            from PyQt6.QtGui import QKeySequence
+            QShortcut(QKeySequence.ZoomIn, self.view, activated=self.view.zoomIn)
+            QShortcut(QKeySequence.ZoomOut, self.view, activated=self.view.zoomOut)
+            QShortcut(QKeySequence("Ctrl+0"), self.view, activated=self.view.resetZoom)
+        except Exception:
+            pass
         # Preview label (shares style with others)
         self.preview_label = QLabel()
         self.preview_label.setFixedHeight(140)
@@ -3119,6 +3199,23 @@ class ProjectTreeView(QWidget):
         self._mini_frame.setStyleSheet("QFrame { border:1px solid #555; background:#111; }")
         mini_layout = QVBoxLayout(self._mini_frame)
         mini_layout.setContentsMargins(2,2,2,2)
+        # Minimap zoom controls (+ / -) affecting main tree view
+        try:
+            mini_controls = QHBoxLayout()
+            btn_zoom_in_mini = QPushButton("+")
+            btn_zoom_in_mini.setFixedWidth(24)
+            btn_zoom_in_mini.setToolTip("Zoom in")
+            btn_zoom_out_mini = QPushButton("-")
+            btn_zoom_out_mini.setFixedWidth(24)
+            btn_zoom_out_mini.setToolTip("Zoom out")
+            btn_zoom_in_mini.clicked.connect(lambda: getattr(self.view, 'zoomIn', lambda: None)())
+            btn_zoom_out_mini.clicked.connect(lambda: getattr(self.view, 'zoomOut', lambda: None)())
+            mini_controls.addWidget(btn_zoom_in_mini)
+            mini_controls.addWidget(btn_zoom_out_mini)
+            mini_controls.addStretch(1)
+            mini_layout.addLayout(mini_controls)
+        except Exception:
+            pass
         self._mini_scene = QGraphicsScene()
         self._mini_view = QGraphicsView(self._mini_scene)
         try:
@@ -3309,6 +3406,23 @@ class ProjectTreeView(QWidget):
                 base_color = QColor('#5f4a23')
             rect_item = self.scene.addRect(x, y, node_w, node_h, QPen(QColor('#888')), QBrush(base_color))
             rect_item.setData(0, name)
+            # Pace Link indicator on node if present
+            try:
+                pace_link = (row.get('Pace Link') or '').strip()
+                has_link = pace_link.lower().startswith('http://') or pace_link.lower().startswith('https://')
+            except Exception:
+                pace_link = ''; has_link = False
+            if has_link and getattr(self, '_show_links', True):
+                try:
+                    from PyQt6.QtWidgets import QGraphicsSimpleTextItem
+                    icon = QGraphicsSimpleTextItem('🔗', rect_item)
+                    icon.setBrush(QColor('white'))
+                    icon.setPos(node_w - 14, 2)
+                    icon.setZValue(rect_item.zValue() + 2)
+                    rect_item.setToolTip(pace_link)
+                    rect_item.setCursor(getattr(Qt,'CursorShape', Qt).PointingHandCursor)
+                except Exception:
+                    pass
             try:
                 from PyQt6.QtWidgets import QGraphicsItem
                 rect_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
@@ -3430,6 +3544,22 @@ class ProjectTreeView(QWidget):
             if item:
                 name = item.data(0)
                 if isinstance(name, str) and name:
+                    # If node has a Pace Link, open on left-click
+                    try:
+                        _left = getattr(Qt, 'MouseButton', Qt).LeftButton
+                    except Exception:
+                        _left = 1
+                    if hasattr(event, 'button') and event.button() == _left:
+                        row = self._name_to_row.get(name, {})
+                        url = (row.get('Pace Link') or '').strip()
+                        if getattr(self, '_show_links', True) and url and (url.lower().startswith('http://') or url.lower().startswith('https://')):
+                            try:
+                                from PyQt6.QtGui import QDesktopServices
+                                from PyQt6.QtCore import QUrl
+                                QDesktopServices.openUrl(QUrl(url))
+                            except Exception:
+                                import webbrowser; webbrowser.open(url)
+                            return True
                     if name.startswith("__toggle__::"):
                         target = name.split("::",1)[1]
                         if target in self._collapsed:
@@ -3887,7 +4017,7 @@ class ProjectTreeView(QWidget):
 
 # Add a custom QGraphicsView subclass for zooming
 from PyQt6.QtWidgets import QGraphicsView
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 # Backward compat: provide PyQt5-style attribute name if missing
 try:
     if not hasattr(QGraphicsView, 'ScrollHandDrag') and hasattr(QGraphicsView, 'DragMode') and hasattr(QGraphicsView.DragMode, 'ScrollHandDrag'):
@@ -3896,6 +4026,7 @@ except Exception:
     pass
 
 class ZoomableGraphicsView(QGraphicsView):
+    zoomChanged = pyqtSignal(float)
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._zoom = 0
@@ -3937,16 +4068,28 @@ class ZoomableGraphicsView(QGraphicsView):
         self._zoom += 1
         self.scale(1.2, 1.2)
         self._persist_zoom()
+        try:
+            self.zoomChanged.emit(float(self.transform().m11()))
+        except Exception:
+            pass
 
     def zoomOut(self):
         self._zoom -= 1
         self.scale(1/1.2, 1/1.2)
         self._persist_zoom()
+        try:
+            self.zoomChanged.emit(float(self.transform().m11()))
+        except Exception:
+            pass
 
     def resetZoom(self):
         self.resetTransform()
         self._zoom = 0
         self._persist_zoom()
+        try:
+            self.zoomChanged.emit(float(self.transform().m11()))
+        except Exception:
+            pass
 
     def setSettingsKey(self, key: str):
         self._settings_key = key
@@ -3976,6 +4119,10 @@ class ZoomableGraphicsView(QGraphicsView):
                     self.resetTransform()
                     # apply uniform scale on both axes
                     self.scale(scale_factor, scale_factor)
+                    try:
+                        self.zoomChanged.emit(float(self.transform().m11()))
+                    except Exception:
+                        pass
                 except Exception:
                     pass
         except Exception:
@@ -5016,14 +5163,29 @@ class GanttChartView(QWidget):
         toolbar.addWidget(self.group_cross_parent_checkbox)
 
         # Grouping weight strategy dropdown
-        from PyQt6.QtWidgets import QComboBox as _QCB_w
+        from PyQt6.QtWidgets import QComboBox as _QCB_w, QPushButton as _QPB_w
         self.weight_combo = _QCB_w()
-        self.weight_combo.addItems(["Weight: Successors", "Weight: Original", "Weight: Start Date", "Weight: Duration"]) 
+        self.weight_combo.addItems([
+            "Weight: Successors",
+            "Weight: Original",
+            "Weight: Start Date",
+            "Weight: Reverse Start Date",
+            "Weight: Duration",
+            "Weight: Criticality",
+            "Weight: Criticality then Start Date"
+        ]) 
         # Persisted selection
         try:
             from PyQt6.QtCore import QSettings as _QS_w
             sel = _QS_w('LSI','ProjectPlanner').value('Gantt/GroupWeightStrategy', 'Weight: Successors')
-            if sel not in ["Weight: Successors", "Weight: Original", "Weight: Start Date", "Weight: Duration"]:
+            if sel not in [
+                "Weight: Successors",
+                "Weight: Original",
+                "Weight: Start Date",
+                "Weight: Reverse Start Date",
+                "Weight: Duration",
+                "Weight: Criticality"
+            ]:
                 sel = "Weight: Successors"
             idx = self.weight_combo.findText(sel)
             if idx >= 0:
@@ -5039,6 +5201,61 @@ class GanttChartView(QWidget):
             self.refresh_gantt()
         self.weight_combo.currentTextChanged.connect(_on_weight_change)
         toolbar.addWidget(self.weight_combo)
+        # Small help button explaining strategies
+        help_btn = _QPB_w("?")
+        help_btn.setFixedWidth(22)
+        def _show_weight_help():
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Weighting Strategies",
+                "Successors: Tasks depended on by more successors appear closer to the successor.\n"
+                "Original: Preserve original order.\n"
+                "Start Date: Earlier starts first.\n"
+                "Reverse Start Date: Later starts first.\n"
+                "Duration: Longer durations first.\n"
+                "Criticality: Critical-path tasks first.\n"
+                "Criticality then Start Date: Critical first; among equals, earlier starts first.")
+        help_btn.clicked.connect(_show_weight_help)
+        toolbar.addWidget(help_btn)
+
+        # Links toggle (persisted, controls link indicators and click-to-open behavior)
+        from PyQt6.QtWidgets import QCheckBox as _QCB_links
+        try:
+            from PyQt6.QtCore import QSettings as _QS_links
+            _ps_links = _QS_links('LSI','ProjectPlanner')
+            val_links = _ps_links.value('UI/ShowLinks', 'true')
+            def _b_l(v):
+                if isinstance(v, bool): return v
+                if isinstance(v, str): return v.lower() in ('1','true','yes','on')
+                return True
+            self._show_links = _b_l(val_links)
+        except Exception:
+            self._show_links = True
+        self.links_checkbox = _QCB_links('Links')
+        self.links_checkbox.setToolTip('Show link indicators; click bars to open Pace Link')
+        self.links_checkbox.setChecked(self._show_links)
+        def _on_links_toggle():
+            self._show_links = self.links_checkbox.isChecked()
+            try:
+                from PyQt6.QtCore import QSettings as _QS_links2
+                _QS_links2('LSI','ProjectPlanner').setValue('UI/ShowLinks', self._show_links)
+            except Exception:
+                pass
+            # Propagate to sibling views if present
+            try:
+                mw = self.window()
+                if hasattr(mw, 'timeline_view') and mw.timeline_view:
+                    mw.timeline_view._show_links = self._show_links
+                    mw.timeline_view._sync_links_checkbox()
+                    mw.timeline_view.render_timeline()
+                if hasattr(mw, 'project_tree_view') and mw.project_tree_view:
+                    mw.project_tree_view._show_links = self._show_links
+                    mw.project_tree_view._sync_links_checkbox()
+                    mw.project_tree_view.refresh()
+            except Exception:
+                pass
+            self.refresh_gantt()
+        self.links_checkbox.stateChanged.connect(lambda _s: _on_links_toggle())
+        toolbar.addWidget(self.links_checkbox)
 
         # Unscheduled toggle
         self.unscheduled_checkbox = QCheckBox("Show Unscheduled")
@@ -5631,9 +5848,24 @@ class GanttChartView(QWidget):
                         sd = name_to_start.get(p)
                         # Earlier start first; None last
                         return (1, 10**9) if sd is None else (0, sd.toordinal() if hasattr(sd, 'toordinal') else base_order_map.get(p, 10**9))
+                    if strategy == "Weight: Reverse Start Date":
+                        sd = name_to_start.get(p)
+                        # Later start first; None last
+                        return (1, -10**9) if sd is None else (0, -sd.toordinal() if hasattr(sd, 'toordinal') else -base_order_map.get(p, 10**9))
                     if strategy == "Weight: Duration":
                         # Longer first
                         return (-name_to_duration.get(p, 0), base_order_map.get(p, 10**9))
+                    if strategy == "Weight: Criticality":
+                        # Critical tasks first; then successors, then base order
+                        is_crit = 1 if p in getattr(self, '_current_critical_set', set()) else 0
+                        # invert to put critical (1) first by sorting negative; use -is_crit
+                        return (-is_crit, -succ_count.get(p, 0), base_order_map.get(p, 10**9))
+                    if strategy == "Weight: Criticality then Start Date":
+                        is_crit = 1 if p in getattr(self, '_current_critical_set', set()) else 0
+                        sd = name_to_start.get(p)
+                        # critical first, then earlier start first; None last
+                        sd_key = (1, 10**9) if sd is None else (0, sd.toordinal() if hasattr(sd, 'toordinal') else base_order_map.get(p, 10**9))
+                        return (-is_crit, sd_key, base_order_map.get(p, 10**9))
                     # Fallback
                     return (-succ_count.get(p, 0), base_order_map.get(p, 10**9))
                 # Pick current strategy
@@ -5767,6 +5999,30 @@ class GanttChartView(QWidget):
                 self.preview_label = preview_label
                 self.gantt_view = gantt_view
                 self.setAcceptHoverEvents(True)
+                # Link indicator + cursor if Pace Link present and links enabled
+                try:
+                    self._pace_link = (self.row.get("Pace Link") or "").strip()
+                    has_link = self._pace_link.lower().startswith("http://") or self._pace_link.lower().startswith("https://")
+                except Exception:
+                    self._pace_link = ""; has_link = False
+                if has_link and getattr(self.gantt_view, '_show_links', True):
+                    try:
+                        # Small chain icon at top-right of bar
+                        from PyQt6.QtWidgets import QGraphicsSimpleTextItem
+                        icon = QGraphicsSimpleTextItem("🔗", self)
+                        icon.setBrush(QColor("white"))
+                        # position relative to bar (padding 3px)
+                        icon.setPos(max(2, w - 12), 2)
+                        icon.setZValue(self.zValue() + 2)
+                    except Exception:
+                        pass
+                    try:
+                        # Tooltip with URL and pointing hand cursor
+                        self.setToolTip(self._pace_link)
+                        from PyQt6.QtGui import QCursor
+                        self.setCursor(getattr(Qt,'CursorShape', Qt).PointingHandCursor)
+                    except Exception:
+                        pass
                 # Set selectable flag (PyQt6 namespaced enums with fallback)
                 try:
                     from PyQt6.QtWidgets import QGraphicsItem as _QGI
@@ -5929,6 +6185,19 @@ class GanttChartView(QWidget):
                 self.preview_label.setPixmap(QPixmap())
             def mousePressEvent(self, event):
                 try:
+                    # If Pace Link present, open it on click
+                    _left = getattr(Qt, 'MouseButton', Qt).LeftButton
+                    if hasattr(event, 'button') and event.button() == _left and getattr(self.gantt_view, '_show_links', True):
+                        url = (self.row.get('Pace Link') or '').strip()
+                        if url and (url.lower().startswith('http://') or url.lower().startswith('https://')):
+                            try:
+                                from PyQt6.QtGui import QDesktopServices
+                                from PyQt6.QtCore import QUrl
+                                QDesktopServices.openUrl(QUrl(url))
+                            except Exception:
+                                import webbrowser; webbrowser.open(url)
+                            return
+                    # Fallback: original behavior (show edit dialog)
                     self._set_preview()
                     parent_widget = self.preview_label.parentWidget()
                     if parent_widget and hasattr(parent_widget, 'show_edit_dialog'):
@@ -6939,6 +7208,26 @@ class TimelineView(QWidget):
                     self.row = row
                     self.timeline_view = timeline_view
                     self.setAcceptHoverEvents(True)
+                    # Link indicator for Pace Link (honors links toggle)
+                    try:
+                        self._pace_link = (self.row.get('Pace Link') or '').strip()
+                        has_link = self._pace_link.lower().startswith('http://') or self._pace_link.lower().startswith('https://')
+                    except Exception:
+                        self._pace_link = ''; has_link = False
+                    if has_link and getattr(self.timeline_view, '_show_links', True):
+                        try:
+                            from PyQt6.QtWidgets import QGraphicsSimpleTextItem
+                            icon = QGraphicsSimpleTextItem('🔗', self)
+                            icon.setBrush(QColor('white'))
+                            icon.setPos(max(2, width - 12), 2)
+                            icon.setZValue(self.zValue() + 2)
+                        except Exception:
+                            pass
+                        try:
+                            self.setToolTip(self._pace_link)
+                            self.setCursor(getattr(Qt,'CursorShape', Qt).PointingHandCursor)
+                        except Exception:
+                            pass
                 def get_preview_label(self):
                     # Try to get preview_label from parent widget
                     parent = self.timeline_view.parent()
@@ -6948,6 +7237,22 @@ class TimelineView(QWidget):
                     if hasattr(self.timeline_view, 'preview_label'):
                         return self.timeline_view.preview_label
                     return None
+                def mousePressEvent(self, event):
+                    try:
+                        _left = getattr(Qt, 'MouseButton', Qt).LeftButton
+                        if hasattr(event, 'button') and event.button() == _left and getattr(self.timeline_view, '_show_links', True):
+                            url = (self.row.get('Pace Link') or '').strip()
+                            if url and (url.lower().startswith('http://') or url.lower().startswith('https://')):
+                                try:
+                                    from PyQt6.QtGui import QDesktopServices
+                                    from PyQt6.QtCore import QUrl
+                                    QDesktopServices.openUrl(QUrl(url))
+                                except Exception:
+                                    import webbrowser; webbrowser.open(url)
+                                return
+                    except Exception:
+                        pass
+                    super().mousePressEvent(event)
                 def hoverEnterEvent(self, event):
                     preview_label = self.get_preview_label()
                     if preview_label is None:
@@ -8356,6 +8661,88 @@ class MainWindow(QMainWindow):
                         except Exception: pass
                         print(f"Backup failed: {e}")
                 act_backup_db.triggered.connect(do_backup_db)
+                # --- Reports submenu ---
+                reports_menu = QMenu("Reports", self)
+                # Health Snapshot (PDF)
+                act_health_pdf = reports_menu.addAction("Project Health Snapshot (PDF)")
+                def _do_health_pdf():
+                    try:
+                        self._report_health_snapshot()
+                    except Exception as e:
+                        print(f"Health snapshot failed: {e}")
+                act_health_pdf.triggered.connect(_do_health_pdf)
+                # Baseline Variance (CSV)
+                act_var_csv = reports_menu.addAction("Baseline Variance (CSV)")
+                def _do_var_csv():
+                    try:
+                        self._report_baseline_variance_csv()
+                    except Exception as e:
+                        print(f"Baseline variance CSV failed: {e}")
+                act_var_csv.triggered.connect(_do_var_csv)
+                # Baseline Variance (PDF)
+                act_var_pdf = reports_menu.addAction("Baseline Variance (PDF)")
+                def _do_var_pdf():
+                    try:
+                        self._report_baseline_variance_pdf()
+                    except Exception as e:
+                        print(f"Baseline variance PDF failed: {e}")
+                act_var_pdf.triggered.connect(_do_var_pdf)
+                # Milestone Digest (PDF)
+                act_milestone_pdf = reports_menu.addAction("Milestone Digest (PDF)")
+                def _do_milestone_pdf():
+                    try:
+                        self._report_milestone_digest_pdf()
+                    except Exception as e:
+                        print(f"Milestone digest failed: {e}")
+                act_milestone_pdf.triggered.connect(_do_milestone_pdf)
+                tmenu.addMenu(reports_menu)
+                # Export Settings
+                act_export_settings = tmenu.addAction("Export Settings…")
+                def _open_export_settings_inline():
+                    try:
+                        dlg = ExportSettingsDialog(self)
+                        dlg.exec()
+                    except Exception as e:
+                        print(f"Open Export Settings failed: {e}")
+                act_export_settings.triggered.connect(_open_export_settings_inline)
+                # Global toggles
+                tmenu.addSeparator()
+                from PyQt6.QtCore import QSettings as _QS_links_tm
+                _ps_links_tm = _QS_links_tm('LSI','ProjectPlanner')
+                v_links = _ps_links_tm.value('UI/ShowLinks', 'true')
+                def _b_l_tm(v):
+                    if isinstance(v, bool): return v
+                    if isinstance(v, str): return v.lower() in ('1','true','yes','on')
+                    return True
+                current_links = _b_l_tm(v_links)
+                act_links = tmenu.addAction("Show Link Indicators")
+                act_links.setCheckable(True)
+                act_links.setChecked(current_links)
+                def _toggle_links_menu(checked):
+                    try:
+                        _ps_links_tm.setValue('UI/ShowLinks', bool(checked))
+                    except Exception:
+                        pass
+                    # Propagate to views
+                    try:
+                        if hasattr(self, 'gantt_chart_view') and self.gantt_chart_view:
+                            self.gantt_chart_view._show_links = bool(checked)
+                            if hasattr(self.gantt_chart_view, 'links_checkbox'):
+                                self.gantt_chart_view.links_checkbox.setChecked(bool(checked))
+                            self.gantt_chart_view.refresh_gantt()
+                        if hasattr(self, 'timeline_view') and self.timeline_view:
+                            self.timeline_view._show_links = bool(checked)
+                            if hasattr(self.timeline_view, '_sync_links_checkbox'):
+                                self.timeline_view._sync_links_checkbox()
+                            self.timeline_view.render_timeline()
+                        if hasattr(self, 'project_tree_view') and self.project_tree_view:
+                            self.project_tree_view._show_links = bool(checked)
+                            if hasattr(self.project_tree_view, '_sync_links_checkbox'):
+                                self.project_tree_view._sync_links_checkbox()
+                            self.project_tree_view.refresh()
+                    except Exception:
+                        pass
+                act_links.toggled.connect(_toggle_links_menu)
                 # --- Migration / Backfill Utilities ---
                 tmenu.addSeparator()
                 act_backfill_preds = tmenu.addAction("Backfill Predecessors from Dependencies")
@@ -9050,6 +9437,14 @@ class MainWindow(QMainWindow):
             act.triggered.connect(self.open_data_folder)
             act2 = tools_menu.addAction("Manage Holidays…")
             act2.triggered.connect(self._open_holidays_manager)
+            act_export_settings2 = tools_menu.addAction("Export Settings…")
+            def _open_export_settings_menu():
+                try:
+                    dlg = ExportSettingsDialog(self)
+                    dlg.exec()
+                except Exception as e:
+                    print(f"Export Settings dialog failed: {e}")
+            act_export_settings2.triggered.connect(_open_export_settings_menu)
             act_pricing = tools_menu.addAction("Pricing Settings…")
             def _open_pricing_settings():
                 try:
@@ -9761,6 +10156,539 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         super().closeEvent(event)
+
+    # ---------------- Reports ----------------
+    def _draw_report_header(self, painter, printer, title_text: str) -> int:
+        """Draw the standard report header (logo) and title, return y-coordinate to continue content.
+        Respects Export/include_header (QSettings LSI/ProjectPlanner)."""
+        from PyQt6.QtGui import QFont
+        from PyQt6.QtCore import QRectF, QSettings
+        import os
+        y = 0
+        # Check whether to include branded header graphic
+        include_header = True
+        try:
+            s = QSettings('LSI', 'ProjectPlanner')
+            v = s.value('Export/include_header', True)
+            if isinstance(v, str):
+                include_header = v.lower() in ('1','true','yes','on')
+            else:
+                include_header = bool(v)
+        except Exception:
+            include_header = True
+        try:
+            if include_header:
+                svg_path = resolve_resource_path("header.svg")
+                header_svg_renderer = None; header_is_svg = False
+                if os.path.exists(svg_path):
+                    from PyQt6.QtSvg import QSvgRenderer
+                    r = QSvgRenderer(svg_path)
+                    if r.isValid():
+                        header_is_svg = True; header_svg_renderer = r
+                page_rect = printer.pageRect()
+                if header_is_svg and header_svg_renderer:
+                    ds = header_svg_renderer.defaultSize(); w, h = ds.width(), ds.height()
+                    if w <= 0 or h <= 0:
+                        vb = header_svg_renderer.viewBoxF(); w, h = vb.width(), vb.height()
+                    if w > 0 and h > 0:
+                        target_w = page_rect.width()
+                        target_h = int(round(h * (target_w / w)))
+                        target_rect = QRectF(0, 0, target_w, target_h)
+                        header_svg_renderer.render(painter, target_rect)
+                        y = target_h + 12
+                else:
+                    # PNG fallback
+                    try:
+                        from PyQt6.QtGui import QPixmap
+                        p = resolve_resource_path('header.png')
+                        if os.path.exists(p):
+                            pm = QPixmap(p)
+                            if not pm.isNull():
+                                scaled = pm.scaledToWidth(printer.pageRect().width())
+                                painter.drawPixmap((printer.pageRect().width() - scaled.width())//2, 0, scaled)
+                                y = scaled.height() + 12
+                    except Exception:
+                        pass
+        except Exception:
+            y = 0
+        title_font = QFont(); title_font.setPointSize(14); title_font.setBold(True)
+        painter.setFont(title_font)
+        painter.drawText(40, y + 10 + 18, title_text)
+        return y + 10 + 34
+
+    def _elided_text(self, painter, text: str, max_width: int) -> str:
+        from PyQt6.QtCore import Qt
+        fm = painter.fontMetrics()
+        if max_width <= 0:
+            return text
+        return fm.elidedText(text or "", Qt.TextElideMode.ElideRight, max_width)
+
+    class MilestoneDigestOptionsDialog(QDialog):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QDialogButtonBox
+            from PyQt6.QtCore import QSettings
+            self.setWindowTitle("Milestone Digest Options")
+            s = QSettings("LSI", "ProjectPlanner")
+            default_upcoming = int(s.value("reports/milestone_digest/upcoming_days", 60, type=int))
+            default_recent = int(s.value("reports/milestone_digest/recent_days", 30, type=int))
+            layout = QVBoxLayout(self)
+            row1 = QHBoxLayout(); row2 = QHBoxLayout()
+            row1.addWidget(QLabel("Upcoming horizon (days):"))
+            self.spin_upcoming = QSpinBox(); self.spin_upcoming.setRange(1, 365); self.spin_upcoming.setValue(default_upcoming)
+            row1.addWidget(self.spin_upcoming)
+            row2.addWidget(QLabel("Recent completed window (days):"))
+            self.spin_recent = QSpinBox(); self.spin_recent.setRange(1, 365); self.spin_recent.setValue(default_recent)
+            row2.addWidget(self.spin_recent)
+            layout.addLayout(row1); layout.addLayout(row2)
+            btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            btns.accepted.connect(self.accept)
+            btns.rejected.connect(self.reject)
+            layout.addWidget(btns)
+        def values(self):
+            return self.spin_upcoming.value(), self.spin_recent.value()
+
+    def _report_health_snapshot(self):
+        """Generate a one-page Project Health Snapshot (PDF) with header and KPIs."""
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        import datetime
+        path, _ = QFileDialog.getSaveFileName(self, "Export Health Snapshot", "health_snapshot.pdf", "PDF Files (*.pdf)")
+        if not path:
+            return
+        # Compute KPIs
+        rows = getattr(self.model, 'rows', []) or []
+        total = len(rows)
+        by_status = {}
+        overdue = 0
+        at_risk = 0
+        done = 0
+        avg_pct = 0.0
+        today = datetime.datetime.today()
+        def parse_date(s):
+            s = (s or '').strip()
+            for fmt in ("%m-%d-%Y","%m/%d/%Y","%Y-%m-%d","%Y/%m/%d"):
+                try:
+                    return datetime.datetime.strptime(s, fmt)
+                except Exception:
+                    pass
+            return None
+        for r in rows:
+            st = (r.get('Status') or '').strip() or 'Planned'
+            by_status[st] = by_status.get(st, 0) + 1
+            try:
+                pc = int(r.get('% Complete') or 0)
+            except Exception:
+                pc = 0
+            avg_pct += pc
+            if st == 'Done':
+                done += 1
+            # overdue / at-risk logic similar to Gantt
+            try:
+                start = parse_date(r.get('Start Date')) or parse_date(r.get('Actual Start Date'))
+                end_calc = parse_date(r.get('Calculated End Date')) or parse_date(r.get('Actual Finish Date'))
+                dur = None
+                try:
+                    dur = int(r.get('Duration (days)') or 0)
+                except Exception:
+                    dur = None
+                if start and dur is not None and end_calc is None:
+                    end_calc = start + datetime.timedelta(days=dur)
+                if pc < 100 and end_calc and today.date() > end_calc.date():
+                    overdue += 1
+                elif pc == 0 and (st in ('Planned','Blocked')) and start and today.date() > start.date():
+                    at_risk += 1
+            except Exception:
+                pass
+        avg_pct = (avg_pct / total) if total else 0.0
+        # Build PDF page using QPrinter + QPainter; reuse header render helper from Gantt exporter
+        try:
+            from PyQt6.QtPrintSupport import QPrinter
+            from PyQt6.QtGui import QPainter, QFont
+            from PyQt6.QtCore import QSettings, QMarginsF
+            # Apply export settings
+            s = QSettings('LSI','ProjectPlanner')
+            page_size = s.value('Export/page_size','Letter')
+            orientation = s.value('Export/orientation','Portrait')
+            ml = float(s.value('Export/margin_left_mm',8.0)); mt = float(s.value('Export/margin_top_mm',8.0)); mr = float(s.value('Export/margin_right_mm',8.0)); mb = float(s.value('Export/margin_bottom_mm',8.0))
+            printer = QPrinter(QPrinter.HighResolution)
+            printer.setOutputFileName(path)
+            printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+            size_map={'A4':QPrinter.PaperSize.A4,'Letter':QPrinter.PaperSize.Letter,'Legal':QPrinter.PaperSize.Legal,'Tabloid':QPrinter.PaperSize.Tabloid}
+            printer.setPaperSize(size_map.get(page_size, QPrinter.PaperSize.Letter))
+            printer.setOrientation(QPrinter.Orientation.Portrait if orientation=='Portrait' else QPrinter.Orientation.Landscape)
+            try:
+                printer.setPageMargins(QMarginsF(ml,mt,mr,mb))
+            except Exception:
+                pass
+            painter = QPainter(printer)
+            y = self._draw_report_header(painter, printer, "Project Health Snapshot")
+            sub_font = QFont(); sub_font.setPointSize(9)
+            painter.setFont(sub_font)
+            painter.drawText(40, y, f"As of {today.strftime('%Y-%m-%d')}  |  Items: {total}  |  Avg %: {avg_pct:.1f}%")
+            # Status breakdown
+            painter.drawText(40, y + 18, "Status distribution:")
+            row_y = y + 34
+            x0 = 40
+            for st in ["Planned","In Progress","Blocked","Done","Deferred"]:
+                val = by_status.get(st, 0)
+                painter.drawText(x0, row_y, f"{st}: {val}")
+                row_y += 16
+            # Risk
+            row_y += 8
+            painter.drawText(40, row_y, f"Overdue: {overdue}    At-Risk: {at_risk}")
+            # Completion
+            row_y += 18
+            painter.drawText(40, row_y, f"Completed: {done}    Remaining: {max(0, total - done)}")
+            painter.end()
+            if self.statusBar():
+                self.statusBar().showMessage(f"Exported: {path}", 3000)
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", f"Could not write PDF: {e}")
+
+    def _report_baseline_variance_csv(self):
+        """Export baseline vs current schedule variance as CSV."""
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        import csv, datetime
+        path, _ = QFileDialog.getSaveFileName(self, "Export Baseline Variance (CSV)", "baseline_variance.csv", "CSV Files (*.csv)")
+        if not path:
+            return
+        # Build baseline map: choose selected baseline from Gantt view if any
+        baseline_name = None
+        try:
+            if hasattr(self, 'gantt_chart_view'):
+                baseline_name = getattr(self.gantt_chart_view, '_selected_baseline_name', None)
+        except Exception:
+            baseline_name = None
+        bmap = {}
+        try:
+            if baseline_name:
+                bmap = self.model.load_baseline_map(baseline_name)
+        except Exception:
+            bmap = {}
+        rows = getattr(self.model, 'rows', []) or []
+        def to_dt(s):
+            s = (s or '').strip()
+            for fmt in ("%m-%d-%Y","%m/%d/%Y","%Y-%m-%d","%Y/%m/%d"):
+                try:
+                    return datetime.datetime.strptime(s, fmt)
+                except Exception:
+                    pass
+            return None
+        try:
+            with open(path, 'w', newline='', encoding='utf-8') as f:
+                w = csv.writer(f)
+                w.writerow(["Project Part","Baseline Start","Baseline End","Current Start","Current End","Start Slip (d)","Finish Slip (d)"])
+                for r in rows:
+                    name = r.get('Project Part','')
+                    b_start = b_end = None
+                    if name in bmap:
+                        bs, be = bmap[name]
+                        b_start = to_dt(bs) if bs else None
+                        b_end = to_dt(be) if be else None
+                    c_start = to_dt(r.get('Start Date'))
+                    c_end = to_dt(r.get('Calculated End Date'))
+                    if not c_end and c_start:
+                        try:
+                            d = int(r.get('Duration (days)') or 0)
+                        except Exception:
+                            d = 0
+                        c_end = c_start + datetime.timedelta(days=d)
+                    slip_s = (c_start - b_start).days if (b_start and c_start) else ''
+                    slip_e = (c_end - b_end).days if (b_end and c_end) else ''
+                    def fmt(d):
+                        return d.strftime('%m-%d-%Y') if d else ''
+                    w.writerow([name, fmt(b_start), fmt(b_end), fmt(c_start), fmt(c_end), slip_s, slip_e])
+            if self.statusBar():
+                self.statusBar().showMessage(f"Exported: {path}", 3000)
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", f"Could not write CSV: {e}")
+
+    def _report_baseline_variance_pdf(self):
+        """Export baseline vs current schedule variance as a simple one-page PDF table (top N)."""
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        import datetime
+        path, _ = QFileDialog.getSaveFileName(self, "Export Baseline Variance (PDF)", "baseline_variance.pdf", "PDF Files (*.pdf)")
+        if not path:
+            return
+        # Load baseline as above
+        baseline_name = None
+        try:
+            if hasattr(self, 'gantt_chart_view'):
+                baseline_name = getattr(self.gantt_chart_view, '_selected_baseline_name', None)
+        except Exception:
+            baseline_name = None
+        bmap = {}
+        try:
+            if baseline_name:
+                bmap = self.model.load_baseline_map(baseline_name)
+        except Exception:
+            bmap = {}
+        rows = getattr(self.model, 'rows', []) or []
+        def to_dt(s):
+            s = (s or '').strip()
+            for fmt in ("%m-%d-%Y","%m/%d/%Y","%Y-%m-%d","%Y/%m/%d"):
+                try:
+                    return datetime.datetime.strptime(s, fmt)
+                except Exception:
+                    pass
+            return None
+        # Prepare data with slips; take top 30 by absolute finish slip
+        data = []
+        for r in rows:
+            name = r.get('Project Part','')
+            bs = be = None
+            if name in bmap:
+                bs_str, be_str = bmap[name]
+                bs = to_dt(bs_str) if bs_str else None
+                be = to_dt(be_str) if be_str else None
+            cs = to_dt(r.get('Start Date'))
+            ce = to_dt(r.get('Calculated End Date'))
+            if not ce and cs:
+                try:
+                    d = int(r.get('Duration (days)') or 0)
+                except Exception:
+                    d = 0
+                ce = cs + datetime.timedelta(days=d)
+            slip_s = (cs - bs).days if (bs and cs) else None
+            slip_e = (ce - be).days if (be and ce) else None
+            data.append((name, bs, be, cs, ce, slip_s, slip_e))
+        data.sort(key=lambda t: abs(t[6]) if isinstance(t[6], int) else 0, reverse=True)
+        data = data[:30]
+        # Render to PDF
+        try:
+            from PyQt6.QtPrintSupport import QPrinter
+            from PyQt6.QtGui import QPainter, QFont
+            from PyQt6.QtCore import QSettings, QMarginsF
+            s = QSettings('LSI','ProjectPlanner')
+            page_size = s.value('Export/page_size','Letter')
+            orientation = s.value('Export/orientation','Portrait')
+            ml = float(s.value('Export/margin_left_mm',8.0)); mt = float(s.value('Export/margin_top_mm',8.0)); mr = float(s.value('Export/margin_right_mm',8.0)); mb = float(s.value('Export/margin_bottom_mm',8.0))
+            printer = QPrinter(QPrinter.HighResolution)
+            printer.setOutputFileName(path)
+            printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+            size_map={'A4':QPrinter.PaperSize.A4,'Letter':QPrinter.PaperSize.Letter,'Legal':QPrinter.PaperSize.Legal,'Tabloid':QPrinter.PaperSize.Tabloid}
+            printer.setPaperSize(size_map.get(page_size, QPrinter.PaperSize.Letter))
+            printer.setOrientation(QPrinter.Orientation.Portrait if orientation=='Portrait' else QPrinter.Orientation.Landscape)
+            try:
+                printer.setPageMargins(QMarginsF(ml,mt,mr,mb))
+            except Exception:
+                pass
+            painter = QPainter(printer)
+            y = self._draw_report_header(painter, printer, "Baseline Variance")
+            body_font = QFont(); body_font.setPointSize(9)
+            painter.setFont(body_font)
+            y0 = y
+            # Table headers
+            headers = ["Project Part","Base Start","Base End","Cur Start","Cur End","Slip S (d)","Slip E (d)"]
+            cols_x = [40, 220, 310, 400, 490, 580, 650]
+            painter.drawText(cols_x[0], y0, headers[0])
+            for i in range(1, len(headers)):
+                painter.drawText(cols_x[i], y0, headers[i])
+            y_cur = y0 + 16
+            def fmt(d):
+                return d.strftime('%m-%d-%Y') if d else ''
+            for name, bs, be, cs, ce, ss, se in data:
+                # elide long text to fit column widths
+                width0 = cols_x[1] - cols_x[0] - 6
+                painter.drawText(cols_x[0], y_cur, self._elided_text(painter, name, width0))
+                painter.drawText(cols_x[1], y_cur, fmt(bs))
+                painter.drawText(cols_x[2], y_cur, fmt(be))
+                painter.drawText(cols_x[3], y_cur, fmt(cs))
+                painter.drawText(cols_x[4], y_cur, fmt(ce))
+                painter.drawText(cols_x[5], y_cur, '' if ss is None else str(ss))
+                painter.drawText(cols_x[6], y_cur, '' if se is None else str(se))
+                y_cur += 14
+            painter.end()
+            if self.statusBar():
+                self.statusBar().showMessage(f"Exported: {path}", 3000)
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", f"Could not write PDF: {e}")
+
+    def _report_milestone_digest_pdf(self):
+        """Generate a Milestone Digest (PDF) with sections for Upcoming and Recently Completed milestones."""
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        from PyQt6.QtGui import QFont, QColor
+        import datetime
+        path, _ = QFileDialog.getSaveFileName(self, "Export Milestone Digest (PDF)", "milestone_digest.pdf", "PDF Files (*.pdf)")
+        if not path:
+            return
+        # Options dialog
+        dlg = self.MilestoneDigestOptionsDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        horizon_upcoming, horizon_completed = dlg.values()
+        # persist
+        try:
+            from PyQt6.QtCore import QSettings
+            s = QSettings("LSI", "ProjectPlanner")
+            s.setValue("reports/milestone_digest/upcoming_days", horizon_upcoming)
+            s.setValue("reports/milestone_digest/recent_days", horizon_completed)
+        except Exception:
+            pass
+        rows = getattr(self.model, 'rows', []) or []
+        today = datetime.datetime.today()
+        def to_dt(s):
+            s = (s or '').strip()
+            for fmt in ("%m-%d-%Y","%m/%d/%Y","%Y-%m-%d","%Y/%m/%d"):
+                try:
+                    return datetime.datetime.strptime(s, fmt)
+                except Exception:
+                    pass
+            return None
+        upcoming = []  # (date, name, resp, status, notes)
+        recent_done = []  # (date_done, name, resp, status, notes)
+        for r in rows:
+            name = (r.get('Project Part') or '').strip()
+            status = (r.get('Status') or '').strip() or 'Planned'
+            notes = (r.get('Notes') or '').strip()
+            resp = (r.get('Responsible') or '').strip()
+            # Determine if milestone
+            is_ms = False
+            try:
+                typ = (r.get('Type') or '').strip().lower()
+                if typ == 'milestone':
+                    is_ms = True
+            except Exception:
+                pass
+            if not is_ms:
+                try:
+                    d = r.get('Duration (days)')
+                    d = int(d) if d not in (None, '') else None
+                    if d == 0:
+                        is_ms = True
+                except Exception:
+                    pass
+            if not is_ms:
+                continue
+            # Dates
+            start = to_dt(r.get('Start Date'))
+            end_calc = to_dt(r.get('Calculated End Date'))
+            act_finish = to_dt(r.get('Actual Finish Date'))
+            use_date = end_calc or start or act_finish
+            try:
+                pc = int(r.get('% Complete') or 0)
+            except Exception:
+                pc = 0
+            # Upcoming: within next horizon_upcoming days, not done
+            if use_date and pc < 100 and status != 'Done':
+                if today.date() <= use_date.date() <= (today + datetime.timedelta(days=horizon_upcoming)).date():
+                    upcoming.append((use_date, name, resp, status, notes))
+            # Recently completed: finished within last horizon_completed days
+            done_date = act_finish or end_calc or start
+            if (pc >= 100 or status == 'Done') and done_date:
+                if (today - datetime.timedelta(days=horizon_completed)).date() <= done_date.date() <= today.date():
+                    recent_done.append((done_date, name, resp, status, notes))
+        # Sort
+        upcoming.sort(key=lambda t: t[0])
+        recent_done.sort(key=lambda t: t[0], reverse=True)
+        # Render
+        try:
+            from PyQt6.QtPrintSupport import QPrinter
+            from PyQt6.QtGui import QPainter
+            from PyQt6.QtCore import QSettings, QMarginsF
+            s = QSettings('LSI','ProjectPlanner')
+            page_size = s.value('Export/page_size','Letter')
+            orientation = s.value('Export/orientation','Portrait')
+            ml = float(s.value('Export/margin_left_mm',8.0)); mt = float(s.value('Export/margin_top_mm',8.0)); mr = float(s.value('Export/margin_right_mm',8.0)); mb = float(s.value('Export/margin_bottom_mm',8.0))
+            printer = QPrinter(QPrinter.HighResolution)
+            printer.setOutputFileName(path)
+            printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+            size_map={'A4':QPrinter.PaperSize.A4,'Letter':QPrinter.PaperSize.Letter,'Legal':QPrinter.PaperSize.Legal,'Tabloid':QPrinter.PaperSize.Tabloid}
+            printer.setPaperSize(size_map.get(page_size, QPrinter.PaperSize.Letter))
+            printer.setOrientation(QPrinter.Orientation.Portrait if orientation=='Portrait' else QPrinter.Orientation.Landscape)
+            try:
+                printer.setPageMargins(QMarginsF(ml,mt,mr,mb))
+            except Exception:
+                pass
+            painter = QPainter(printer)
+            page_rect = printer.pageRect()
+            y = self._draw_report_header(painter, printer, "Milestone Digest")
+            body_font = QFont(); body_font.setPointSize(9)
+            painter.setFont(body_font)
+
+            def new_page_with_section(section_title: str) -> int:
+                printer.newPage()
+                y0 = self._draw_report_header(painter, printer, "Milestone Digest")
+                sub_font = QFont(); sub_font.setPointSize(11); sub_font.setBold(True)
+                painter.setFont(sub_font)
+                painter.drawText(40, y0, section_title)
+                painter.setFont(body_font)
+                return y0 + 18
+
+            # Upcoming section
+            sub_font = QFont(); sub_font.setPointSize(11); sub_font.setBold(True)
+            painter.setFont(sub_font)
+            painter.drawText(40, y, f"Upcoming Milestones (next {horizon_upcoming} days)")
+            painter.setFont(body_font)
+            y += 18
+            cols_x = [40, 135, 360, 520, 650]  # Date, Milestone, Responsible, Status, Notes
+            headers = ["Date", "Milestone", "Responsible", "Status", "Notes"]
+            for i, htxt in enumerate(headers):
+                painter.drawText(cols_x[i], y, htxt)
+            y += 14
+            def fmt(d):
+                return d.strftime('%m-%d-%Y') if d else ''
+            for dt, name, resp, status, notes in upcoming:
+                if y > page_rect.height() - 60:
+                    y = new_page_with_section("Upcoming Milestones (cont.)")
+                    for i, htxt in enumerate(headers):
+                        painter.drawText(cols_x[i], y, htxt)
+                    y += 14
+                # overdue highlighting
+                is_overdue = dt and (dt.date() < today.date())
+                if is_overdue:
+                    painter.setPen(QColor(200, 0, 0))
+                painter.drawText(cols_x[0], y, fmt(dt) + ("  (overdue)" if is_overdue else ""))
+                if is_overdue:
+                    painter.setPen(QColor(0, 0, 0))
+                # elide columns to fit widths
+                w1 = cols_x[2] - cols_x[1] - 6
+                w2 = cols_x[3] - cols_x[2] - 6
+                w3 = cols_x[4] - cols_x[3] - 6
+                w4 = page_rect.width() - cols_x[4] - 20
+                painter.drawText(cols_x[1], y, self._elided_text(painter, name, w1))
+                painter.drawText(cols_x[2], y, self._elided_text(painter, resp, w2))
+                painter.drawText(cols_x[3], y, self._elided_text(painter, status, w3))
+                note_txt = (notes or '').replace('\n', ' ').strip()
+                painter.drawText(cols_x[4], y, self._elided_text(painter, note_txt, w4))
+                y += 14
+
+            # Recently Completed section
+            if y > page_rect.height() - 120:
+                y = new_page_with_section("Recently Completed Milestones (last 30 days)")
+            else:
+                sub_font = QFont(); sub_font.setPointSize(11); sub_font.setBold(True)
+                painter.setFont(sub_font)
+                painter.drawText(40, y + 12, f"Recently Completed Milestones (last {horizon_completed} days)")
+                painter.setFont(body_font)
+                y += 12 + 18
+            # headers reuse
+            for i, htxt in enumerate(headers):
+                painter.drawText(cols_x[i], y, htxt)
+            y += 14
+            for dt, name, resp, status, notes in recent_done:
+                if y > page_rect.height() - 60:
+                    y = new_page_with_section("Recently Completed (cont.)")
+                    for i, htxt in enumerate(headers):
+                        painter.drawText(cols_x[i], y, htxt)
+                    y += 14
+                painter.drawText(cols_x[0], y, fmt(dt))
+                w1 = cols_x[2] - cols_x[1] - 6
+                w2 = cols_x[3] - cols_x[2] - 6
+                w3 = cols_x[4] - cols_x[3] - 6
+                w4 = page_rect.width() - cols_x[4] - 20
+                painter.drawText(cols_x[1], y, self._elided_text(painter, name, w1))
+                painter.drawText(cols_x[2], y, self._elided_text(painter, resp, w2))
+                painter.drawText(cols_x[3], y, self._elided_text(painter, status, w3))
+                note_txt = (notes or '').replace('\n', ' ').strip()
+                painter.drawText(cols_x[4], y, self._elided_text(painter, note_txt, w4))
+                y += 14
+
+            painter.end()
+            if self.statusBar():
+                self.statusBar().showMessage(f"Exported: {path}", 3000)
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", f"Could not write PDF: {e}")
 
     # --- Dynamic header resize to fit window and eliminate cushion ---
     def _resize_header(self):

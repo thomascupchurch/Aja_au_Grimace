@@ -237,7 +237,20 @@ Defensive `getattr` / `try: ... except` guards around PyQt enums remain for safe
 2. **Project Tree**: Editable project hierarchy with drag-drop
 3. **View Switching**: Toggle between Tree, Gantt, Calendar, Timeline
 4. **Multi-user**: Enable read-only mode for viewers
-5. **Export**: PDF export with customizable settings
+5. **Export**: PDF/PNG export with customizable settings (see Export Settings)
+
+### Export Settings
+- Open via Tools → Export Settings… (also available in the inline Tools button menus of views like Gantt/Tree).
+- Options:
+    - Format: PNG or PDF (affects default in export dialogs)
+    - Page Size (PDF): Letter, A4, Legal, Tabloid
+    - Orientation (PDF): Portrait or Landscape
+    - Margins: Top/Right/Bottom/Left in millimeters
+    - Include Header Graphic: show the `header.svg` (or `header.png` fallback) at the top of exports
+- Persistence: stored in QSettings under `LSI/ProjectPlanner/Export/*` and reused by all export/report flows.
+- Notes:
+    - Report generators (Health Snapshot, Baseline Variance, Milestone Digest) and view exporters (Gantt/Tree/Dashboard) honor these settings.
+    - If header is unchecked, PDFs omit the branded banner but still include the report title.
 
 ## Troubleshooting
 - **Qt import errors**: Run `python setup_env.py` for guided setup
