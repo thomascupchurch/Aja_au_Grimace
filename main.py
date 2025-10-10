@@ -3031,6 +3031,13 @@ class ProjectTreeView(QWidget):
                 r = self.scene.itemsBoundingRect()
                 if not r.isNull():
                     self.view.fitInView(r, _keep_ar())
+                    try:
+                        sf = float(self.view.transform().m11())
+                        from math import isfinite
+                        if isfinite(sf):
+                            zoom_label.setText(f"{int(round(sf*100))}%")
+                    except Exception:
+                        pass
         def do_refresh():
             self.refresh()
         def do_toggle_preview():
@@ -3077,6 +3084,14 @@ class ProjectTreeView(QWidget):
                     # Persist the resulting zoom factor after fit
                     if hasattr(self.view, '_persist_zoom'):
                         self.view._persist_zoom()
+                    # Update zoom label to reflect fit transform
+                    try:
+                        sf = float(self.view.transform().m11())
+                        from math import isfinite
+                        if isfinite(sf):
+                            zoom_label.setText(f"{int(round(sf*100))}%")
+                    except Exception:
+                        pass
             except Exception:
                 pass
         reset_btn.clicked.connect(do_reset)
@@ -3302,6 +3317,14 @@ class ProjectTreeView(QWidget):
                             self.view.fitInView(new_rect, _keep_ar())
                     except Exception:
                         self.view.fitInView(new_rect, _keep_ar())
+                    # Update zoom label to reflect any transform changes
+                    try:
+                        sf = float(self.view.transform().m11())
+                        from math import isfinite
+                        if isfinite(sf):
+                            zoom_label.setText(f"{int(round(sf*100))}%")
+                    except Exception:
+                        pass
                     self._update_minimap()
                 orig_press(ev)
             from PyQt6.QtCore import QPointF
@@ -5328,6 +5351,18 @@ class GanttChartView(QWidget):
             r = self.scene.itemsBoundingRect()
             if not r.isNull():
                 self.view.fitInView(r, _keep_ar())
+                try:
+                    if hasattr(self.view, '_persist_zoom'):
+                        self.view._persist_zoom()
+                    sf = float(self.view.transform().m11())
+                    from math import isfinite
+                    if isfinite(sf):
+                        try:
+                            zoom_label.setText(f"{int(round(sf*100))}%")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
         fit_all_btn.clicked.connect(_fit_all)
         def _fit_sel():
             items = [it for it in self.scene.selectedItems()]
@@ -5338,11 +5373,35 @@ class GanttChartView(QWidget):
                     rect = rect.united(it.sceneBoundingRect())
                 if not rect.isNull():
                     self.view.fitInView(rect, _keep_ar())
+                    try:
+                        if hasattr(self.view, '_persist_zoom'):
+                            self.view._persist_zoom()
+                        sf = float(self.view.transform().m11())
+                        from math import isfinite
+                        if isfinite(sf):
+                            try:
+                                zoom_label.setText(f"{int(round(sf*100))}%")
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
                     return
             name = getattr(self, '_locked_label', None)
             if name and name in getattr(self, '_name_to_rect', {}):
                 rect = self._name_to_rect[name].sceneBoundingRect()
                 self.view.fitInView(rect.adjusted(-40, -20, 40, 20), _keep_ar())
+                try:
+                    if hasattr(self.view, '_persist_zoom'):
+                        self.view._persist_zoom()
+                    sf = float(self.view.transform().m11())
+                    from math import isfinite
+                    if isfinite(sf):
+                        try:
+                            zoom_label.setText(f"{int(round(sf*100))}%")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
             else:
                 _fit_all()
         fit_sel_btn.clicked.connect(_fit_sel)
@@ -5351,6 +5410,27 @@ class GanttChartView(QWidget):
         zoom_layout.addWidget(zoom_reset_btn)
         zoom_layout.addWidget(fit_all_btn)
         zoom_layout.addWidget(fit_sel_btn)
+        # Live zoom percentage label
+        try:
+            zoom_label = QLabel("100%")
+            zoom_label.setToolTip("Current zoom")
+            def _set_zoom_label_g(sf):
+                try:
+                    from math import isfinite
+                    val = float(sf)
+                    if isfinite(val):
+                        zoom_label.setText(f"{int(round(val*100))}%")
+                except Exception:
+                    pass
+            # Connect signal and seed
+            try:
+                self.view.zoomChanged.connect(_set_zoom_label_g)
+                _set_zoom_label_g(self.view.transform().m11())
+            except Exception:
+                pass
+            zoom_layout.addWidget(zoom_label)
+        except Exception:
+            pass
         layout.addLayout(zoom_layout)
         layout.addWidget(self.preview_label)
         # Mini legend (hierarchy vs dependency vs highlight colors)
@@ -7009,11 +7089,44 @@ class TimelineView(QWidget):
             r = self.scene.itemsBoundingRect()
             if not r.isNull():
                 self.view.fitInView(r, _keep_ar())
+                try:
+                    if hasattr(self.view, '_persist_zoom'):
+                        self.view._persist_zoom()
+                    # Update zoom label if available
+                    try:
+                        sf = float(self.view.transform().m11())
+                        from math import isfinite
+                        if isfinite(sf):
+                            tl_zoom_label.setText(f"{int(round(sf*100))}%")
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
         fit_all_btn.clicked.connect(_fit_all_tl)
         export_row.addWidget(zoom_in_btn)
         export_row.addWidget(zoom_out_btn)
         export_row.addWidget(zoom_reset_btn)
         export_row.addWidget(fit_all_btn)
+        # Live zoom percentage label
+        try:
+            tl_zoom_label = QLabel("100%")
+            tl_zoom_label.setToolTip("Current zoom")
+            def _set_zoom_label_tl(sf):
+                try:
+                    from math import isfinite
+                    val = float(sf)
+                    if isfinite(val):
+                        tl_zoom_label.setText(f"{int(round(val*100))}%")
+                except Exception:
+                    pass
+            try:
+                self.view.zoomChanged.connect(_set_zoom_label_tl)
+                _set_zoom_label_tl(self.view.transform().m11())
+            except Exception:
+                pass
+            export_row.addWidget(tl_zoom_label)
+        except Exception:
+            pass
         layout.addLayout(export_row)
         self.preview_label = QLabel()
         self.preview_label.setFixedHeight(200)
