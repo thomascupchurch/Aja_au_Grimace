@@ -37,6 +37,12 @@ function Resolve-Python {
 }
 
 $py = Resolve-Python -Preferred $Python
+if ($py -eq 'py') {
+    try { $resolved = (& py -3 -c "import sys;print(sys.executable)" 2>$null) } catch { $resolved='' }
+    if ($resolved) { Write-Host "[info] Interpreter: py -3 ($resolved)" -ForegroundColor DarkGray } else { Write-Host "[info] Interpreter: py -3" -ForegroundColor DarkGray }
+} else {
+    Write-Host "[info] Interpreter: $py" -ForegroundColor DarkGray
+}
 
 # If there's a db_path.txt alongside this script, use it
 $dbTxt = Join-Path $PSScriptRoot 'db_path.txt'
