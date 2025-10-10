@@ -4959,6 +4959,87 @@ class GanttChartView(QWidget):
         self.critical_path_checkbox.stateChanged.connect(lambda _s: self.refresh_gantt())
         toolbar.addWidget(self.critical_path_checkbox)
 
+        # Group predecessors toggle (persisted)
+        self._group_predecessors = True
+        try:
+            from PyQt6.QtCore import QSettings as _QS_gp
+            _ps_gp = _QS_gp('LSI','ProjectPlanner')
+            gp_val = _ps_gp.value('Gantt/GroupPredecessors', 'true')
+            def _b_gp(v):
+                if isinstance(v, bool): return v
+                if isinstance(v, str): return v.lower() in ('1','true','yes','on')
+                return True
+            self._group_predecessors = _b_gp(gp_val)
+        except Exception:
+            self._group_predecessors = True
+        from PyQt6.QtWidgets import QCheckBox as _QCB_gp
+        self.group_preds_checkbox = _QCB_gp("Group Preds")
+        self.group_preds_checkbox.setToolTip("Cluster multiple predecessors just above their successor (within same parent)")
+        self.group_preds_checkbox.setChecked(self._group_predecessors)
+        def _on_gp_toggle():
+            self._group_predecessors = self.group_preds_checkbox.isChecked()
+            try:
+                from PyQt6.QtCore import QSettings as _QS2_gp
+                _QS2_gp('LSI','ProjectPlanner').setValue('Gantt/GroupPredecessors', self._group_predecessors)
+            except Exception:
+                pass
+            self.refresh_gantt()
+        self.group_preds_checkbox.stateChanged.connect(lambda _s: _on_gp_toggle())
+        toolbar.addWidget(self.group_preds_checkbox)
+
+        # Cross-parent grouping toggle (persisted, default off)
+        self._group_cross_parent = False
+        try:
+            from PyQt6.QtCore import QSettings as _QS_gcp
+            _ps_gcp = _QS_gcp('LSI','ProjectPlanner')
+            gcp_val = _ps_gcp.value('Gantt/GroupCrossParent', 'false')
+            def _b_gcp(v):
+                if isinstance(v, bool): return v
+                if isinstance(v, str): return v.lower() in ('1','true','yes','on')
+                return False
+            self._group_cross_parent = _b_gcp(gcp_val)
+        except Exception:
+            self._group_cross_parent = False
+        from PyQt6.QtWidgets import QCheckBox as _QCB_gcp
+        self.group_cross_parent_checkbox = _QCB_gcp("Cross-parent")
+        self.group_cross_parent_checkbox.setToolTip("Allow clustering predecessors across different parents if they share the same top-level ancestor")
+        self.group_cross_parent_checkbox.setChecked(self._group_cross_parent)
+        def _on_gcp_toggle():
+            self._group_cross_parent = self.group_cross_parent_checkbox.isChecked()
+            try:
+                from PyQt6.QtCore import QSettings as _QS2_gcp
+                _QS2_gcp('LSI','ProjectPlanner').setValue('Gantt/GroupCrossParent', self._group_cross_parent)
+            except Exception:
+                pass
+            self.refresh_gantt()
+        self.group_cross_parent_checkbox.stateChanged.connect(lambda _s: _on_gcp_toggle())
+        toolbar.addWidget(self.group_cross_parent_checkbox)
+
+        # Grouping weight strategy dropdown
+        from PyQt6.QtWidgets import QComboBox as _QCB_w
+        self.weight_combo = _QCB_w()
+        self.weight_combo.addItems(["Weight: Successors", "Weight: Original", "Weight: Start Date", "Weight: Duration"]) 
+        # Persisted selection
+        try:
+            from PyQt6.QtCore import QSettings as _QS_w
+            sel = _QS_w('LSI','ProjectPlanner').value('Gantt/GroupWeightStrategy', 'Weight: Successors')
+            if sel not in ["Weight: Successors", "Weight: Original", "Weight: Start Date", "Weight: Duration"]:
+                sel = "Weight: Successors"
+            idx = self.weight_combo.findText(sel)
+            if idx >= 0:
+                self.weight_combo.setCurrentIndex(idx)
+        except Exception:
+            pass
+        def _on_weight_change(_txt=None):
+            try:
+                from PyQt6.QtCore import QSettings as _QS2_w
+                _QS2_w('LSI','ProjectPlanner').setValue('Gantt/GroupWeightStrategy', self.weight_combo.currentText())
+            except Exception:
+                pass
+            self.refresh_gantt()
+        self.weight_combo.currentTextChanged.connect(_on_weight_change)
+        toolbar.addWidget(self.weight_combo)
+
         # Unscheduled toggle
         self.unscheduled_checkbox = QCheckBox("Show Unscheduled")
         # Load persisted setting (default true)
@@ -5474,6 +5555,136 @@ class GanttChartView(QWidget):
 
         chart_min_date = min_date  # earliest start
 
+        # --- Optional: Reorder rows to group predecessors, with cross-parent/weight options ---
+        row_index_map = None
+        try:
+            if getattr(self, '_group_predecessors', False):
+                # Build base order from current filtered/topo rows
+                base_order = [r.get("Project Part", "") for r in rows]
+                name_to_row_local = {r.get("Project Part", ""): r for r in rows}
+                base_pos_map = {nm: idx for idx, nm in enumerate(base_order)}
+                # Build deps map using Predecessors if present else Dependencies
+                deps_map = {}
+                for r in rows:
+                    nm = r.get("Project Part", "")
+                    preds_raw = (r.get("Predecessors") or "").strip()
+                    if not preds_raw:
+                        preds_raw = (r.get("Dependencies") or "").strip()
+                    preds = [p.strip() for p in preds_raw.split(',') if p.strip()]
+                    # keep only those in our current set
+                    preds = [p for p in preds if p in name_to_row_local]
+                    deps_map[nm] = preds
+                # Build successors count for weighting: how many tasks depend on each node
+                succ_count = {}
+                for succ, preds in deps_map.items():
+                    for p in preds:
+                        succ_count[p] = succ_count.get(p, 0) + 1
+                # Helper to find root ancestor (top-most parent)
+                parent_of = {nm: (name_to_row_local.get(nm, {}).get("Parent") or "") for nm in name_to_row_local}
+                def root_of(nm):
+                    seen = set()
+                    cur = nm
+                    while True:
+                        if not cur or cur in seen:
+                            return cur
+                        seen.add(cur)
+                        par = parent_of.get(cur, "")
+                        if not par:
+                            return cur
+                        cur = par
+                # Build auxiliary maps for weighting: start date and duration per row
+                import datetime as _dt_gp
+                name_to_start = {}
+                name_to_duration = {}
+                for r in rows:
+                    nm = r.get("Project Part", "")
+                    try:
+                        if "_auto_start" in r:
+                            name_to_start[nm] = r["_auto_start"]
+                            name_to_duration[nm] = max(0, (r.get("_auto_end") - r.get("_auto_start")).days)
+                        else:
+                            s_str = (r.get("Start Date") or r.get("Actual Start Date") or r.get("Baseline Start Date") or "").strip()
+                            d_val = r.get("Duration (days)")
+                            s_dt = None
+                            if s_str:
+                                for fmt in ("%m-%d-%Y","%m/%d/%Y","%Y-%m-%d","%Y/%m/%d"):
+                                    try:
+                                        s_dt = _dt_gp.datetime.strptime(s_str, fmt)
+                                        break
+                                    except Exception:
+                                        pass
+                            name_to_start[nm] = s_dt
+                            try:
+                                name_to_duration[nm] = int(str(d_val).strip()) if d_val not in (None,"") else 0
+                            except Exception:
+                                name_to_duration[nm] = 0
+                    except Exception:
+                        name_to_start[nm] = None
+                        name_to_duration[nm] = 0
+                # Weight strategy helper
+                def _weight_key(p, strategy, base_order_map=base_pos_map):
+                    if strategy == "Weight: Successors":
+                        return (-succ_count.get(p, 0), base_order_map.get(p, 10**9))
+                    if strategy == "Weight: Original":
+                        return (0, base_order_map.get(p, 10**9))
+                    if strategy == "Weight: Start Date":
+                        sd = name_to_start.get(p)
+                        # Earlier start first; None last
+                        return (1, 10**9) if sd is None else (0, sd.toordinal() if hasattr(sd, 'toordinal') else base_order_map.get(p, 10**9))
+                    if strategy == "Weight: Duration":
+                        # Longer first
+                        return (-name_to_duration.get(p, 0), base_order_map.get(p, 10**9))
+                    # Fallback
+                    return (-succ_count.get(p, 0), base_order_map.get(p, 10**9))
+                # Pick current strategy
+                try:
+                    strategy = self.weight_combo.currentText()
+                except Exception:
+                    strategy = "Weight: Successors"
+                # Grouping pass: for each successor, cluster its multiple preds that share same parent or same root (option)
+                seq = list(base_order)
+                i = 0
+                while i < len(seq):
+                    s = seq[i]
+                    if not s:
+                        i += 1; continue
+                    row_s = name_to_row_local.get(s) or {}
+                    parent_s = (row_s.get("Parent") or "")
+                    preds_all = deps_map.get(s, [])
+                    if getattr(self, '_group_cross_parent', False):
+                        root_s = root_of(s)
+                        preds_eligible = [p for p in preds_all if p in seq and root_of(p) == root_s]
+                    else:
+                        preds_eligible = [p for p in preds_all if (name_to_row_local.get(p, {}).get("Parent") or "") == parent_s and p in seq]
+                    # Only act when multiple preds exist
+                    if len(preds_eligible) >= 2:
+                        # Weighted, stable order by chosen strategy; tiebreaker is base order
+                        preds_in_order = [x for x in seq if x in preds_eligible]
+                        preds_sorted = sorted(preds_in_order, key=lambda p: _weight_key(p, strategy))
+                        s_index = i
+                        block_start = max(0, s_index - len(preds_sorted))
+                        if seq[block_start:s_index] != preds_sorted:
+                            # Remove these preds from wherever they are
+                            seq = [x for x in seq if x not in preds_sorted]
+                            # Recompute index of successor after removal
+                            s_index = seq.index(s)
+                            # Insert the predecessors as a contiguous block just before successor
+                            seq[s_index:s_index] = preds_sorted
+                            # Advance past successor to avoid reprocessing same window endlessly
+                            i = seq.index(s) + 1
+                            continue
+                    i += 1
+                # Build index map for bars that actually render
+                bars_names = [n for (n, *_rest) in bars]
+                ordered_names = [n for n in seq if n in bars_names]
+                # Include any bars missing from seq (unlikely) at the end to ensure mapping exists
+                for n in bars_names:
+                    if n not in ordered_names:
+                        ordered_names.append(n)
+                row_index_map = {n: idx for idx, n in enumerate(ordered_names)}
+        except Exception:
+            row_index_map = None
+
     # ---------- Draw bars ----------
         from PyQt6.QtGui import QColor
         from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsItem
@@ -5817,7 +6028,9 @@ class GanttChartView(QWidget):
 
         for name, start, duration, i, r in bars:
             x = (start - chart_min_date).days * 10 + bar_offset_x
-            y = i * (bar_height + bar_gap) + 40
+            # Use grouped index if available
+            j = row_index_map.get(name, i) if isinstance(row_index_map, dict) else i
+            y = j * (bar_height + bar_gap) + 40
             # Unscheduled rows: draw a small tick and label only
             if r.get("_unscheduled"):
                 width = 2
