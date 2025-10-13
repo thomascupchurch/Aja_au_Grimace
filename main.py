@@ -2269,7 +2269,21 @@ class CostEstimatesView(QWidget):
                 if r.isValid(): header_is_svg=True; header_svg_renderer=r
         except Exception:
             pass
-        footer_text = "© 2025 LSI – For Internal Use Only"
+        # Footer metadata: timestamp + preset summary (page size, orientation, margins)
+        try:
+            import datetime as _dt_footer
+            page_size = s.value('Export/page_size','A4')
+            orientation = s.value('Export/orientation','Portrait')
+            ml_s, mt_s, mr_s, mb_s = s.value('Export/margin_left_mm',8.0), s.value('Export/margin_top_mm',8.0), s.value('Export/margin_right_mm',8.0), s.value('Export/margin_bottom_mm',8.0)
+            try:
+                ml_s = float(ml_s); mt_s = float(mt_s); mr_s = float(mr_s); mb_s = float(mb_s)
+            except Exception:
+                ml_s, mt_s, mr_s, mb_s = 8.0, 8.0, 8.0, 8.0
+            ts = _dt_footer.datetime.now().strftime('%Y-%m-%d %H:%M')
+            preset = f"{page_size} {orientation}, margins {ml_s:.1f}/{mt_s:.1f}/{mr_s:.1f}/{mb_s:.1f} mm"
+            footer_text = f"Cost Estimates • {ts} • {preset}"
+        except Exception:
+            footer_text = "© 2025 LSI – For Internal Use Only"
         if is_pdf:
             from PyQt6.QtPrintSupport import QPrinter
             from PyQt6.QtCore import QMarginsF
@@ -3976,8 +3990,20 @@ class ProjectTreeView(QWidget):
                     painter.save()
                     f = QFont(); f.setPointSizeF(f.pointSizeF()*0.85)
                     painter.setFont(f)
-                    footer_y = page_rect.height() - 12
-                    painter.drawText(QRectF(0, footer_y, page_rect.width(), 12), Qt.AlignmentFlag.AlignCenter, footer_text)
+                    # Compose footer with page numbers: Page X of Y
+                    try:
+                        page_num = col + 1
+                        page_total = cols
+                        right_text = f"Page {page_num} of {page_total}"
+                    except Exception:
+                        right_text = ""
+                    footer_y = page_rect.height() - 14
+                    # Left: small copyright, Center: metadata, Right: page X of Y
+                    left_txt = "© 2025 LSI"
+                    center_txt = footer_text
+                    painter.drawText(QRectF(8, footer_y, page_rect.width()/3 - 12, 14), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, left_txt)
+                    painter.drawText(QRectF(page_rect.width()/3, footer_y, page_rect.width()/3, 14), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, center_txt)
+                    painter.drawText(QRectF(page_rect.width()*2/3, footer_y, page_rect.width()/3 - 8, 14), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, right_text)
                     painter.restore()
                 except Exception:
                     pass
@@ -4006,12 +4032,15 @@ class ProjectTreeView(QWidget):
             combo = QPixmap(tw, hh+content_pix.height()); combo.fill(); painter=QPainter(combo)
             from PyQt6.QtCore import QRectF
             header_svg_renderer.render(painter, QRectF(0,0,tw,hh)); painter.drawPixmap(0,hh,content_pix);
-            # Footer
+            # Footer (PNG)
             try:
                 from PyQt6.QtGui import QFont
                 f = QFont(); f.setPointSizeF(f.pointSizeF()*0.85)
                 painter.setFont(f)
-                painter.drawText(0, hh+content_pix.height()-18, tw, 16, Qt.AlignmentFlag.AlignCenter, footer_text)
+                left_txt = "© 2025 LSI"
+                center_txt = footer_text
+                painter.drawText(8, hh+content_pix.height()-18, tw//3 - 12, 16, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, left_txt)
+                painter.drawText(tw//3, hh+content_pix.height()-18, tw//3, 16, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, center_txt)
             except Exception:
                 pass
             painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
@@ -4022,7 +4051,10 @@ class ProjectTreeView(QWidget):
                 from PyQt6.QtGui import QFont
                 f = QFont(); f.setPointSizeF(f.pointSizeF()*0.85)
                 painter.setFont(f)
-                painter.drawText(0, header_pixmap.height()+content_pix.height()-18, cw, 16, Qt.AlignmentFlag.AlignCenter, footer_text)
+                left_txt = "© 2025 LSI"
+                center_txt = footer_text
+                painter.drawText(8, header_pixmap.height()+content_pix.height()-18, cw//3 - 12, 16, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, left_txt)
+                painter.drawText(cw//3, header_pixmap.height()+content_pix.height()-18, cw//3, 16, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, center_txt)
             except Exception:
                 pass
             painter.end(); combo.save(path,'PNG'); print(f'Exported PNG -> {path}'); return
@@ -4032,7 +4064,10 @@ class ProjectTreeView(QWidget):
             from PyQt6.QtGui import QFont
             f = QFont(); f.setPointSizeF(f.pointSizeF()*0.85)
             painter.setFont(f)
-            painter.drawText(0, content_pix.height()-18, content_pix.width(), 16, Qt.AlignmentFlag.AlignCenter, footer_text)
+            left_txt = "© 2025 LSI"
+            center_txt = footer_text
+            painter.drawText(8, content_pix.height()-18, content_pix.width()//3 - 12, 16, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, left_txt)
+            painter.drawText(content_pix.width()//3, content_pix.height()-18, content_pix.width()//3, 16, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, center_txt)
         except Exception:
             pass
         painter.end(); content_pix.save(path,'PNG'); print(f'Exported PNG -> {path}')
@@ -4065,6 +4100,11 @@ class ZoomableGraphicsView(QGraphicsView):
             except Exception:
                 pass
         self._settings_key = None  # e.g., 'GanttZoom' or 'TimelineZoom'
+        # Enable custom context menu
+        try:
+            self.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
+        except Exception:
+            pass
 
     def wheelEvent(self, event):
         try:
@@ -4148,6 +4188,54 @@ class ZoomableGraphicsView(QGraphicsView):
                         pass
                 except Exception:
                     pass
+        except Exception:
+            pass
+
+    # Context menu with quick zoom/fit actions
+    def contextMenuEvent(self, event):
+        from PyQt6.QtWidgets import QMenu
+        menu = QMenu(self)
+        act_fit_all = menu.addAction("Fit All")
+        act_fit_sel = menu.addAction("Fit to Selection")
+        act_reset = menu.addAction("Reset Zoom")
+        act_100 = menu.addAction("Zoom 100%")
+        chosen = menu.exec(event.globalPos())
+        if not chosen:
+            return
+        try:
+            if chosen == act_fit_all:
+                scn = self.scene()
+                if scn is not None:
+                    r = scn.itemsBoundingRect()
+                    if not r.isNull():
+                        self.fitInView(r, _keep_ar())
+            elif chosen == act_fit_sel:
+                scn = self.scene()
+                if scn is not None:
+                    items = list(scn.selectedItems())
+                    if items:
+                        from PyQt6.QtCore import QRectF
+                        rect = QRectF()
+                        for it in items:
+                            rect = rect.united(it.sceneBoundingRect())
+                        if not rect.isNull():
+                            self.fitInView(rect, _keep_ar())
+                    else:
+                        r = scn.itemsBoundingRect()
+                        if not r.isNull():
+                            self.fitInView(r, _keep_ar())
+            elif chosen == act_reset:
+                self.resetZoom()
+                return
+            elif chosen == act_100:
+                self.resetTransform(); self._zoom = 0
+            # Persist and emit
+            try:
+                if hasattr(self, '_persist_zoom'):
+                    self._persist_zoom()
+                self.zoomChanged.emit(float(self.transform().m11()))
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -6404,9 +6492,40 @@ class GanttChartView(QWidget):
                 name_to_bar[name] = (x, y, width, bar_height)
                 bar_items.append((marker, r))
                 continue
+            # Milestone diamond for zero-duration or explicit type
+            is_milestone = False
+            try:
+                is_milestone = (duration == 0) or ((r.get('Type') or '').strip().lower() == 'milestone')
+            except Exception:
+                is_milestone = False
             width = max(duration * 10, 10)
-            rect = ClickableBar(x, y, width, bar_height, r, self.preview_label, self)
-            rect.setBrush(QColor("#333333"))
+            rect = None
+            if is_milestone:
+                # Draw a diamond centered at x with side equal to bar_height
+                from PyQt6.QtGui import QPainterPath as _PathMS, QPen as _PenMS, QBrush as _BrushMS
+                size = bar_height
+                cx = x
+                cy = y + bar_height/2
+                path = _PathMS()
+                path.moveTo(cx, cy - size/2)
+                path.lineTo(cx + size/2, cy)
+                path.lineTo(cx, cy + size/2)
+                path.lineTo(cx - size/2, cy)
+                path.closeSubpath()
+                diamond = self.scene.addPath(path, _PenMS(QColor('#FF8200'), 2), _BrushMS(QColor('#333333')))
+                # Make selectable and carry row
+                try:
+                    from PyQt6.QtWidgets import QGraphicsItem as _QGI_ms
+                    diamond.setFlag(_QGI_ms.GraphicsItemFlag.ItemIsSelectable, True)
+                except Exception:
+                    pass
+                diamond.row = r
+                # Keep consistent API for selection handling
+                rect = diamond
+                width = size  # for label positioning below
+            else:
+                rect = ClickableBar(x, y, width, bar_height, r, self.preview_label, self)
+                rect.setBrush(QColor("#333333"))
             from PyQt6.QtGui import QPen as _QPen4
             import datetime as _dt_ov
             overdue = False; at_risk = False
@@ -6440,7 +6559,7 @@ class GanttChartView(QWidget):
                 pc = int(r.get("% Complete") or 0)
             except Exception:
                 pc = 0
-            if pc > 0:
+            if (not is_milestone) and pc > 0:
                 prog_w = max(2, int(width * pc / 100))
                 prog_color = QColor("#DAA520") if name in critical_set else gantt_color
                 from PyQt6.QtGui import QPen as _QPen3
@@ -6577,6 +6696,26 @@ class GanttChartView(QWidget):
                 from PyQt6.QtGui import QColor as _QColor
                 tick_label.setDefaultTextColor(_QColor("white"))
                 tick_label.setPos(tick_x - 30, axis_y - 25)
+            # Today line
+            try:
+                import datetime as _dt_today
+                today = _dt_today.datetime.today().date()
+                if chart_min_date.date() <= today <= max_date.date():
+                    dx = (today - chart_min_date.date()).days
+                    x_today = axis_x0 + dx * 10
+                    from PyQt6.QtGui import QPen as _QPToday, QColor as _QCToday
+                    pen_today = _QPToday(_QCToday(0, 200, 255))
+                    pen_today.setWidth(2)
+                    try:
+                        pen_today.setStyle(Qt.PenStyle.DashLine)
+                    except Exception:
+                        pen_today.setStyle(getattr(Qt,'DashLine',1))
+                    self.scene.addLine(x_today, 0, x_today, axis_y + len(bars)*(bar_height+bar_gap) + 80, pen_today)
+                    lbl = self.scene.addText("Today")
+                    lbl.setDefaultTextColor(_QCToday(0,200,255))
+                    lbl.setPos(x_today + 4, 4)
+            except Exception:
+                pass
 
         # ---------- Dependency arrows (simple) ----------
         from PyQt6.QtGui import QPen, QColor as _QColor2
@@ -7394,8 +7533,29 @@ class TimelineView(QWidget):
                     if preview_label is not None:
                         preview_label.clear()
                     super().hoverLeaveEvent(event)
-            bar_item = HoverableTimelineBar(x, y, width, bar_height, row, self)
-            bar_item.setBrush(QBrush(color))
+            # Milestone diamond for zero-duration or explicit type
+            is_milestone = False
+            try:
+                is_milestone = (duration == 0) or ((row.get('Type') or '').strip().lower() == 'milestone')
+            except Exception:
+                is_milestone = False
+            if is_milestone:
+                from PyQt6.QtGui import QPainterPath as _PathTL, QPen as _PenTL, QBrush as _BrushTL
+                size = bar_height
+                cx = x
+                cy = y + bar_height/2
+                path = _PathTL()
+                path.moveTo(cx, cy - size/2)
+                path.lineTo(cx + size/2, cy)
+                path.lineTo(cx, cy + size/2)
+                path.lineTo(cx - size/2, cy)
+                path.closeSubpath()
+                bar_item = self.scene.addPath(path, _PenTL(color, 2), _BrushTL(QColor('#333333')))
+                # Attach row for hover handlers wiring below
+                bar_item.row = row
+            else:
+                bar_item = HoverableTimelineBar(x, y, width, bar_height, row, self)
+                bar_item.setBrush(QBrush(color))
             self.scene.addItem(bar_item)
             full_name = name
             display_name = full_name
@@ -7479,6 +7639,23 @@ class TimelineView(QWidget):
             tick_label = self.scene.addText(tick_date.strftime("%m-%d-%Y"))
             tick_label.setDefaultTextColor(QColor("white"))
             tick_label.setPos(tick_x - 30, axis_y - 25)
+        # Today line
+        try:
+            today = datetime.datetime.today().date()
+            if min_date.date() <= today <= max_date.date():
+                dx = (today - min_date.date()).days
+                x_today = axis_x0 + dx * 8
+                from PyQt6.QtGui import QPen as _QPToday2, QColor as _QCToday2
+                pen_today = _QPToday2(_QCToday2(0, 200, 255)); pen_today.setWidth(2)
+                try:
+                    pen_today.setStyle(Qt.PenStyle.DashLine)
+                except Exception:
+                    pen_today.setStyle(getattr(Qt,'DashLine',1))
+                self.scene.addLine(x_today, 0, x_today, y + 40, pen_today)
+                lbl = self.scene.addText("Today"); lbl.setDefaultTextColor(_QCToday2(0,200,255))
+                lbl.setPos(x_today + 4, 2)
+        except Exception:
+            pass
         self.view.setSceneRect(0, 0, axis_x1 + 40, max(300, y + 40))
         # Extend hover bars to highlight labels (monkey patch hover events)
         for item in self.scene.items():
@@ -9277,6 +9454,91 @@ class MainWindow(QMainWindow):
                 tmenu.addMenu(lock_menu)
                 self.tools_btn.setMenu(tmenu)
                 controls_layout.addWidget(self.tools_btn)
+                # Quick Filters dialog button
+                try:
+                    from PyQt6.QtWidgets import QToolButton
+                    btn_filters = QToolButton()
+                    btn_filters.setText("Filters…")
+                    def _open_filters_dialog():
+                        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QCheckBox, QDialogButtonBox, QGroupBox
+                        dlg = QDialog(self)
+                        dlg.setWindowTitle("Quick Filters")
+                        v = QVBoxLayout(dlg)
+                        # Status
+                        grp_status = QGroupBox("Status")
+                        gsv = QVBoxLayout(grp_status)
+                        cb_pl = QCheckBox("Planned"); cb_ip = QCheckBox("In Progress"); cb_bl = QCheckBox("Blocked"); cb_dn = QCheckBox("Done")
+                        gsv.addWidget(cb_pl); gsv.addWidget(cb_ip); gsv.addWidget(cb_bl); gsv.addWidget(cb_dn)
+                        v.addWidget(grp_status)
+                        # Internal/External
+                        grp_ie = QGroupBox("Internal / External")
+                        giev = QVBoxLayout(grp_ie)
+                        cb_in = QCheckBox("Internal"); cb_ex = QCheckBox("External")
+                        giev.addWidget(cb_in); giev.addWidget(cb_ex)
+                        v.addWidget(grp_ie)
+                        # Responsible contains
+                        row_resp = QHBoxLayout(); row_resp.addWidget(QLabel("Responsible contains:"))
+                        le_resp = QLineEdit(); row_resp.addWidget(le_resp, 1)
+                        v.addLayout(row_resp)
+                        # Flags
+                        grp_flags = QGroupBox("Flags")
+                        gfv = QVBoxLayout(grp_flags)
+                        cb_crit = QCheckBox("Critical Path only")
+                        cb_risk = QCheckBox("Risk (Overdue / At-Risk) only")
+                        gfv.addWidget(cb_crit); gfv.addWidget(cb_risk)
+                        v.addWidget(grp_flags)
+                        # Seed current state
+                        try:
+                            st = self._filter_state.get("statuses", set())
+                            cb_pl.setChecked("Planned" in st)
+                            cb_ip.setChecked("In Progress" in st)
+                            cb_bl.setChecked("Blocked" in st)
+                            cb_dn.setChecked("Done" in st)
+                            ie = self._filter_state.get("ie", set())
+                            cb_in.setChecked("Internal" in ie)
+                            cb_ex.setChecked("External" in ie)
+                            le_resp.setText(self._filter_state.get("responsible_substr") or "")
+                            cb_crit.setChecked(bool(self._filter_state.get("critical_only")))
+                            cb_risk.setChecked(bool(self._filter_state.get("risk_only")))
+                        except Exception:
+                            pass
+                        # Buttons
+                        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+                        def _apply_and_close():
+                            try:
+                                st_new = set()
+                                if cb_pl.isChecked(): st_new.add("Planned")
+                                if cb_ip.isChecked(): st_new.add("In Progress")
+                                if cb_bl.isChecked(): st_new.add("Blocked")
+                                if cb_dn.isChecked(): st_new.add("Done")
+                                self._filter_state["statuses"] = st_new
+                                ie_new = set()
+                                if cb_in.isChecked(): ie_new.add("Internal")
+                                if cb_ex.isChecked(): ie_new.add("External")
+                                self._filter_state["ie"] = ie_new
+                                self._filter_state["responsible_substr"] = (le_resp.text() or "").strip() or None
+                                self._filter_state["critical_only"] = bool(cb_crit.isChecked())
+                                self._filter_state["risk_only"] = bool(cb_risk.isChecked())
+                                # Sync menu checks and apply
+                                try:
+                                    self._sync_tools_filter_checks_from_state()
+                                except Exception:
+                                    pass
+                                try:
+                                    self._apply_filters()
+                                except Exception:
+                                    pass
+                            except Exception:
+                                pass
+                            dlg.accept()
+                        btns.accepted.connect(_apply_and_close)
+                        btns.rejected.connect(dlg.reject)
+                        v.addWidget(btns)
+                        dlg.exec()
+                    btn_filters.clicked.connect(_open_filters_dialog)
+                    controls_layout.addWidget(btn_filters)
+                except Exception:
+                    pass
                 # Manual shortcut creation action
                 try:
                     act_shortcut = tmenu.addAction('Create Desktop Shortcut Now')
