@@ -5,24 +5,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Project Viewer (v2)</title>
   <style>
-    :root { --bg:#4B4B4B; --bg2:#3f3f3f; --panel:#585858; --border:#6a6a6a; --text:#f5f5f5; --muted:#d1d5db; --brand:#FF8200; --input-bg:#fff; --input-text:#111; }
+  :root { --bg:#4B4B4B; --bg2:#3f3f3f; --panel:#585858; --border:#6a6a6a; --text:#FF8200; --muted:#d1d5db; --brand:#FF8200; --input-bg:#fff; --input-text:#111; }
     body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
     header { display:grid; place-items:center; padding:8px 12px; border-bottom:1px solid var(--border); background: linear-gradient(180deg, var(--bg) 0%, var(--bg2) 100%); }
     header img { height: 92px; filter: drop-shadow(0 1px 0 rgba(255,255,255,0.08)) drop-shadow(0 12px 18px rgba(0,0,0,0.55)); }
     .toolbar { display:flex; gap:8px; align-items:center; padding:8px 12px; border-bottom:1px solid var(--border); background: color-mix(in oklab, var(--bg2) 75%, #000 25%); }
-    .toolbar select, .toolbar button, .toolbar input { padding:6px 10px; border-radius:6px; border:1px solid #cfcfcf; background:var(--input-bg); color:var(--input-text); }
+  .toolbar select, .toolbar button, .toolbar input { padding:6px 10px; border-radius:6px; border:1px solid #cfcfcf; background:var(--input-bg); color:var(--input-text); }
+    .toolbar label { color: var(--brand); font-weight: 600; }
+  .toolbar .toggle.on { background: var(--brand); color: #111; border-color: var(--brand); }
     main { min-height:0; display:flex; flex-direction:column; }
     .view { min-height: calc(100vh - 200px); padding: 8px 12px; }
-    .empty { color:#e5e7eb; text-align:center; padding: 16px; }
+  .empty { color:var(--brand); text-align:center; padding: 16px; }
     table { width:100%; border-collapse: collapse; font-size: 13px; }
     th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align:left; }
-    thead th { position:sticky; top:0; background:var(--bg2); }
+    thead th { position:sticky; top:0; background:var(--bg2); color: var(--brand); border-bottom: 2px solid var(--brand); }
     .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap:10px; }
     .img-card { background:var(--panel); border:1px solid var(--border); border-radius:8px; overflow:hidden; }
     .img-card .wrap { position:relative; padding-top:66%; background:#333; }
     .img-card img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
     .img-card .name { padding:6px 8px; border-top:1px solid var(--border); }
     footer { display:flex; justify-content:center; border-top:1px solid var(--border); padding:6px 12px; color:var(--muted); }
+    /* Brand accents in details and dashboard */
+    #details b { color: var(--brand); }
+    #dash b { color: var(--brand); }
+    #dash .section-title { color: var(--brand); font-weight: 600; }
   </style>
 </head>
 <body>
@@ -46,7 +52,7 @@
       <option>Day</option><option>Week</option><option>Month</option><option>Year</option>
     </select>
   <button id="zoom-out" title="Zoom Out">-</button>
-    <span id="zoom-label" style="min-width:48px;text-align:center">100%</span>
+  <span id="zoom-label" style="min-width:48px;text-align:center;color:var(--brand);font-weight:600">100%</span>
   <button id="zoom-in" title="Zoom In">+</button>
   <button id="zoom-reset" title="Reset Zoom">Reset</button>
   <label style="margin-left:8px">Deps <input id="toggle-deps" type="checkbox" checked></label>
@@ -54,7 +60,8 @@
   <label style="margin-left:8px">Shade <input id="toggle-shade" type="checkbox" checked></label>
     <button id="refresh">Refresh</button>
     <button id="export-csv" title="Export current view (CSV)">Export CSV</button>
-    <button id="export-img" title="Export image">Export…</button>
+  <button id="export-img" title="Export image">Export…</button>
+  <button id="open-details-toolbar" title="Open Full Details" disabled>Details…</button>
     <label style="margin-left:8px">Status</label>
     <select id="filter-status">
       <option value="">All</option>
@@ -66,10 +73,13 @@
     </select>
     <label style="margin-left:8px">Parent</label>
     <select id="filter-parent"><option value="">All</option></select>
-    <label style="margin-left:8px"><input id="filter-critical-only" type="checkbox"> Only Critical</label>
-    <span id="info" style="margin-left:auto;color:var(--muted);font-size:12px"></span>
+  <label style="margin-left:8px"><input id="filter-critical-only" type="checkbox"> Only Critical</label>
+  <button id="filter-overdue" class="toggle" title="Show overdue only">Overdue</button>
+  <button id="filter-atrisk" class="toggle" title="Show at-risk only">At Risk</button>
+  <span id="info" style="margin-left:auto;color:var(--brand);font-size:12px;font-weight:600"></span>
   </div>
-  <div id="legend" style="display:flex;gap:12px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--border);font-size:12px;color:#ddd">
+  <div id="legend" style="display:flex;gap:12px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--border);font-size:12px;color:var(--brand)">
+    <span style="font-weight:700;letter-spacing:.3px">Legend</span>
     <span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:14px;height:10px;background:#333;border-radius:3px"></span> Bar</span>
     <span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:14px;height:10px;background:#FF8200;border-radius:3px"></span> Progress</span>
     <span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:14px;height:10px;background:#DAA520;border-radius:3px"></span> Critical</span>
@@ -99,7 +109,10 @@
       <div id="db" style="overflow:auto;max-height:70vh"></div>
     </section>
     <aside id="details" style="grid-column:2 / 3; position:sticky; top:8px; max-height: calc(100vh - 220px); overflow:auto; background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:8px;">
-      <div style="font-weight:600; margin-bottom:6px;">Details</div>
+      <div style="font-weight:600; margin-bottom:6px; color:var(--brand); display:flex; align-items:center; gap:6px;">
+        <span style="display:inline-block;width:6px;height:6px;background:var(--brand);border-radius:2px"></span>
+        Details
+      </div>
       <div id="details-body" class="empty">Select a task or row</div>
     </aside>
   </main>
@@ -116,12 +129,18 @@
         <select id="exp-bg"><option value="#ffffff">White</option><option value="transparent">Transparent</option><option value="#4B4B4B">Dark</option></select>
         <label>Filename</label>
         <input id="exp-name" value="gantt_export" />
-        <label>Paper</label>
+    <label>Paper</label>
         <select id="exp-paper"><option value="">None</option><option value="letter">Letter (8.5×11in)</option><option value="a4">A4 (210×297mm)</option></select>
         <label>Orientation</label>
         <select id="exp-orient"><option>Portrait</option><option>Landscape</option></select>
         <label>Margin (mm)</label>
-        <input id="exp-margin" type="number" min="0" max="50" step="1" value="10" />
+  <input id="exp-margin" type="number" min="0" max="50" step="1" value="10" />
+  <label>Header Title</label>
+  <input id="exp-title" placeholder="e.g., Project Gantt" />
+  <label>Header Date</label>
+  <input id="exp-date" placeholder="e.g., 2025-10-13" />
+  <label>Page Number</label>
+  <input id="exp-page" placeholder="e.g., 1 of 1" />
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
         <button value="cancel">Cancel</button>
@@ -129,9 +148,24 @@
       </div>
     </form>
   </dialog>
+  <!-- Full Details modal -->
+  <dialog id="details-dialog" style="border:1px solid var(--border);background:var(--bg2);color:var(--text);border-radius:8px;padding:12px;max-width:900px;width:90vw;">
+    <form method="dialog">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <div style="font-weight:700;color:var(--brand);flex:1">Project Part Details</div>
+        <button value="cancel">Close</button>
+      </div>
+      <div id="details-dialog-body" style="max-height:70vh;overflow:auto"></div>
+    </form>
+  </dialog>
   <footer><span>{{ watermark }}</span></footer>
   <script>
   let tasks = null, dbdata = null, images = null, metrics = null, costs = null, mode = 'gantt', selected = null;
+  const detailsBtn = document.getElementById('open-details-toolbar');
+  if(detailsBtn){ detailsBtn.addEventListener('click', ()=>{ if(selected) openFullDetails(); }); }
+  // Utils: copy to clipboard and linkify
+  async function copyText(txt){ try { await navigator.clipboard.writeText(String(txt||'')); } catch(_){ const ta=document.createElement('textarea'); ta.value=String(txt||''); document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); }catch(_){ } ta.remove(); } }
+  function linkify(text){ const s = String(text||''); const esc = escapeHtml(s); const re = /(https?:\/\/[^\s<]+[^<.,:;"')\]\s])/g; return esc.replace(re, '<a href="$1" target="_blank" rel="noopener nofollow">$1<\/a>'); }
   // Zoom state (persisted)
   const ZKEY = 'ganttZoomPct';
   let zoomPct = parseInt(localStorage.getItem(ZKEY) || '100', 10);
@@ -165,6 +199,10 @@
   document.getElementById('filter-status').addEventListener('change', ()=> refresh());
   document.getElementById('filter-parent').addEventListener('change', ()=> refresh());
   document.getElementById('filter-critical-only').addEventListener('change', ()=> refresh());
+  const fOverdue = document.getElementById('filter-overdue');
+  const fAtRisk = document.getElementById('filter-atrisk');
+  fOverdue.addEventListener('click', ()=>{ fOverdue.classList.toggle('on'); if(fOverdue.classList.contains('on')) fAtRisk.classList.remove('on'); refresh(); });
+  fAtRisk.addEventListener('click', ()=>{ fAtRisk.classList.toggle('on'); if(fAtRisk.classList.contains('on')) fOverdue.classList.remove('on'); refresh(); });
 
     function setMode(m){ mode = m; const ids=['gantt','calendar','timeline','tree','images','db'];
       document.getElementById('gantt-view').hidden = m!=='gantt';
@@ -176,7 +214,7 @@
       document.getElementById('dashboard-view').hidden = m!=='dashboard';
       document.getElementById('costs-view').hidden = m!=='costs';
       const viewSel = document.getElementById('view');
-      const viewLbl = document.getElementById('view-label');
+  const viewLbl = document.getElementById('view-label'); viewLbl.style.color = 'var(--brand)'; viewLbl.style.fontWeight='600';
       const showView = (m==='gantt' || m==='calendar' || m==='timeline');
       viewSel.style.display = showView ? '' : 'none';
       viewLbl.style.display = showView ? '' : 'none';
@@ -258,8 +296,8 @@
         const x = padL + dateToX(t0, fmtISO(cur), 1, pxPerDay);
         const line = document.createElementNS(ns,'line'); line.setAttribute('x1',x); line.setAttribute('x2',x); line.setAttribute('y1',0); line.setAttribute('y2',h);
         line.setAttribute('stroke','#374151'); line.setAttribute('stroke-width','1'); g.appendChild(line);
-        const text = document.createElementNS(ns,'text'); text.setAttribute('x', x+4); text.setAttribute('y', 14);
-        text.setAttribute('fill','#9ca3af'); text.setAttribute('font-size','11'); text.textContent = lbl(cur);
+  const text = document.createElementNS(ns,'text'); text.setAttribute('x', x+4); text.setAttribute('y', 14);
+  text.setAttribute('fill','#FF8200'); text.setAttribute('font-size','11'); text.setAttribute('font-weight','600'); text.textContent = lbl(cur);
         g.appendChild(text);
         cur = new Date(cur.getTime() + stepDays*24*60*60*1000);
       }
@@ -301,13 +339,15 @@
       const fpar = document.getElementById('filter-parent'); const oldSel = fpar.value; const opts = [''].concat(Array.from(parents));
       fpar.innerHTML = opts.map(v=>`<option value="${v}">${v||'All'}</option>`).join(''); fpar.value = oldSel && opts.includes(oldSel) ? oldSel : '';
       // Apply filters
-      const st = document.getElementById('filter-status').value;
+  const st = document.getElementById('filter-status').value;
       const par = document.getElementById('filter-parent').value;
       const onlyCrit = document.getElementById('filter-critical-only').checked;
       let filtered = tasks.slice();
       if(st) filtered = filtered.filter(t=> (t.status||'') === st);
       if(par) filtered = filtered.filter(t=> (t.parent_id||'') === par);
       if(onlyCrit) filtered = filtered.filter(t=> !!t.critical);
+  if(fOverdue.classList.contains('on')) filtered = filtered.filter(t=> t.risk==='overdue');
+  if(fAtRisk.classList.contains('on')) filtered = filtered.filter(t=> t.risk==='at_risk');
       if(!filtered.length){ el.innerHTML = `<div class='empty'>No tasks match filters</div>`; return; }
       // Determine time bounds
       const starts = tasks.map(t=>t.start).filter(Boolean).sort();
@@ -394,7 +434,7 @@
       drawTasks.forEach((t, i)=>{
   const y = 20 + i*rowH;
   const label = document.createElementNS(svg.namespaceURI,'text'); label.setAttribute('x', 6); label.setAttribute('y', y+14);
-  label.setAttribute('fill','#e5e7eb'); label.setAttribute('font-size','12'); label.textContent = t.name || t.id; 
+  label.setAttribute('fill','#FF8200'); label.setAttribute('font-size','12'); label.textContent = t.name || t.id; 
   label.style.cursor = 'pointer'; label.addEventListener('click', ()=> selectTask(t));
   g.appendChild(label);
         if(t.start && t.end){
@@ -520,7 +560,7 @@
           const placeInside = (w >= 80);
           label.setAttribute('x', placeInside ? (p.x1 + inset) : (p.x2 + 6));
           label.setAttribute('y', y + 9);
-          label.setAttribute('fill', placeInside ? '#e5e7eb' : '#cbd5e1');
+          label.setAttribute('fill', placeInside ? '#FF8200' : '#FF8200');
           label.setAttribute('font-size','11');
           label.textContent = p.t.name || p.t.id;
           label.style.cursor = 'pointer';
@@ -600,7 +640,7 @@
             if(!dt){ html += `<td style='vertical-align:top;height:92px;background:#2b2b2b'></td>`; continue; }
             const dayTasks = tasks.filter(t=>overlaps(t, dt));
             html += `<td style='vertical-align:top;height:92px;background:#2b2b2b'>`+
-              `<div style='font-size:11px;color:#cbd5e1;margin-bottom:4px'>${dt.getDate()}</div>`+
+              `<div style='font-size:11px;color:var(--brand);margin-bottom:4px'>${dt.getDate()}</div>`+
               `<div style='display:flex;flex-direction:column;gap:2px;max-height:70px;overflow:auto'>`+
               dayTasks.slice(0,5).map(t=>`<div class='cal-pill' data-id='${t.id}' style='padding:2px 4px;border-radius:4px;background:${t.color_progress||'#94a3b8'};color:#111;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>${escapeHtml(t.name||t.id)}</div>`).join('')+
               (dayTasks.length>5?`<div style='font-size:10px;color:#94a3b8'>+${dayTasks.length-5} more</div>`:'')+
@@ -617,6 +657,7 @@
       }
     }
   function selectedTaskId(){ return (selected && selected.type==='task' && selected.data && selected.data.id) ? selected.data.id : null; }
+  function updateDetailsButton(){ const btn = document.getElementById('open-details-toolbar'); if(!btn) return; btn.disabled = !selected; }
     async function renderImages(force=false){
       const grid = document.getElementById('images'); grid.innerHTML='';
       if(force || !images) images = await fetch('/api/images').then(r=>r.json());
@@ -660,7 +701,7 @@
         </div>
         <div style='display:grid;grid-template-columns:1fr 1fr; gap:12px;'>
           <div>
-            <div style='font-weight:600;margin-bottom:4px'>Status Distribution</div>
+            <div class='section-title' style='margin-bottom:4px'>Status Distribution</div>
             <table><thead><tr><th>Status</th><th>Count</th><th>% of Leaf</th></tr></thead>
               <tbody>
                 ${statusRows.map(([st,c])=>`<tr><td>${st}</td><td>${c}</td><td>${(c/(m.leaf_count||1)*100).toFixed(1)}%</td></tr>`).join('')}
@@ -668,11 +709,11 @@
             </table>
           </div>
           <div>
-            <div style='font-weight:600;margin-bottom:4px'>Critical Path</div>
+            <div class='section-title' style='margin-bottom:4px'>Critical Path</div>
             <div>${(m.critical_path||[]).join(' → ') || '(none)'}</div>
-            <div style='font-weight:600;margin:8px 0 4px'>Overdue</div>
+            <div class='section-title' style='margin:8px 0 4px'>Overdue</div>
             <div style='font-family:Consolas'>${(m.overdue_list||[]).slice(0,20).join(', ') || '(none)'}</div>
-            <div style='font-weight:600;margin:8px 0 4px'>At Risk</div>
+            <div class='section-title' style='margin:8px 0 4px'>At Risk</div>
             <div style='font-family:Consolas'>${(m.at_risk_list||[]).slice(0,20).join(', ') || '(none)'}</div>
           </div>
         </div>`;
@@ -689,14 +730,14 @@
       table.appendChild(tbody); host.appendChild(table);
     }
 
-  function selectTask(t){ selected = {type:'task', data:t}; renderDetails(); updateSelectionHighlight(); }
-    function selectRow(r){ selected = {type:'row', data:r}; renderDetails(); }
+  function selectTask(t){ selected = {type:'task', data:t}; renderDetails(); updateSelectionHighlight(); updateDetailsButton(); }
+    function selectRow(r){ selected = {type:'row', data:r}; renderDetails(); updateDetailsButton(); }
     function renderDetails(){ const host = document.getElementById('details-body');
       if(!selected){ host.innerHTML = `<div class='empty'>Select a task or row</div>`; return; }
       if(selected.type==='task'){
         const t = selected.data; const raw = t.raw||{};
         let imgs = '';
-        if(t.images && t.images.length){ imgs = `<div style='display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:6px;'>` + t.images.map(i=>`<img src='${i.url}' alt='' style='width:100%;border-radius:6px;border:1px solid var(--border)'/>`).join('') + `</div>`; }
+        if(t.images && t.images.length){ imgs = `<div style='display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:6px;'>` + t.images.map(i=>`<a href='${i.url}' target='_blank' rel='noopener'><img src='${i.url}' alt='' style='width:100%;border-radius:6px;border:1px solid var(--border)'/></a>`).join('') + `</div>`; }
         const badgeColor = (st)=>{
           const s = (st||'').toLowerCase();
           if(s.includes('done')) return '#10b981';
@@ -704,9 +745,16 @@
           if(s.includes('hold')||s.includes('defer')) return '#94a3b8';
           return '#FF8200';
         }
+        // Compute quick costs/margins
+        function num(v){ const n = parseFloat(v||0); return isNaN(n)?0:n; }
+        const pcost = num(raw['Production Cost']); const icost = num(raw['Installation Cost']);
+        const pprice = num(raw['Production Price']); const iprice = num(raw['Installation Price']);
+        const totalCost = pcost + icost; const totalPrice = pprice + iprice; const profit = totalPrice - totalCost; const marginPct = totalPrice? (profit/totalPrice*100):0;
+        const pace = (raw['Pace Link']||'').toString().trim();
         host.innerHTML = `
           <div style='display:flex;align-items:center;gap:8px;margin-bottom:4px'>
             <div style='font-weight:600;flex:1'>${t.name}</div>
+            <button class='cpy' data-copy='${escapeHtml(t.name||"")}' title='Copy name'>Copy</button>
             <span style='font-size:11px;background:${badgeColor(t.status)};color:#111;border-radius:12px;padding:2px 8px'>${t.status||'Planned'}</span>
           </div>
           <div style='font-size:12px;color:var(--muted)'>${t.start||'?'} → ${t.end||'?'} · ${t.progress||0}%</div>
@@ -714,20 +762,79 @@
           <div style='font-size:12px'>
             <div><b>Status:</b> ${t.status||''}</div>
             <div><b>Type:</b> ${t.type||''}</div>
-            <div><b>Parent:</b> ${t.parent_id||''}</div>
-            <div><b>Dependencies:</b> ${t.dependencies||''}</div>
+            <div><b>Parent:</b> ${t.parent_id||''} ${t.parent_id?`<button class='cpy' data-copy='${escapeHtml(t.parent_id)}' title='Copy parent'>Copy</button>`:''}</div>
+            <div><b>Dependencies:</b> ${t.dependencies||''} ${t.dependencies?`<button class='cpy' data-copy='${escapeHtml(t.dependencies)}' title='Copy dependencies'>Copy</button>`:''}</div>
             <div><b>Internal/External:</b> ${t.internal_external||''}</div>
             <div><b>Duration (days):</b> ${t.duration||''}</div>
+            <div><b>Actual:</b> ${raw['Actual Start Date']||''} → ${raw['Actual Finish Date']||''}</div>
+            <div><b>Baseline:</b> ${raw['Baseline Start Date']||''} → ${raw['Baseline End Date']||''}</div>
+            <div><b>Costs:</b> Prod $${pcost.toFixed(2)} · Inst $${icost.toFixed(2)} · Total $${totalCost.toFixed(2)}</div>
+            <div><b>Prices:</b> Prod $${pprice.toFixed(2)} · Inst $${iprice.toFixed(2)} · Total $${totalPrice.toFixed(2)}</div>
+            <div><b>Profit/Margin:</b> $${profit.toFixed(2)} · ${marginPct.toFixed(1)}%</div>
+            ${pace?`<div><b>Pace:</b> <a href='${pace}' target='_blank' rel='noopener'>${escapeHtml(pace)}</a> <button class='cpy' data-copy='${escapeHtml(pace)}' title='Copy pace link'>Copy</button></div>`:''}
+            ${raw['Notes']?`<div><b>Notes:</b> ${linkify(String(raw['Notes']))}</div>`:''}
           </div>
           ${imgs}
+          <div style='margin-top:8px'>
+            <button id='open-full-details'>Open Full Details…</button>
+          </div>
           <details style='margin-top:6px'>
             <summary>Raw</summary>
             <pre style='white-space:pre-wrap;font-size:11px;background:#2b2b2b;padding:6px;border-radius:6px;border:1px solid var(--border)'>${escapeHtml(JSON.stringify(raw, null, 2))}</pre>
           </details>`;
+        // Wire copy buttons
+        host.querySelectorAll('button.cpy').forEach(btn=>{ btn.addEventListener('click', (ev)=>{ const txt = btn.getAttribute('data-copy')||''; copyText(txt.replaceAll('&amp;','&').replaceAll('&lt;','<').replaceAll('&gt;','>').replaceAll('&#39;','\'').replaceAll('&quot;','"')); ev.stopPropagation(); }); });
+        document.getElementById('open-full-details').onclick = (ev)=>{ ev.preventDefault(); openFullDetails(); };
       } else {
         const r = selected.data; const cols = Object.keys(r);
-        host.innerHTML = `<table>` + cols.map(k=>`<tr><th style='text-align:left;vertical-align:top;padding-right:8px'>${k}</th><td>${escapeHtml(String(r[k]??''))}</td></tr>`).join('') + `</table>`;
+        host.innerHTML = `<table>` + cols.map(k=>`<tr><th style='text-align:left;vertical-align:top;padding-right:8px'>${k}</th><td>${escapeHtml(String(r[k]??''))}</td></tr>`).join('') + `</table>` +
+          `<div style='margin-top:8px'><button id='open-full-details'>Open Full Details…</button></div>`;
+        document.getElementById('open-full-details').onclick = (ev)=>{ ev.preventDefault(); openFullDetails(); };
       }
+    }
+
+    function openFullDetails(){
+      if(!selected){ return; }
+      const dlg = document.getElementById('details-dialog'); const body = document.getElementById('details-dialog-body');
+      let title = '', data = {}, imgsHtml = '';
+      if(selected.type==='task'){
+        const t = selected.data; title = t.name || t.id || 'Details'; data = t.raw||{};
+        if(t.images && t.images.length){
+          imgsHtml = `<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0'>`+
+            t.images.map(i=>`<a href='${i.url}' target='_blank' rel='noopener'><img src='${i.url}' style='width:100%;border:1px solid var(--border);border-radius:6px' alt='img'/></a>`).join('') + `</div>`;
+        }
+      } else {
+        const r = selected.data; title = r['Project Part'] || 'Details'; data = r;
+      }
+      // Compute extras (costs/margin)
+      function num(v){ const n = parseFloat(v||0); return isNaN(n)?0:n; }
+      const pcost = num(data['Production Cost']); const icost = num(data['Installation Cost']);
+      const pprice = num(data['Production Price']); const iprice = num(data['Installation Price']);
+      const totalCost = pcost + icost; const totalPrice = pprice + iprice; const profit = totalPrice - totalCost; const marginPct = totalPrice? (profit/totalPrice*100):0;
+      const pace = (data['Pace Link']||'').toString().trim();
+      // Attachments (JSON array)
+      let attachments = [];
+      try { const rawAtt = data['Attachments']; if(Array.isArray(rawAtt)) attachments = rawAtt; else if(typeof rawAtt==='string' && rawAtt.trim().startsWith('[')) attachments = JSON.parse(rawAtt); } catch(_){ attachments=[]; }
+      const cols = Object.keys(data);
+      const table = `<table style='width:100%;border-collapse:collapse'>`+
+        cols.map(k=>`<tr><th style='text-align:left;vertical-align:top;padding:4px 8px;border-bottom:1px solid var(--border)'>${escapeHtml(k)}</th>`+
+        `<td style='padding:4px 8px;border-bottom:1px solid var(--border)'>${escapeHtml(String(data[k]??''))}</td></tr>`).join('')+
+        `</table>`;
+      const paceHtml = pace? `<div><b>Pace:</b> <a href='${pace}' target='_blank' rel='noopener'>${escapeHtml(pace)}</a></div>` : '';
+      const attachHtml = attachments.length? `<div><b>Attachments:</b> ${attachments.map(a=>`<span style='margin-right:6px'>${escapeHtml(String(a))}</span>`).join('')}</div>` : '';
+      body.innerHTML = `
+        <div style='font-weight:700;margin-bottom:6px;color:var(--brand)'>${escapeHtml(title)}</div>
+        <div style='display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:8px'>
+          <div><b>Costs:</b> Prod $${pcost.toFixed(2)} · Inst $${icost.toFixed(2)} · Total $${totalCost.toFixed(2)}</div>
+          <div><b>Prices:</b> Prod $${pprice.toFixed(2)} · Inst $${iprice.toFixed(2)} · Total $${totalPrice.toFixed(2)}</div>
+          <div><b>Profit/Margin:</b> $${profit.toFixed(2)} · ${marginPct.toFixed(1)}%</div>
+          ${paceHtml}
+        </div>
+        ${attachHtml}
+        ${imgsHtml}
+        ${table}
+      `;
+      dlg.showModal();
     }
 
     // Draw selection highlight on current SVG view without re-rendering
@@ -743,7 +850,7 @@
             const s = document.createElementNS(gsvg.namespaceURI,'rect'); s.setAttribute('id','sel-highlight');
             const x=parseFloat(rect.getAttribute('x')||'0'), y=parseFloat(rect.getAttribute('y')||'0'); const w=parseFloat(rect.getAttribute('width')||'0'), h=parseFloat(rect.getAttribute('height')||'0');
             s.setAttribute('x', String(x-2)); s.setAttribute('y', String(y-2)); s.setAttribute('width', String(w+4)); s.setAttribute('height', String(h+4));
-            s.setAttribute('rx', 6); s.setAttribute('fill','none'); s.setAttribute('stroke', '#00BFFF'); s.setAttribute('stroke-width','2');
+            s.setAttribute('rx', 6); s.setAttribute('fill','none'); s.setAttribute('stroke', 'var(--brand)'); s.setAttribute('stroke-width','2.5');
             gsvg.appendChild(s);
           }
         }
@@ -758,7 +865,7 @@
             const s = document.createElementNS(tsvg.namespaceURI,'rect'); s.setAttribute('id','sel-highlight');
             const x=parseFloat(rect.getAttribute('x')||'0'), y=parseFloat(rect.getAttribute('y')||'0'); const w=parseFloat(rect.getAttribute('width')||'0'), h=parseFloat(rect.getAttribute('height')||'0');
             s.setAttribute('x', String(x-2)); s.setAttribute('y', String(y-2)); s.setAttribute('width', String(w+4)); s.setAttribute('height', String(h+4));
-            s.setAttribute('rx', 6); s.setAttribute('fill','none'); s.setAttribute('stroke', '#00BFFF'); s.setAttribute('stroke-width','2');
+            s.setAttribute('rx', 6); s.setAttribute('fill','none'); s.setAttribute('stroke', 'var(--brand)'); s.setAttribute('stroke-width','2.5');
             tsvg.appendChild(s);
           }
         }
@@ -799,7 +906,7 @@
       ins.innerHTML = `<label><input id='${EXP_FOOT_ID}' type='checkbox' checked> Include footer note</label>`;
       dlg.querySelector('form').insertBefore(ins, dlg.querySelector('form').lastElementChild);
     }
-    document.getElementById('exp-run').addEventListener('click', (e)=>{
+    document.getElementById('exp-run').addEventListener('click', async (e)=>{
       e.preventDefault();
       const fmt = document.getElementById('exp-format').value;
       const scale = parseFloat(document.getElementById('exp-scale').value||'1');
@@ -808,7 +915,24 @@
       const paper = (document.getElementById('exp-paper').value||'').toLowerCase();
       const orient = (document.getElementById('exp-orient').value||'Portrait').toLowerCase();
       const marginMm = parseFloat(document.getElementById('exp-margin').value||'10');
+      const hdrTitle = (document.getElementById('exp-title')?.value||'').trim();
+      const hdrDate = (document.getElementById('exp-date')?.value||'').trim();
+      const hdrPage = (document.getElementById('exp-page')?.value||'').trim();
       const dpi = 96; const mmToPx = (mm)=> (mm/25.4)*dpi;
+      async function loadLogo(){
+        try{
+          const urls = ['/static/header.svg','/static/header.png'];
+          for(const u of urls){
+            const r = await fetch(u);
+            if(!r.ok) continue;
+            const b = await r.blob();
+            const dataUrl = await new Promise(resolve=>{ const fr=new FileReader(); fr.onload=()=>resolve(fr.result); fr.readAsDataURL(b); });
+            const img = await new Promise(resolve=>{ const im=new Image(); im.onload=()=>resolve(im); im.src=String(dataUrl); });
+            return { img, dataUrl: String(dataUrl), w: img.width||100, h: img.height||40 };
+          }
+        }catch(_){ /* ignore */ }
+        return null;
+      }
       function paperDimsPx(){
         if(!paper) return null;
         if(paper==='letter'){ let w=8.5*dpi, h=11*dpi; if(orient==='landscape') [w,h]=[h,w]; return {w:Math.round(w), h:Math.round(h)}; }
@@ -819,7 +943,8 @@
       if(!svg){ alert('Nothing to export'); return; }
       const watermark = document.querySelector('footer span')?.textContent || '';
       const includeFooter = document.getElementById(EXP_FOOT_ID).checked;
-      if(fmt==='SVG'){
+  const logo = await loadLogo();
+  if(fmt==='SVG'){
         // Build an output SVG possibly sized to paper with margins
         const contentW = parseFloat(svg.getAttribute('width')||'0');
         const contentH = parseFloat(svg.getAttribute('height')||'0');
@@ -830,15 +955,35 @@
         if(dims){ outW = dims.w; outH = dims.h; } else { marginPx = 0; }
         out.setAttribute('width', String(outW)); out.setAttribute('height', String(outH));
         const g = document.createElementNS(svg.namespaceURI,'g');
-        const fitW = Math.max(1, outW - 2*marginPx);
-        const fitH = Math.max(1, outH - 2*marginPx - footerH);
+  const fitW = Math.max(1, outW - 2*marginPx);
+  const logoH = 20; const logoW = logo ? Math.round((logo.w/Math.max(1,logo.h)) * logoH) : 0;
+  const headerH = (hdrTitle || hdrDate || hdrPage || logo) ? Math.max(28, logo ? (logoH+10) : 28) : 0;
+        const fitH = Math.max(1, outH - 2*marginPx - footerH - headerH);
         const sX = fitW / contentW, sY = fitH / contentH; const s = (dims ? Math.min(sX, sY) : scale);
-        g.setAttribute('transform', `translate(${marginPx},${marginPx}) scale(${s})`);
+        g.setAttribute('transform', `translate(${marginPx},${marginPx + headerH}) scale(${s})`);
         // BG
         if(bg && bg!=='transparent'){
           const rect = document.createElementNS(svg.namespaceURI,'rect');
           rect.setAttribute('x','0'); rect.setAttribute('y','0'); rect.setAttribute('width', String(outW)); rect.setAttribute('height', String(outH)); rect.setAttribute('fill', bg);
           out.appendChild(rect);
+        }
+        if(headerH){
+          let leftX = marginPx + 4; const hy = marginPx + 16;
+          if(logo){
+            const imgEl = document.createElementNS(svg.namespaceURI,'image');
+            imgEl.setAttributeNS('http://www.w3.org/1999/xlink','href', logo.dataUrl);
+            imgEl.setAttribute('x', String(leftX));
+            imgEl.setAttribute('y', String(marginPx + Math.max(2, Math.floor((headerH - logoH)/2))));
+            imgEl.setAttribute('width', String(logoW));
+            imgEl.setAttribute('height', String(logoH));
+            out.appendChild(imgEl);
+            leftX += logoW + 8;
+          }
+          if(hdrTitle){ const t = document.createElementNS(svg.namespaceURI,'text'); t.textContent = hdrTitle; t.setAttribute('x', String(leftX)); t.setAttribute('y', String(hy)); t.setAttribute('fill', '#FF8200'); t.setAttribute('font-size','14'); t.setAttribute('font-weight','600'); out.appendChild(t); }
+          let rightText = '';
+          if(hdrDate) rightText += hdrDate;
+          if(hdrPage) rightText += (rightText? ' · ' : '') + hdrPage;
+          if(rightText){ const t2 = document.createElementNS(svg.namespaceURI,'text'); t2.textContent = rightText; t2.setAttribute('x', String(outW - marginPx - Math.max(80, rightText.length*7))); t2.setAttribute('y', String(hy)); t2.setAttribute('fill', '#FF8200'); t2.setAttribute('font-size','12'); out.appendChild(t2); }
         }
         const clonedInner = svg.cloneNode(true);
         g.appendChild(clonedInner); out.appendChild(g);
@@ -852,9 +997,11 @@
         downloadText(name + '.svg', xml);
       } else {
         // PNG via canvas
-        let contentW = parseFloat(svg.getAttribute('width')||'0');
+    let contentW = parseFloat(svg.getAttribute('width')||'0');
         let contentH = parseFloat(svg.getAttribute('height')||'0');
-        const extraH = includeFooter ? 24 : 0;
+    const logoH = 20; const logoW = logo ? Math.round((logo.w/Math.max(1,logo.h)) * logoH) : 0;
+    const headerH = (hdrTitle || hdrDate || hdrPage || logo) ? Math.max(28, logo ? (logoH+10) : 28) : 0;
+    const extraH = (includeFooter ? 24 : 0) + headerH;
         const dims = paperDimsPx();
         let outW = contentW, outH = contentH + extraH;
         let marginPx = mmToPx(marginMm);
@@ -869,8 +1016,17 @@
           const fitW = Math.max(1, outW - 2*marginPx);
           const fitH = Math.max(1, outH - 2*marginPx - extraH);
           const sX = fitW / contentW, sY = fitH / contentH; const s = dims ? Math.min(sX, sY) : scale;
-          ctx.setTransform(s, 0, 0, s, marginPx, marginPx);
+          ctx.setTransform(s, 0, 0, s, marginPx, marginPx + headerH);
           ctx.drawImage(img, 0, 0, contentW, contentH);
+          if(headerH){
+            ctx.setTransform(1,0,0,1,0,0);
+            let leftX = marginPx + 4; const baseY = marginPx + 16;
+            if(logo){ ctx.drawImage(logo.img, leftX, marginPx + Math.max(2, Math.floor((headerH - logoH)/2)), logoW, logoH); leftX += logoW + 8; }
+            ctx.fillStyle = '#FF8200';
+            if(hdrTitle){ ctx.font = '600 14px sans-serif'; ctx.fillText(hdrTitle, leftX, baseY); }
+            const rightText = [hdrDate, hdrPage].filter(Boolean).join(' · ');
+            if(rightText){ ctx.font = '12px sans-serif'; const tw = ctx.measureText(rightText).width; ctx.fillText(rightText, outW - marginPx - tw - 4, marginPx + 16); }
+          }
           if(includeFooter){ ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle = '#bbb'; ctx.font = `12px sans-serif`; ctx.fillText(watermark, 8, outH - 8); }
           URL.revokeObjectURL(url);
           canvas.toBlob((png)=>{ const dl = document.createElement('a'); dl.href = URL.createObjectURL(png); dl.download = name + '.png'; document.body.appendChild(dl); dl.click(); setTimeout(()=>{ URL.revokeObjectURL(dl.href); dl.remove(); }, 0); }, 'image/png');
