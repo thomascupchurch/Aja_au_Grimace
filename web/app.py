@@ -5,6 +5,14 @@ import base64
 import sqlite3
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, render_template, send_from_directory, Response, abort
+from typing import List, Dict, Any
+
+# Optional SQLAlchemy for MySQL support (used if WEB_DB_URL is set)
+try:
+    from sqlalchemy import create_engine, text
+    _HAS_SA = True
+except Exception:
+    _HAS_SA = False
 
 app = Flask(__name__)
 
@@ -81,172 +89,197 @@ def _sqlite_connect(path: str):
     return sqlite3.connect(uri, uri=True)
 
 
-def fetch_tasks():
+def _fetch_rows_any() -> List[Dict[str, Any]]:
+    """Fetch all rows from project_parts as a list of dicts using either
+    MySQL (if WEB_DB_URL set) or SQLite fallback. Column names are preserved
+    exactly as in the table to avoid changing downstream logic.
+
+    Env:
+      WEB_DB_URL: SQLAlchemy URL (e.g., mysql+pymysql://user:pass@host/user$db?charset=utf8mb4)
+    """
+    db_url = os.environ.get("WEB_DB_URL", "").strip()
+    if db_url and _HAS_SA:
+        # MySQL/other via SQLAlchemy
+        engine = create_engine(db_url, pool_pre_ping=True)
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text("SELECT * FROM project_parts"))
+                # SQLAlchemy Row -> mapping for column-name access
+                return [dict(r._mapping) for r in result]
+        except Exception as e:
+            # Fall back to SQLite only if PROJECT_DB_PATH exists; otherwise re-raise
+            # This keeps the site usable if MySQL is temporarily unavailable
+            pass
+
+    # SQLite fallback
     db = get_db_path()
-    tasks = []
     if not os.path.exists(db):
-        return tasks
+        return []
     con = _sqlite_connect(db)
     try:
         cur = con.cursor()
-        # Fetch all columns so we can expose the original row in task["raw"] for full details
         cur.execute("SELECT * FROM project_parts")
         all_rows = cur.fetchall()
         all_cols = [d[0] for d in cur.description]
-        rows = [ {k: v for k, v in zip(all_cols, row)} for row in all_rows ]
-
-        # Helper: slugify names to ID-safe strings usable in CSS selectors
-        def slugify(text: str) -> str:
-            if text is None:
-                text = ""
-            # Normalize whitespace
-            text = str(text).strip()
-            # Replace any non-alphanumeric with underscore
-            s = re.sub(r"[^A-Za-z0-9_-]+", "_", text)
-            # Collapse multiple underscores and trim
-            s = re.sub(r"_+", "_", s).strip("_")
-            return s or "task"
-
-        # Build unique id map for names to ensure no collisions after slugify
-        name_to_id = {}
-        used = set()
-        # Heuristic color mapping using status, % complete, and schedule
-        def choose_colors(status: str, progress: int, start_dt, end_dt):
-            s = (status or "").strip().lower()
-            today = datetime.today().date()
-            # Normalize common synonyms
-            is_done = any(k in s for k in ("done", "complete", "completed", "finished")) or progress >= 100
-            is_on_hold = any(k in s for k in ("on hold", "hold", "paused", "defer", "deferred"))
-            is_blocked = any(k in s for k in ("blocked", "at risk", "risk", "overdue"))
-            is_active_status = any(k in s for k in (
-                "in progress", "in-progress", "inprogress", "active", "working", "ongoing", "started", "start"
-            ))
-
-            # Date-based signals
-            has_started = bool(start_dt and start_dt <= today)
-            in_window = bool(start_dt and end_dt and start_dt <= today <= end_dt)
-            overdue = bool(end_dt and end_dt < today and progress < 100)
-            has_progress = 0 < progress < 100
-
-            # Priority order
-            # Keep bar backgrounds mostly neutral (white/gray) and use color on progress only.
-            if is_done:
-                return {"color": "#ffffff", "color_progress": "#10b981"}  # green progress
-            if overdue or is_blocked:
-                return {"color": "#ffffff", "color_progress": "#ef4444"}  # red progress
-            if is_on_hold:
-                return {"color": "#ffffff", "color_progress": "#94a3b8"}  # slate progress
-            # Active if explicit status OR progress in (0,100) OR currently within window
-            if is_active_status or has_progress or in_window or (has_started and progress < 100 and not end_dt):
-                return {"color": "#ffffff", "color_progress": "#FF8200"}  # UT orange progress
-            # Planned / not started yet
-            return {"color": "#e5e7eb", "color_progress": "#9ca3af"}  # gray bar, light progress
-
-        def parse_images_field(val: str):
-            root = _images_root()
-            out = []
-            if not val:
-                return out
-            # Split by common separators: comma, semicolon, newline
-            parts = []
-            for chunk in re.split(r"[\n;,]", str(val)):
-                p = chunk.strip()
-                if p:
-                    parts.append(p)
-            exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
-            seen = set()
-            for p in parts:
-                name = os.path.basename(p)
-                ext = os.path.splitext(name)[1].lower()
-                if ext not in exts:
-                    continue
-                if name in seen:
-                    continue
-                seen.add(name)
-                # Only include if the file exists under images/
-                try:
-                    if os.path.isfile(os.path.join(root, name)):
-                        out.append({"name": name, "url": f"/images/{name}"})
-                except Exception:
-                    continue
-            return out
-
-        for rec in rows:
-            name = (rec.get("Project Part") or "").strip()
-            base = slugify(name)
-            candidate = base
-            i = 2
-            while candidate in used:
-                candidate = f"{base}_{i}"
-                i += 1
-            name_to_id[name] = candidate
-            used.add(candidate)
-
-        for rec in rows:
-            name = (rec.get("Project Part") or "").strip()
-            # Normalize fields
-            # Start date fallback order: Start Date -> Actual Start Date -> Baseline Start Date
-            start_dt = _parse_date(rec.get("Start Date") or "") or \
-                       _parse_date(rec.get("Actual Start Date") or "") or \
-                       _parse_date(rec.get("Baseline Start Date") or "")
-            # End date fallback order: Calculated End Date -> Actual Finish Date -> Baseline End Date
-            end_dt = _parse_date(rec.get("Calculated End Date") or "") or \
-                     _parse_date(rec.get("Actual Finish Date") or "") or \
-                     _parse_date(rec.get("Baseline End Date") or "")
-            # Duration
-            try:
-                duration = int(rec.get("Duration (days)") or 0)
-            except Exception:
-                duration = 0
-            # If end missing but we have start, derive from duration (min 1 day)
-            if not end_dt and start_dt:
-                days = max(1, duration) if duration else 1
-                end_dt = start_dt + timedelta(days=days)
-            # If start missing but we have end and duration, derive start
-            if not start_dt and end_dt and duration:
-                days = max(1, duration)
-                start_dt = end_dt - timedelta(days=days)
-
-            # If still no valid dates, skip (can't draw a bar)
-            if not start_dt or not end_dt:
-                continue
-
-            # Progress
-            try:
-                progress = int(rec.get("% Complete") or 0)
-            except Exception:
-                progress = 0
-            # Dependencies -> map original names to our sanitized IDs
-            deps_raw = (rec.get("Dependencies") or "").strip()
-            deps_list = [d.strip() for d in deps_raw.split(",") if d.strip()]
-            deps_ids = [name_to_id.get(d, slugify(d)) for d in deps_list]
-            # Build task record with safe id
-            colors = choose_colors(rec.get("Status"), progress, start_dt, end_dt)
-
-            # Parent mapping (for tree view)
-            parent_name = (rec.get("Parent") or "").strip()
-            parent_id = name_to_id.get(parent_name) if parent_name else None
-
-            tasks.append({
-                "id": name_to_id.get(name, slugify(name)),
-                "name": name,
-                "start": _to_iso(start_dt),  # YYYY-MM-DD
-                "end": _to_iso(end_dt),      # YYYY-MM-DD
-                "progress": progress,
-                "dependencies": ",".join(deps_ids),
-                "type": (rec.get("Type") or "").strip(),
-                "status": (rec.get("Status") or "").strip(),
-                "internal_external": (rec.get("Internal/External") or "").strip(),
-                "duration": duration,
-                "color": colors["color"],
-                "color_progress": colors["color_progress"],
-                "parent_id": parent_id,
-                "images": parse_images_field(rec.get("Images") or ""),
-                # Expose full original row for details panel across views
-                "raw": rec,
-            })
+        return [{k: v for k, v in zip(all_cols, row)} for row in all_rows]
     finally:
         con.close()
+
+
+def fetch_tasks():
+    tasks = []
+    # Fetch all columns so we can expose the original row in task["raw"] for full details
+    rows = _fetch_rows_any()
+    # Helper: slugify names to ID-safe strings usable in CSS selectors
+    def slugify(text: str) -> str:
+        if text is None:
+            text = ""
+        # Normalize whitespace
+        text = str(text).strip()
+        # Replace any non-alphanumeric with underscore
+        s = re.sub(r"[^A-Za-z0-9_-]+", "_", text)
+        # Collapse multiple underscores and trim
+        s = re.sub(r"_+", "_", s).strip("_")
+        return s or "task"
+
+    # Build unique id map for names to ensure no collisions after slugify
+    name_to_id = {}
+    used = set()
+    # Heuristic color mapping using status, % complete, and schedule
+    def choose_colors(status: str, progress: int, start_dt, end_dt):
+        s = (status or "").strip().lower()
+        today = datetime.today().date()
+        # Normalize common synonyms
+        is_done = any(k in s for k in ("done", "complete", "completed", "finished")) or progress >= 100
+        is_on_hold = any(k in s for k in ("on hold", "hold", "paused", "defer", "deferred"))
+        is_blocked = any(k in s for k in ("blocked", "at risk", "risk", "overdue"))
+        is_active_status = any(k in s for k in (
+            "in progress", "in-progress", "inprogress", "active", "working", "ongoing", "started", "start"
+        ))
+
+        # Date-based signals
+        has_started = bool(start_dt and start_dt <= today)
+        in_window = bool(start_dt and end_dt and start_dt <= today <= end_dt)
+        overdue = bool(end_dt and end_dt < today and progress < 100)
+        has_progress = 0 < progress < 100
+
+        # Priority order
+        # Keep bar backgrounds mostly neutral (white/gray) and use color on progress only.
+        if is_done:
+            return {"color": "#ffffff", "color_progress": "#10b981"}  # green progress
+        if overdue or is_blocked:
+            return {"color": "#ffffff", "color_progress": "#ef4444"}  # red progress
+        if is_on_hold:
+            return {"color": "#ffffff", "color_progress": "#94a3b8"}  # slate progress
+        # Active if explicit status OR progress in (0,100) OR currently within window
+        if is_active_status or has_progress or in_window or (has_started and progress < 100 and not end_dt):
+            return {"color": "#ffffff", "color_progress": "#FF8200"}  # UT orange progress
+        # Planned / not started yet
+        return {"color": "#e5e7eb", "color_progress": "#9ca3af"}  # gray bar, light progress
+
+    def parse_images_field(val: str):
+        root = _images_root()
+        out = []
+        if not val:
+            return out
+        # Split by common separators: comma, semicolon, newline
+        parts = []
+        for chunk in re.split(r"[\n;,]", str(val)):
+            p = chunk.strip()
+            if p:
+                parts.append(p)
+        exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
+        seen = set()
+        for p in parts:
+            name = os.path.basename(p)
+            ext = os.path.splitext(name)[1].lower()
+            if ext not in exts:
+                continue
+            if name in seen:
+                continue
+            seen.add(name)
+            # Only include if the file exists under images/
+            try:
+                if os.path.isfile(os.path.join(root, name)):
+                    out.append({"name": name, "url": f"/images/{name}"})
+            except Exception:
+                continue
+        return out
+
+    for rec in rows:
+        name = (rec.get("Project Part") or "").strip()
+        base = slugify(name)
+        candidate = base
+        i = 2
+        while candidate in used:
+            candidate = f"{base}_{i}"
+            i += 1
+        name_to_id[name] = candidate
+        used.add(candidate)
+
+    for rec in rows:
+        name = (rec.get("Project Part") or "").strip()
+        # Normalize fields
+        # Start date fallback order: Start Date -> Actual Start Date -> Baseline Start Date
+        start_dt = _parse_date(rec.get("Start Date") or "") or \
+                   _parse_date(rec.get("Actual Start Date") or "") or \
+                   _parse_date(rec.get("Baseline Start Date") or "")
+        # End date fallback order: Calculated End Date -> Actual Finish Date -> Baseline End Date
+        end_dt = _parse_date(rec.get("Calculated End Date") or "") or \
+                 _parse_date(rec.get("Actual Finish Date") or "") or \
+                 _parse_date(rec.get("Baseline End Date") or "")
+        # Duration
+        try:
+            duration = int(rec.get("Duration (days)") or 0)
+        except Exception:
+            duration = 0
+        # If end missing but we have start, derive from duration (min 1 day)
+        if not end_dt and start_dt:
+            days = max(1, duration) if duration else 1
+            end_dt = start_dt + timedelta(days=days)
+        # If start missing but we have end and duration, derive start
+        if not start_dt and end_dt and duration:
+            days = max(1, duration)
+            start_dt = end_dt - timedelta(days=days)
+
+        # If still no valid dates, skip (can't draw a bar)
+        if not start_dt or not end_dt:
+            continue
+
+        # Progress
+        try:
+            progress = int(rec.get("% Complete") or 0)
+        except Exception:
+            progress = 0
+        # Dependencies -> map original names to our sanitized IDs
+        deps_raw = (rec.get("Dependencies") or "").strip()
+        deps_list = [d.strip() for d in deps_raw.split(",") if d.strip()]
+        deps_ids = [name_to_id.get(d, slugify(d)) for d in deps_list]
+        # Build task record with safe id
+        colors = choose_colors(rec.get("Status"), progress, start_dt, end_dt)
+
+        # Parent mapping (for tree view)
+        parent_name = (rec.get("Parent") or "").strip()
+        parent_id = name_to_id.get(parent_name) if parent_name else None
+
+        tasks.append({
+            "id": name_to_id.get(name, slugify(name)),
+            "name": name,
+            "start": _to_iso(start_dt),  # YYYY-MM-DD
+            "end": _to_iso(end_dt),      # YYYY-MM-DD
+            "progress": progress,
+            "dependencies": ",".join(deps_ids),
+            "type": (rec.get("Type") or "").strip(),
+            "status": (rec.get("Status") or "").strip(),
+            "internal_external": (rec.get("Internal/External") or "").strip(),
+            "duration": duration,
+            "color": colors["color"],
+            "color_progress": colors["color_progress"],
+            "parent_id": parent_id,
+            "images": parse_images_field(rec.get("Images") or ""),
+            # Expose full original row for details panel across views
+            "raw": rec,
+        })
     return tasks
 
 
@@ -389,33 +422,45 @@ def static_vendor_frappe_gantt_js():
 
 @app.route("/api/debug")
 def api_debug():
+    db_url = os.environ.get("WEB_DB_URL", "").strip()
+    using_mysql = bool(db_url and _HAS_SA)
     db = get_db_path()
     info = {
-        "db_path": db,
-        "db_exists": os.path.exists(db),
+        "db_backend": "mysql" if using_mysql else "sqlite",
+        "db_path": db if not using_mysql else db_url.split("@")[-1],
+        "db_exists": os.path.exists(db) if not using_mysql else True,
         "table": "project_parts",
         "row_count": 0,
         "sample": [],
         "error": None,
     }
-    if not os.path.exists(db):
-        return jsonify(info)
     try:
-        con = _sqlite_connect(db)
-        cur = con.cursor()
-        cur.execute("SELECT count(*) FROM project_parts")
-        info["row_count"] = cur.fetchone()[0]
-        cur.execute("SELECT * FROM project_parts LIMIT 3")
-        cols = [d[0] for d in cur.description]
-        for r in cur.fetchall():
-            info["sample"].append({k: v for k, v in zip(cols, r)})
+        if using_mysql:
+            engine = create_engine(db_url, pool_pre_ping=True)
+            with engine.connect() as conn:
+                info["row_count"] = conn.execute(text("SELECT COUNT(*) FROM project_parts")).scalar_one()
+                result = conn.execute(text("SELECT * FROM project_parts LIMIT 3"))
+                for r in result:
+                    info["sample"].append(dict(r._mapping))
+        else:
+            if not os.path.exists(db):
+                return jsonify(info)
+            con = _sqlite_connect(db)
+            try:
+                cur = con.cursor()
+                cur.execute("SELECT count(*) FROM project_parts")
+                info["row_count"] = cur.fetchone()[0]
+                cur.execute("SELECT * FROM project_parts LIMIT 3")
+                cols = [d[0] for d in cur.description]
+                for r in cur.fetchall():
+                    info["sample"].append({k: v for k, v in zip(cols, r)})
+            finally:
+                try:
+                    con.close()
+                except Exception:
+                    pass
     except Exception as e:
         info["error"] = str(e)
-    finally:
-        try:
-            con.close()
-        except Exception:
-            pass
     return jsonify(info)
 
 @app.route("/health")

@@ -58,14 +58,18 @@ os.chdir(WEB_DIR)
 from app import app as application
 ```
 
-5) Environment variables (optional but recommended)
-- In the PA “Environment Variables” section, add `PROJECT_DB_PATH` if your DB is not at the repo root.
+5) Environment variables (SQLite or MySQL)
+- If using SQLite at repo root: nothing needed
+- If using a custom SQLite path: In the PA “Environment Variables” section, add `PROJECT_DB_PATH`
+- If using PythonAnywhere MySQL: add
+  - `WEB_DB_URL = mysql+pymysql://<user>:<pass>@<host>/<user>$<dbname>?charset=utf8mb4`
+  - Example host is like `youruser.mysql.pythonanywhere-services.com`
 
 6) Reload the web app
 - Open the PythonAnywhere dashboard page for the web app and click “Reload”
 - Visit your site; see verification below
 
-7) Optional: sync DB updates
+7) Optional: sync DB updates (SQLite)
 - Use the helper script to atomically replace the deployed DB from a source path and reload:
   ```bash
   # In a PythonAnywhere Bash console
@@ -75,6 +79,18 @@ from app import app as application
   - `--dest` defaults to `~/Aja_au_Grimace/project_data.db`
   - `--wsgi` defaults to `~/Aja_au_Grimace/web/pythonanywhere_wsgi.py`
   - `--backup` creates `project_data.db.bak_YYYYmmdd_HHMMSS`
+
+8) Migrating from SQLite to MySQL (one-time)
+- Create a MySQL DB in PythonAnywhere (Databases tab), note user/pass/host/dbname
+- Set `WEB_DB_URL` as above
+- From a PA Bash console, run the migration:
+  ```bash
+  python3 web/migrate_sqlite_to_mysql.py \
+    --sqlite ~/Aja_au_Grimace/project_data.db \
+    --mysql "$WEB_DB_URL" \
+    --create --truncate
+  ```
+- Reload the web app and visit `/api/debug` (row_count should match)
 
 
 ## Render.com
