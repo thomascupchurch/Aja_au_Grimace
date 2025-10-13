@@ -1,7 +1,7 @@
 import os
 import sqlite3
 from datetime import datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 from flask import Flask, jsonify, render_template, send_from_directory, Response, abort
 
 # Optional SQLAlchemy for MySQL
@@ -113,14 +113,88 @@ def _normalize_db_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             try: dur = int(row.get('Duration (days)') or 0)
             except Exception: dur = 0
             if sd:
-                de = sd + timedelta(days=max(1, dur) if dur else 1)
-                row['Calculated End Date'] = de.strftime('%m-%d-%Y')
+                # Business-day addition: skip Sat/Sun
+                days = max(1, dur) if dur else 1
+                cur = sd
+                added = 0
+                while added < days:
+                    cur = cur + timedelta(days=1)
+                    if cur.weekday() < 5:  # 0=Mon..4=Fri
+                        added += 1
+                row['Calculated End Date'] = cur.strftime('%m-%d-%Y')
         try: pc = int(row.get('% Complete') or 0)
         except Exception: pc = 0
         st = (row.get('Status') or '').lower()
         if 'done' in st and pc < 100: pc = 100
         row['% Complete'] = pc
         out.append(row)
+    # Roll-up parent progress/status similar to desktop
+    name_to_row = { (r.get('Project Part') or '').strip(): r for r in out }
+    children_map: Dict[str, List[Dict[str, Any]]] = {}
+    for r in out:
+        p = (r.get('Parent') or '').strip()
+        if p:
+            children_map.setdefault(p, []).append(r)
+    visited = set()
+    def dfs(name: str):
+        if not name or name in visited:
+            return
+        visited.add(name)
+        kids = children_map.get(name)
+        row = name_to_row.get(name)
+        if not row:
+            return
+        if not kids:
+            # ensure numeric % and done normalization
+            try:
+                pc = int(row.get('% Complete') or 0)
+            except Exception:
+                pc = 0
+            row['% Complete'] = max(0, min(100, pc))
+            if (row.get('Status') or '').strip() == 'Done' and row['% Complete'] < 100:
+                row['% Complete'] = 100
+            return
+        # Recurse
+        for k in kids:
+            dfs((k.get('Project Part') or '').strip())
+        # Weighted by child duration when available; else average
+        total_weight = 0; weighted = 0; all_done = True; any_in_prog = False; any_blocked = False
+        for ch in kids:
+            try: dur = int(ch.get('Duration (days)') or 0)
+            except Exception: dur = 0
+            try: cpc = int(ch.get('% Complete') or 0)
+            except Exception: cpc = 0
+            weighted += cpc * max(0, dur)
+            total_weight += max(0, dur)
+            st = (ch.get('Status') or 'Planned').strip() or 'Planned'
+            if st != 'Done':
+                all_done = False
+            if st == 'In Progress':
+                any_in_prog = True
+            if st == 'Blocked':
+                any_blocked = True
+        if total_weight > 0:
+            row['% Complete'] = int(round(weighted / total_weight))
+        else:
+            vals = []
+            for ch in kids:
+                try: vals.append(int(ch.get('% Complete') or 0))
+                except Exception: pass
+            row['% Complete'] = int(round(sum(vals)/len(vals))) if vals else 0
+        if all_done and kids:
+            row['Status'] = 'Done'
+            row['% Complete'] = 100
+        else:
+            if any_blocked and not any_in_prog:
+                row['Status'] = 'Blocked'
+            elif any_in_prog:
+                row['Status'] = 'In Progress'
+            else:
+                row['Status'] = row.get('Status') or 'Planned'
+    # Start from roots (no Parent)
+    for r in out:
+        if not (r.get('Parent') or '').strip():
+            dfs((r.get('Project Part') or '').strip())
     return out
 
 # --- Routes ---
@@ -144,6 +218,20 @@ def api_tasks():
         base = slug(r.get('Project Part') or '') or 'task'; c = base; i = 2
         while c in used: c = f"{base}_{i}"; i += 1
         used.add(c); name_to_id[(r.get('Project Part') or '').strip()] = c
+    # Build a one-time images index for efficient lookup by base name (case-insensitive)
+    img_root = images_root()
+    img_index: Dict[str, str] = {}
+    try:
+        exts = {'.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg'}
+        for root, _dirs, files in os.walk(img_root):
+            for name in files:
+                ext = os.path.splitext(name)[1].lower()
+                if ext in exts:
+                    rel = os.path.relpath(os.path.join(root, name), img_root)
+                    img_index[name.lower()] = rel.replace('\\','/')
+    except Exception:
+        img_index = {}
+
     tasks = []
     for r in rows:
         start = _parse_date(r.get('Start Date') or '') or _parse_date(r.get('Actual Start Date') or '') or _parse_date(r.get('Baseline Start Date') or '')
@@ -161,41 +249,57 @@ def api_tasks():
         deps = [d.strip() for d in (r.get('Dependencies') or '').split(',') if d.strip()]
         deps_ids = [name_to_id.get(d) or slug(d) for d in deps]
         parent_id = name_to_id.get((r.get('Parent') or '').strip()) if r.get('Parent') else None
-        # Colors similar to desktop heuristics
-        status = (r.get('Status') or '').lower(); today = datetime.today().date()
-        is_done = 'done' in status or progress >= 100
-        is_blocked = ('blocked' in status) or ('risk' in status) or ('overdue' in status)
-        is_hold = ('hold' in status) or ('defer' in status)
-        has_started = bool(start and start <= today)
-        in_window = bool(start and end and start <= today <= end)
-        overdue = bool(end and end < today and progress < 100)
-        has_prog = 0 < progress < 100
-        if is_done:
-            color, color_prog = ('#ffffff', '#10b981')
-        elif overdue or is_blocked:
-            color, color_prog = ('#ffffff', '#ef4444')
-        elif is_hold:
-            color, color_prog = ('#ffffff', '#94a3b8')
-        elif has_prog or in_window or (has_started and progress < 100 and not end):
-            color, color_prog = ('#ffffff', '#FF8200')
-        else:
-            color, color_prog = ('#e5e7eb', '#9ca3af')
-        # Images: only include files that exist in images root
-        def images_list(val: str):
-            import os, re
-            root = images_root(); out = []
-            if not val: return out
-            parts = []
-            for ch in re.split(r"[\n;,]", str(val)):
-                p = ch.strip();
-                if p: parts.append(p)
-            exts = {'.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg'}; seen = set()
+        # Desktop parity: bars are dark gray; progress overlay is orange.
+        # Risk is indicated via outline (red for overdue, orange for at-risk), not by changing fill.
+        today = datetime.today().date()
+        # Determine risk flags similar to desktop logic
+        risk = ''
+        try:
+            if progress < 100 and end and today > end:
+                risk = 'overdue'
+            else:
+                st = (r.get('Status') or '').strip()
+                if progress == 0 and start and today > start and st in ('Planned','Blocked'):
+                    risk = 'at_risk'
+        except Exception:
+            risk = ''
+        color, color_prog = ('#333333', '#FF8200')
+        # Images: include files from Images field; fall back to image-type Attachments
+        def images_list(images_val: str, attachments_val: Any) -> List[Dict[str, str]]:
+            import json, re
+            out: List[Dict[str,str]] = []
+            seen = set()
+            parts: List[str] = []
+            # Split Images field by common separators
+            if images_val:
+                for ch in re.split(r"[\n;,]", str(images_val)):
+                    p = ch.strip()
+                    if p:
+                        parts.append(p)
+            # Parse Attachments JSON array and add image-like entries if Images empty or to augment
+            try:
+                if attachments_val:
+                    att_list = attachments_val
+                    if isinstance(att_list, str):
+                        att_list = json.loads(att_list)
+                    if isinstance(att_list, list):
+                        for a in att_list:
+                            if not isinstance(a, str):
+                                continue
+                            parts.append(a)
+            except Exception:
+                pass
+            exts = {'.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg'}
             for p in parts:
-                name = os.path.basename(p); ext = os.path.splitext(name)[1].lower()
-                if ext not in exts or name in seen: continue
-                seen.add(name)
-                if os.path.isfile(os.path.join(root, name)):
-                    out.append({'name': name, 'url': f"/images/{name}"})
+                name = os.path.basename(str(p))
+                key = name.lower()
+                ext = os.path.splitext(key)[1].lower()
+                if ext not in exts or key in seen:
+                    continue
+                seen.add(key)
+                rel = img_index.get(key)
+                if rel:
+                    out.append({'name': name, 'url': f"/images/{rel}"})
             return out
         tasks.append({
             'id': name_to_id.get((r.get('Project Part') or '').strip()),
@@ -206,11 +310,71 @@ def api_tasks():
             'status': (r.get('Status') or '').strip(),
             'internal_external': (r.get('Internal/External') or '').strip(),
             'duration': dur,
-            'color': color, 'color_progress': color_prog,
+            'color': color, 'color_progress': color_prog, 'risk': risk,
             'parent_id': parent_id,
-            'images': images_list(r.get('Images') or ''),
+            'images': images_list(r.get('Images') or '', r.get('Attachments')),
             'raw': r,
         })
+    # Compute critical path using dependencies and durations (IDs graph)
+    try:
+        # Build graph: task_id -> list of predecessor IDs
+        id_to_task = {t['id']: t for t in tasks if t.get('id')}
+        graph = {}
+        duration = {}
+        for t in tasks:
+            tid = t.get('id')
+            if not tid:
+                continue
+            preds = [p.strip() for p in (t.get('dependencies') or '').split(',') if p.strip()]
+            graph[tid] = [p for p in preds if p in id_to_task]
+            try:
+                duration[tid] = int(t.get('duration') or 0)
+            except Exception:
+                duration[tid] = 0
+        # Topo order
+        visited = set(); order = []
+        def dfs(n):
+            if n in visited:
+                return
+            visited.add(n)
+            for p in graph.get(n, []):
+                dfs(p)
+            order.append(n)
+        for n in graph.keys():
+            dfs(n)
+        # Forward pass: earliest finish in abstract time (days)
+        es = {}; ef = {}
+        for n in order:
+            preds = graph.get(n, [])
+            if not preds:
+                es[n] = 0
+            else:
+                es[n] = max(ef.get(p, 0) for p in preds)
+            ef[n] = es[n] + max(0, duration.get(n,0))
+        proj_finish = max(ef.values()) if ef else 0
+        # Backward pass: latest start
+        ls = {}; lf = {}
+        # Build successors map once
+        succs = {k: [] for k in graph.keys()}
+        for s, preds in graph.items():
+            for p in preds:
+                succs.setdefault(p, []).append(s)
+        for n in reversed(order):
+            s_list = succs.get(n, [])
+            lf[n] = min(ls[s] for s in s_list) if s_list else proj_finish
+            dur = max(0, duration.get(n,0))
+            ls[n] = lf[n] - dur
+        crit_ids = {n for n in order if abs((es.get(n,0) - ls.get(n,0))) <= 0}
+        for t in tasks:
+            tid = t.get('id')
+            is_crit = bool(tid in crit_ids)
+            t['critical'] = is_crit
+            # Mirror desktop nuance: critical tasks use a golden progress overlay color
+            if is_crit:
+                t['color_progress'] = '#DAA520'
+    except Exception:
+        for t in tasks:
+            t['critical'] = False
     return jsonify(tasks)
 
 @app.route('/api/database')
@@ -228,12 +392,16 @@ def api_images():
         return jsonify(out)
     exts = {'.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg'}
     try:
-        for name in sorted(os.listdir(root)):
-            if name.startswith('.'):
-                continue
-            p = os.path.join(root, name)
-            if os.path.isfile(p) and os.path.splitext(name)[1].lower() in exts:
-                out.append({'name': name, 'url': f"/images/{name}", 'size': os.path.getsize(p)})
+        for dirpath, _dirnames, filenames in os.walk(root):
+            for name in filenames:
+                if name.startswith('.'):
+                    continue
+                if os.path.splitext(name)[1].lower() not in exts:
+                    continue
+                full = os.path.join(dirpath, name)
+                rel = os.path.relpath(full, root).replace('\\','/')
+                out.append({'name': rel, 'url': f"/images/{rel}", 'size': os.path.getsize(full)})
+        out.sort(key=lambda x: x['name'].lower())
     except Exception:
         pass
     return jsonify(out)
@@ -264,6 +432,200 @@ def api_debug():
         info['error'] = str(e)
     return jsonify(info)
 
+# --- Metrics and Costs (to mirror desktop views) ---
+
+def _leaf_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    names = {(r.get('Project Part') or '').strip() for r in rows}
+    has_child = set()
+    for r in rows:
+        p = (r.get('Parent') or '').strip()
+        if p:
+            has_child.add(p)
+    out = []
+    for r in rows:
+        n = (r.get('Project Part') or '').strip()
+        if n and n not in has_child:
+            out.append(r)
+    return out
+
+def _parse_mmddyyyy(s: str):
+    try:
+        import datetime as _dt
+        return _dt.datetime.strptime(s, '%m-%d-%Y').date()
+    except Exception:
+        return None
+
+@app.route('/api/metrics')
+def api_metrics():
+    import datetime as _dt
+    rows = _normalize_db_rows(_fetch_rows())
+    leafs = _leaf_rows(rows)
+    # Status counts (leaf only)
+    status_counts: Dict[str,int] = {}
+    for r in leafs:
+        st = (r.get('Status') or 'Planned').strip() or 'Planned'
+        status_counts[st] = status_counts.get(st, 0) + 1
+    # Percent complete weighted by duration
+    sum_w = 0; sum_wp = 0; done = 0
+    today = _dt.date.today(); overdue = 0; at_risk = 0
+    for r in leafs:
+        try: dur = int(r.get('Duration (days)') or 0)
+        except Exception: dur = 0
+        try: pc = int(r.get('% Complete') or 0)
+        except Exception: pc = 0
+        st = (r.get('Status') or '').strip()
+        sum_w += max(0, dur)
+        sum_wp += pc * max(0, dur)
+        if st == 'Done':
+            done += 1
+        # Overdue / at-risk (mirror desktop logic)
+        end_s = (r.get('Calculated End Date') or '').strip()
+        start_s = (r.get('Start Date') or '').strip()
+        end_dt = _parse_mmddyyyy(end_s)
+        start_dt = _parse_mmddyyyy(start_s)
+        if pc < 100 and end_dt and today > end_dt:
+            overdue += 1
+        elif pc == 0 and start_dt and today > start_dt and st in ('Planned','Blocked'):
+            at_risk += 1
+    overall = (sum_wp / sum_w) if sum_w else 0.0
+    # Critical path (quick pass similar to desktop)
+    try:
+        name_to_row = { (r.get('Project Part') or '').strip(): r for r in rows }
+        graph: Dict[str, List[str]] = {}
+        duration: Dict[str, int] = {}
+        min_date = None
+        import datetime as _dt2
+        for r in rows:
+            n = (r.get('Project Part') or '').strip()
+            deps = [d.strip() for d in (r.get('Dependencies') or '').split(',') if d.strip()]
+            graph[n] = deps
+            try: duration[n] = int(r.get('Duration (days)') or 0)
+            except Exception: duration[n] = 0
+            sd = _parse_mmddyyyy(r.get('Start Date') or '')
+            if sd and (min_date is None or sd < min_date):
+                min_date = sd
+        visited=set(); order=[]
+        def dfs(n):
+            if n in visited: return
+            for d in graph.get(n, []): dfs(d)
+            visited.add(n); order.append(n)
+        for n in graph: dfs(n)
+        base_min = min_date or _dt2.date.today()
+        earliest_finish: Dict[str, _dt2.date] = {}
+        earliest_start: Dict[str, _dt2.date] = {}
+        for n in order:
+            deps = graph.get(n, [])
+            if not deps:
+                s = _parse_mmddyyyy(name_to_row.get(n, {}).get('Start Date') or '')
+                earliest_start[n] = s or base_min
+            else:
+                earliest_start[n] = max([earliest_finish.get(d, base_min) for d in deps]) if deps else base_min
+            earliest_finish[n] = earliest_start[n] + _dt2.timedelta(days=max(0, duration.get(n,0)))
+        project_finish = max(earliest_finish.values()) if earliest_finish else base_min
+        latest_start: Dict[str, _dt2.date] = {}
+        latest_finish: Dict[str, _dt2.date] = {}
+        for n in reversed(order):
+            succ = [k for k, v in graph.items() if n in v]
+            latest_finish[n] = min([latest_start[s] for s in succ]) if succ else project_finish
+            latest_start[n] = latest_finish[n] - _dt2.timedelta(days=max(0, duration.get(n,0)))
+        critical_path = [n for n in order if abs((earliest_start[n]-latest_start[n]).days) <= 0]
+        # Critical percent (leaf-only intersect critical)
+        crit_leafs = [r for r in leafs if (r.get('Project Part') or '').strip() in set(critical_path)]
+        c_w = 0; c_wp = 0
+        for r in crit_leafs:
+            try: dur = int(r.get('Duration (days)') or 0)
+            except Exception: dur = 0
+            try: pc = int(r.get('% Complete') or 0)
+            except Exception: pc = 0
+            c_w += max(0, dur)
+            c_wp += pc * max(0, dur)
+        critical_percent = (c_wp / c_w) if c_w else 0.0
+    except Exception:
+        critical_path = []
+        critical_percent = 0.0
+    data = {
+        'overall_percent': round(overall, 1),
+        'critical_percent': round(critical_percent, 1),
+        'leaf_count': len(leafs),
+        'done_count': done,
+        'overdue': overdue,
+        'at_risk': at_risk,
+        'critical_leaf_count': len(crit_leafs) if 'crit_leafs' in locals() else 0,
+        'status_counts': status_counts,
+        'overdue_list': [],
+        'at_risk_list': [],
+        'critical_path': critical_path,
+    }
+    # Lists (limit to names)
+    overdue_list=[]; at_risk_list=[]
+    for r in leafs:
+        name = (r.get('Project Part') or '').strip()
+        if not name: continue
+        try: dur = int(r.get('Duration (days)') or 0)
+        except Exception: dur = 0
+        try: pc = int(r.get('% Complete') or 0)
+        except Exception: pc = 0
+        st = (r.get('Status') or '').strip()
+        end_s = (r.get('Calculated End Date') or '').strip()
+        start_s = (r.get('Start Date') or '').strip()
+        end_dt = _parse_mmddyyyy(end_s)
+        start_dt = _parse_mmddyyyy(start_s)
+        if pc < 100 and end_dt and _dt.date.today() > end_dt:
+            overdue_list.append(name)
+        elif pc == 0 and start_dt and _dt.date.today() > start_dt and st in ('Planned','Blocked'):
+            at_risk_list.append(name)
+    data['overdue_list'] = overdue_list
+    data['at_risk_list'] = at_risk_list
+    return jsonify(data)
+
+@app.route('/api/costs')
+def api_costs():
+    rows = _normalize_db_rows(_fetch_rows())
+    leafs = _leaf_rows(rows)
+    out = []
+    # Compute totals
+    total_price_sum = 0.0
+    for r in leafs:
+        try: pcost = float(r.get('Production Cost') or 0)
+        except Exception: pcost = 0.0
+        try: icost = float(r.get('Installation Cost') or 0)
+        except Exception: icost = 0.0
+        try: pprice = float(r.get('Production Price') or 0)
+        except Exception: pprice = 0.0
+        try: iprice = float(r.get('Installation Price') or 0)
+        except Exception: iprice = 0.0
+        total_price_sum += (pprice + iprice)
+    for r in leafs:
+        name = (r.get('Project Part') or '').strip()
+        parent = (r.get('Parent') or '').strip()
+        try: pcost = float(r.get('Production Cost') or 0)
+        except Exception: pcost = 0.0
+        try: icost = float(r.get('Installation Cost') or 0)
+        except Exception: icost = 0.0
+        try: pprice = float(r.get('Production Price') or 0)
+        except Exception: pprice = 0.0
+        try: iprice = float(r.get('Installation Price') or 0)
+        except Exception: iprice = 0.0
+        total_cost = pcost + icost
+        total_price = pprice + iprice
+        profit = total_price - total_cost
+        margin_pct = (profit / total_price * 100.0) if total_price else 0.0
+        pct_of_total = (total_price / total_price_sum * 100.0) if total_price_sum else 0.0
+        out.append({
+            'Project Part': name,
+            'Parent': parent,
+            'Prod Cost': round(pcost,2),
+            'Inst Cost': round(icost,2),
+            'Total Cost': round(total_cost,2),
+            'Prod Price': round(pprice,2),
+            'Inst Price': round(iprice,2),
+            'Total Price': round(total_price,2),
+            'Profit $': round(profit,2),
+            'Margin %': round(margin_pct,1),
+            '% of Total Price': round(pct_of_total,1),
+        })
+    return jsonify({ 'columns': ['Project Part','Parent','Prod Cost','Inst Cost','Total Cost','Prod Price','Inst Price','Total Price','Profit $','Margin %','% of Total Price'], 'rows': out })
+
 # Images root + serving
 
 def images_root():
@@ -272,7 +634,8 @@ def images_root():
 
 @app.route('/images/<path:filename>')
 def serve_image(filename: str):
-    if '..' in filename or filename.startswith('/'):
+    # Securely serve files from images_root, allowing subfolders; reject traversal
+    if filename.startswith('/') or '\\' in filename or '..' in filename.split('/'):
         abort(400)
     return send_from_directory(images_root(), filename)
 

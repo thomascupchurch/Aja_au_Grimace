@@ -28,7 +28,7 @@ Write-Host "Ensuring 'waitress' is available in $python" -ForegroundColor DarkCy
 # Set PYTHONPATH to allow importing web.app:app
 $env:PYTHONPATH = "$repo;$web"
 
-if ($V2) {
+if ($V2 -or (Test-Path (Join-Path $web 'v2/app.py'))) {
   $entry = 'web.v2.app:app'
 } else {
   $entry = 'web.app:app'

@@ -35,6 +35,9 @@ Open http://127.0.0.1:5000 and choose a view. Use `/api/debug` to verify DB conn
 - Optionally set `PROJECT_DB_PATH` if falling back to SQLite
 - Reload the web app after syncing files
 
+### v2 default behavior
+- The WSGI entry prefers `v2.app:app` if available and falls back to `app:app` (legacy). To force legacy temporarily, remove or rename the `web/v2` folder, or change the import order in `web/pythonanywhere_wsgi.py`.
+
 ## Notes
 - The web viewer is read‑only. It computes non‑destructive fields (Children, Calculated End Date if missing, % Complete normalization) at request time.
 - Column order and naming mirror the desktop `ProjectDataModel.COLUMNS` to maintain familiarity.

@@ -36,21 +36,60 @@
       <option value="calendar">Calendar</option>
       <option value="timeline">Timeline</option>
       <option value="tree">Tree</option>
-      <option value="images">Images</option>
+  <option value="images">Images</option>
+  <option value="dashboard">Dashboard</option>
+  <option value="costs">Costs</option>
       <option value="database">Database</option>
     </select>
     <label id="view-label">View:</label>
     <select id="view">
       <option>Day</option><option>Week</option><option>Month</option><option>Year</option>
     </select>
+  <button id="zoom-out" title="Zoom Out">-</button>
+    <span id="zoom-label" style="min-width:48px;text-align:center">100%</span>
+  <button id="zoom-in" title="Zoom In">+</button>
+  <button id="zoom-reset" title="Reset Zoom">Reset</button>
+  <label style="margin-left:8px">Deps <input id="toggle-deps" type="checkbox" checked></label>
+  <label style="margin-left:8px">Critical <input id="toggle-critical" type="checkbox" checked></label>
+  <label style="margin-left:8px">Shade <input id="toggle-shade" type="checkbox" checked></label>
     <button id="refresh">Refresh</button>
+    <button id="export-csv" title="Export current view (CSV)">Export CSV</button>
+    <button id="export-img" title="Export image">Export…</button>
+    <label style="margin-left:8px">Status</label>
+    <select id="filter-status">
+      <option value="">All</option>
+      <option>Planned</option>
+      <option>In Progress</option>
+      <option>Blocked</option>
+      <option>Done</option>
+      <option>Deferred</option>
+    </select>
+    <label style="margin-left:8px">Parent</label>
+    <select id="filter-parent"><option value="">All</option></select>
+    <label style="margin-left:8px"><input id="filter-critical-only" type="checkbox"> Only Critical</label>
     <span id="info" style="margin-left:auto;color:var(--muted);font-size:12px"></span>
   </div>
-  <main>
-    <section id="gantt-view" class="view"></section>
+  <div id="legend" style="display:flex;gap:12px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--border);font-size:12px;color:#ddd">
+    <span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:14px;height:10px;background:#333;border-radius:3px"></span> Bar</span>
+    <span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:14px;height:10px;background:#FF8200;border-radius:3px"></span> Progress</span>
+    <span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:14px;height:10px;background:#DAA520;border-radius:3px"></span> Critical</span>
+    <span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:14px;height:10px;border:2px solid red;border-radius:3px"></span> Overdue</span>
+    <span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:14px;height:10px;border:2px solid #FFA500;border-radius:3px"></span> At Risk</span>
+    <span style="display:inline-flex;align-items:center;gap:6px">
+      <svg width="22" height="10"><path d="M1 5 L11 5 L11 5 L21 5" stroke="#FFAA28" fill="none"/></svg> Dependency
+    </span>
+  </div>
+  <main style="display:grid; grid-template-columns: 1fr 360px; gap: 8px; align-items: start;">
+    <section id="gantt-view" class="view" style="grid-column:1 / 2;"></section>
     <section id="calendar-view" class="view" hidden></section>
     <section id="timeline-view" class="view" hidden></section>
     <section id="tree-view" class="view" hidden></section>
+    <section id="dashboard-view" class="view" hidden>
+      <div id="dash"></div>
+    </section>
+    <section id="costs-view" class="view" hidden>
+      <div id="costs" style="overflow:auto;max-height:70vh"></div>
+    </section>
     <section id="images-view" class="view" hidden>
       <input id="img-filter" placeholder="Filter images..." />
       <div id="images" class="grid"></div>
@@ -59,24 +98,88 @@
       <input id="db-filter" placeholder="Filter by Project Part/Parent..." />
       <div id="db" style="overflow:auto;max-height:70vh"></div>
     </section>
+    <aside id="details" style="grid-column:2 / 3; position:sticky; top:8px; max-height: calc(100vh - 220px); overflow:auto; background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:8px;">
+      <div style="font-weight:600; margin-bottom:6px;">Details</div>
+      <div id="details-body" class="empty">Select a task or row</div>
+    </aside>
   </main>
+  <!-- Export modal -->
+  <dialog id="export-dialog" style="border:1px solid var(--border);background:var(--bg2);color:var(--text);border-radius:8px;padding:12px;">
+    <form method="dialog">
+      <div style="font-weight:600;margin-bottom:8px">Export Gantt</div>
+      <div style="display:grid;grid-template-columns:140px 1fr;gap:8px;align-items:center;">
+        <label>Format</label>
+        <select id="exp-format"><option>SVG</option><option>PNG</option></select>
+        <label>Scale</label>
+        <input id="exp-scale" type="number" min="0.25" max="4" step="0.25" value="1" />
+        <label>Background</label>
+        <select id="exp-bg"><option value="#ffffff">White</option><option value="transparent">Transparent</option><option value="#4B4B4B">Dark</option></select>
+        <label>Filename</label>
+        <input id="exp-name" value="gantt_export" />
+        <label>Paper</label>
+        <select id="exp-paper"><option value="">None</option><option value="letter">Letter (8.5×11in)</option><option value="a4">A4 (210×297mm)</option></select>
+        <label>Orientation</label>
+        <select id="exp-orient"><option>Portrait</option><option>Landscape</option></select>
+        <label>Margin (mm)</label>
+        <input id="exp-margin" type="number" min="0" max="50" step="1" value="10" />
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+        <button value="cancel">Cancel</button>
+        <button id="exp-run" value="default">Export</button>
+      </div>
+    </form>
+  </dialog>
   <footer><span>{{ watermark }}</span></footer>
   <script>
-    let tasks = null, dbdata = null, images = null, mode = 'gantt';
+  let tasks = null, dbdata = null, images = null, metrics = null, costs = null, mode = 'gantt', selected = null;
+  // Zoom state (persisted)
+  const ZKEY = 'ganttZoomPct';
+  let zoomPct = parseInt(localStorage.getItem(ZKEY) || '100', 10);
+  function clampZoom(p){ return Math.max(25, Math.min(300, p)); }
+  function setZoom(p){ zoomPct = clampZoom(p); localStorage.setItem(ZKEY, String(zoomPct)); document.getElementById('zoom-label').textContent = zoomPct + '%'; refresh(); }
+  document.getElementById('zoom-in').addEventListener('click', ()=> setZoom(zoomPct + 10));
+  document.getElementById('zoom-out').addEventListener('click', ()=> setZoom(zoomPct - 10));
+  document.getElementById('zoom-reset').addEventListener('click', ()=> setZoom(100));
+  document.getElementById('zoom-label').textContent = zoomPct + '%';
+  // Toggles
+  const elDeps = document.getElementById('toggle-deps');
+  const elCrit = document.getElementById('toggle-critical');
+  const elShade = document.getElementById('toggle-shade');
+  [elDeps, elCrit, elShade].forEach(el=> el.addEventListener('change', ()=> refresh()));
+  // Keyboard zoom + Ctrl+wheel
+  window.addEventListener('keydown', (e)=>{
+    if((e.ctrlKey||e.metaKey) && (e.key==='='||e.key==='+')){ e.preventDefault(); setZoom(zoomPct+10); }
+    else if((e.ctrlKey||e.metaKey) && (e.key==='-')){ e.preventDefault(); setZoom(zoomPct-10); }
+    else if((e.ctrlKey||e.metaKey) && (e.key==='0')){ e.preventDefault(); setZoom(100); }
+  });
+  window.addEventListener('wheel', (e)=>{ if(e.ctrlKey){ e.preventDefault(); setZoom(zoomPct + (e.deltaY<0? 5 : -5)); } }, {passive:false});
     document.getElementById('display').addEventListener('change', (e) => setMode(e.target.value));
     document.getElementById('refresh').addEventListener('click', () => refresh());
+    document.getElementById('view').addEventListener('change', () => {
+      if(mode==='gantt' || mode==='timeline' || mode==='calendar') refresh();
+    });
+  document.getElementById('export-csv').addEventListener('click', () => exportCsv());
     document.getElementById('img-filter').addEventListener('input', () => renderImages());
     document.getElementById('db-filter').addEventListener('input', () => renderDb());
+  // Filters
+  document.getElementById('filter-status').addEventListener('change', ()=> refresh());
+  document.getElementById('filter-parent').addEventListener('change', ()=> refresh());
+  document.getElementById('filter-critical-only').addEventListener('change', ()=> refresh());
 
     function setMode(m){ mode = m; const ids=['gantt','calendar','timeline','tree','images','db'];
-      ids.forEach(id => { const el = document.getElementById(id + (id==='db' ? '-view' : (id==='images' ? '-view' : '-view')));});
       document.getElementById('gantt-view').hidden = m!=='gantt';
       document.getElementById('calendar-view').hidden = m!=='calendar';
       document.getElementById('timeline-view').hidden = m!=='timeline';
       document.getElementById('tree-view').hidden = m!=='tree';
       document.getElementById('images-view').hidden = m!=='images';
       document.getElementById('db-view').hidden = m!=='database';
-      document.getElementById('view').parentElement.style.display = (m==='gantt' ? '' : 'none');
+      document.getElementById('dashboard-view').hidden = m!=='dashboard';
+      document.getElementById('costs-view').hidden = m!=='costs';
+      const viewSel = document.getElementById('view');
+      const viewLbl = document.getElementById('view-label');
+      const showView = (m==='gantt' || m==='calendar' || m==='timeline');
+      viewSel.style.display = showView ? '' : 'none';
+      viewLbl.style.display = showView ? '' : 'none';
       refresh();
     }
 
@@ -88,16 +191,432 @@
       }catch(_){ info.textContent=''; }
       if(mode==='images') return renderImages(true);
       if(mode==='database') return renderDb(true);
+      if(mode==='dashboard') return renderDashboard(true);
+      if(mode==='costs') return renderCosts(true);
       return loadTasks();
     }
 
+    function dateToX(d0, d, scaleDays, pxPerDay){
+      const t0 = new Date(d0 + 'T00:00:00Z'); const t = new Date(d + 'T00:00:00Z');
+      const dt = (t - t0) / (1000*60*60*24); return dt * pxPerDay;
+    }
+    function addShading(svg, t0, t1, padL, pxPerDay, h){
+      // Shade weekends and common US holidays
+      const ns = svg.namespaceURI; const start = new Date(t0+'T00:00:00'); const end = new Date(t1+'T00:00:00');
+      // Weekends
+      for(let d=new Date(start); d<=end; d=new Date(d.getTime()+86400000)){
+        const dow = d.getDay(); // 0 Sun..6 Sat
+        if(dow===0 || dow===6){
+          const x = padL + dateToX(t0, d.toISOString().slice(0,10), 1, pxPerDay);
+          const r = document.createElementNS(ns,'rect'); r.setAttribute('x', x); r.setAttribute('y', 0); r.setAttribute('width', Math.max(1, pxPerDay)); r.setAttribute('height', h);
+          r.setAttribute('fill', '#dcdcdc'); r.setAttribute('fill-opacity','0.28'); r.setAttribute('stroke','none'); svg.appendChild(r);
+        }
+      }
+      // Holidays (approx US federal)
+      const holSet = buildHolidays(start.getFullYear(), end.getFullYear());
+      holSet.forEach(iso=>{
+        const d = new Date(iso+'T00:00:00'); if(d<start||d>end) return;
+        const x = padL + dateToX(t0, iso, 1, pxPerDay);
+        const r = document.createElementNS(ns,'rect'); r.setAttribute('x', x); r.setAttribute('y', 0); r.setAttribute('width', Math.max(1, pxPerDay)); r.setAttribute('height', h);
+        r.setAttribute('fill', '#FFD700'); r.setAttribute('fill-opacity','0.18'); r.setAttribute('stroke','none'); svg.appendChild(r);
+      });
+    }
+    function buildHolidays(yStart, yEnd){
+      const out = new Set();
+      for(let y=yStart; y<=yEnd; y++){
+        const iso=(d)=> d.toISOString().slice(0,10);
+        const nthDow = (n, dow, m)=>{ const d=new Date(y,m,1); const add=(dow - d.getDay() + 7)%7; d.setDate(1+add + (n-1)*7); return d; };
+        const lastDow = (dow, m)=>{ const d=new Date(y,m+1,0); const sub=(d.getDay()-dow+7)%7; d.setDate(d.getDate()-sub); return d; };
+        out.add(`${y}-01-01`); // New Year
+        out.add(iso(nthDow(3,1,0))); // MLK 3rd Mon Jan
+        out.add(iso(nthDow(3,1,1))); // Presidents 3rd Mon Feb
+        out.add(iso(lastDow(1,4))); // Memorial last Mon May
+        out.add(`${y}-07-04`); // Independence
+        out.add(iso(nthDow(1,1,8))); // Labor 1st Mon Sep
+        out.add(iso(nthDow(2,1,9))); // Indigenous/Columbus 2nd Mon Oct
+        out.add(`${y}-11-11`); // Veterans
+        // Thanksgiving: 4th Thu Nov
+        const tg = nthDow(4,4,10); out.add(iso(tg));
+        out.add(`${y}-12-25`); // Christmas
+      }
+      return out;
+    }
+    function addTickLines(svg, t0, t1, padL, pxPerDay, h){
+      const ns = svg.namespaceURI; const g = document.createElementNS(ns,'g');
+      const d0 = new Date(t0+'T00:00:00'); const d1 = new Date(t1+'T00:00:00');
+      const view = document.getElementById('view').value;
+      // choose step: Day/Week/Month/Year
+      let stepDays = 1; if(view==='Week') stepDays=7; else if(view==='Month') stepDays=30; else if(view==='Year') stepDays=365;
+      let cur = new Date(d0);
+      const lbl = (dt)=>{
+        const y=dt.getFullYear(), m=String(dt.getMonth()+1).padStart(2,'0'), d=String(dt.getDate()).padStart(2,'0');
+        if(view==='Day') return `${m}/${d}`; if(view==='Week') return `Wk ${getWeek(dt)}`; if(view==='Month') return `${m}/${y%100}`; return `${y}`;
+      };
+      function fmtISO(dt){ return dt.toISOString().slice(0,10); }
+      function getWeek(dt){ const onejan = new Date(dt.getFullYear(),0,1); return Math.ceil((((dt - onejan) / 86400000) + onejan.getDay()+1)/7); }
+      while(cur <= d1){
+        const x = padL + dateToX(t0, fmtISO(cur), 1, pxPerDay);
+        const line = document.createElementNS(ns,'line'); line.setAttribute('x1',x); line.setAttribute('x2',x); line.setAttribute('y1',0); line.setAttribute('y2',h);
+        line.setAttribute('stroke','#374151'); line.setAttribute('stroke-width','1'); g.appendChild(line);
+        const text = document.createElementNS(ns,'text'); text.setAttribute('x', x+4); text.setAttribute('y', 14);
+        text.setAttribute('fill','#9ca3af'); text.setAttribute('font-size','11'); text.textContent = lbl(cur);
+        g.appendChild(text);
+        cur = new Date(cur.getTime() + stepDays*24*60*60*1000);
+      }
+      // Today marker
+      const today = new Date(); const xToday = padL + dateToX(t0, today.toISOString().slice(0,10), 1, pxPerDay);
+      if(xToday >= padL && xToday <= parseFloat(svg.getAttribute('width')||'0')){
+        const tl = document.createElementNS(ns,'line'); tl.setAttribute('x1', xToday); tl.setAttribute('x2', xToday); tl.setAttribute('y1', 0); tl.setAttribute('y2', h);
+        tl.setAttribute('stroke','#ef4444'); tl.setAttribute('stroke-width','1.5'); tl.setAttribute('stroke-dasharray','4,4'); g.appendChild(tl);
+      }
+      svg.appendChild(g);
+    }
+    function pxPerDayForView(){
+      const v = document.getElementById('view').value;
+      let base = 18;
+      if(v==='Day') base = 26; else if(v==='Week') base = 12; else if(v==='Month') base = 6; else if(v==='Year') base = 1.8;
+      return base * (zoomPct/100);
+    }
+    // Grouping controls (inline UI for now)
+    const groupingUI = (()=>{
+      const host = document.querySelector('.toolbar');
+      const gp = document.createElement('label'); gp.style.marginLeft='8px'; gp.textContent='Group preds:';
+      const gcb = document.createElement('input'); gcb.type='checkbox'; gcb.id='group-preds'; gcb.style.marginLeft='6px';
+      const gcpLbl = document.createElement('label'); gcpLbl.textContent='Cross-parent:'; gcpLbl.style.marginLeft='8px';
+      const gcp = document.createElement('input'); gcp.type='checkbox'; gcp.id='group-cross-parent'; gcp.style.marginLeft='6px';
+      const ws = document.createElement('select'); ws.id='group-weight'; ws.style.marginLeft='8px';
+      ['Weight: Successors','Weight: Original','Weight: Start Date','Weight: Reverse Start Date','Weight: Duration','Weight: Criticality','Weight: Criticality then Start Date']
+        .forEach(x=>{ const o=document.createElement('option'); o.textContent=x; ws.appendChild(o); });
+      host.appendChild(gp); host.appendChild(gcb); host.appendChild(gcpLbl); host.appendChild(gcp); host.appendChild(ws);
+      [gcb,gcp,ws].forEach(el=> el.addEventListener('change', ()=> refresh()));
+      return {gcb,gcp,ws};
+    })();
     async function loadTasks(){
       const el = document.getElementById('gantt-view'); el.innerHTML = '';
       try{ tasks = await fetch('/api/tasks').then(r=>r.json()); }
       catch(e){ el.innerHTML = `<div class='empty'>${e}</div>`; return; }
       if(!tasks || !tasks.length){ el.innerHTML = `<div class='empty'>No tasks</div>`; return; }
-      el.innerHTML = `<pre style='white-space:pre-wrap'>`+JSON.stringify(tasks.slice(0,5), null, 2)+`\n… (${tasks.length} total)</pre>`;
+      // Populate Parent filter
+      const parents = new Set(); tasks.forEach(t=>{ if(t.parent_id) parents.add(t.parent_id); });
+      const fpar = document.getElementById('filter-parent'); const oldSel = fpar.value; const opts = [''].concat(Array.from(parents));
+      fpar.innerHTML = opts.map(v=>`<option value="${v}">${v||'All'}</option>`).join(''); fpar.value = oldSel && opts.includes(oldSel) ? oldSel : '';
+      // Apply filters
+      const st = document.getElementById('filter-status').value;
+      const par = document.getElementById('filter-parent').value;
+      const onlyCrit = document.getElementById('filter-critical-only').checked;
+      let filtered = tasks.slice();
+      if(st) filtered = filtered.filter(t=> (t.status||'') === st);
+      if(par) filtered = filtered.filter(t=> (t.parent_id||'') === par);
+      if(onlyCrit) filtered = filtered.filter(t=> !!t.critical);
+      if(!filtered.length){ el.innerHTML = `<div class='empty'>No tasks match filters</div>`; return; }
+      // Determine time bounds
+      const starts = tasks.map(t=>t.start).filter(Boolean).sort();
+      const ends = tasks.map(t=>t.end).filter(Boolean).sort();
+      const t0 = starts[0]; const t1 = ends[ends.length-1];
+      if(!t0 || !t1){ el.innerHTML = `<div class='empty'>No dated tasks</div>`; return; }
+      const pxPerDay = pxPerDayForView();
+      // Canvas size
+  const rows = filtered.length; const rowH = 22; const padL = 200; const h = 28 + rows*rowH + 20;
+      const xMax = Math.ceil((new Date(t1) - new Date(t0))/(1000*60*60*24))*pxPerDay + padL + 40;
+      const svg = document.createElementNS('http://www.w3.org/2000/svg','svg'); svg.setAttribute('width', xMax); svg.setAttribute('height', h);
+  // Shading, Ticks, Today
+  if(document.getElementById('toggle-shade').checked){ addShading(svg, t0, t1, padL, pxPerDay, h); }
+  addTickLines(svg, t0, t1, padL, pxPerDay, h);
+      const g = document.createElementNS(svg.namespaceURI, 'g'); svg.appendChild(g);
+      // Optional grouping / reordering before render
+  let list = filtered.slice();
+      try {
+        const group = document.getElementById('group-preds').checked;
+        if(group){
+          const cross = document.getElementById('group-cross-parent').checked;
+          const strategy = document.getElementById('group-weight').value;
+          // Build maps
+          const byId = {}; list.forEach(t=>{ if(t.id) byId[t.id] = t; });
+          const dependencies = {}; const successors = {}; const parentOf = {}; const rootOf = {};
+          const roots = {}; // cache root parent
+          list.forEach(t=>{
+            parentOf[t.id] = t.parent_id || '';
+            const deps = String(t.dependencies||'').split(',').map(s=>s.trim()).filter(Boolean);
+            dependencies[t.id] = deps.filter(d=>byId[d]);
+            deps.forEach(d=>{ (successors[d] = successors[d]||[]).push(t.id); });
+          });
+          function findRoot(id){ let cur = id; const seen = new Set(); while(cur && !seen.has(cur)){ seen.add(cur); const p = parentOf[cur]; if(!p) return cur; cur = p; } return cur; }
+          Object.keys(byId).forEach(id=>{ rootOf[id] = findRoot(id); });
+          // Aux weights
+          const succCount = {}; Object.entries(successors).forEach(([k,arr])=> succCount[k] = (arr||[]).length);
+          const nameToStart = {}; const nameToDuration = {};
+          list.forEach(t=>{ nameToDuration[t.id] = parseInt(t.duration||0,10) || 0; nameToStart[t.id] = t.start ? new Date(t.start+'T00:00:00') : null; });
+          function weightKey(p){
+            const base = list.findIndex(x=>x.id===p);
+            switch(strategy){
+              case 'Weight: Successors': return [- (succCount[p]||0), base];
+              case 'Weight: Original': return [0, base];
+              case 'Weight: Start Date': { const sd = nameToStart[p]; return [sd?0:1, sd?sd.getTime():Infinity, base]; }
+              case 'Weight: Reverse Start Date': { const sd = nameToStart[p]; return [sd?0:1, sd?-sd.getTime():Infinity, base]; }
+              case 'Weight: Duration': return [-(nameToDuration[p]||0), base];
+              case 'Weight: Criticality': return [-(byId[p]?.critical?1:0), -(succCount[p]||0), base];
+              case 'Weight: Criticality then Start Date': {
+                const sd = nameToStart[p];
+                return [-(byId[p]?.critical?1:0), sd?0:1, sd?sd.getTime():Infinity, base];
+              }
+              default: return [- (succCount[p]||0), base];
+            }
+          }
+          // Group preds near successors
+          let seq = list.map(t=>t.id);
+          let i=0; while(i<seq.length){ const s = seq[i]; const preds = (dependencies[s]||[]).filter(p=> seq.includes(p));
+            const parentS = parentOf[s];
+            const eligible = preds.filter(p=> cross ? (rootOf[p]===rootOf[s]) : (parentOf[p]===parentS));
+            if(eligible.length >= 2){
+              const predsInOrder = seq.filter(x=> eligible.includes(x));
+              const sorted = predsInOrder.sort((a,b)=>{
+                const ka = weightKey(a), kb = weightKey(b); const la = ka.length, lb = kb.length; for(let j=0;j<Math.max(la,lb);j++){ const va=ka[j]??0, vb=kb[j]??0; if(va<vb) return -1; if(va>vb) return 1; } return 0; });
+              const sIdx = seq.indexOf(s);
+              const blockStart = Math.max(0, sIdx - sorted.length);
+              if(seq.slice(blockStart, sIdx).join(',') !== sorted.join(',')){
+                seq = seq.filter(x=> !sorted.includes(x));
+                const newSIdx = seq.indexOf(s);
+                seq.splice(newSIdx, 0, ...sorted);
+                i = seq.indexOf(s) + 1; continue;
+              }
+            }
+            i++;
+          }
+          // Remap list by new order
+          const pos = {}; seq.forEach((id,idx)=> pos[id]=idx);
+          list.sort((a,b)=> (pos[a.id]??0) - (pos[b.id]??0));
+        }
+      } catch(e) { /* no-op */ }
+
+      // Y labels and bars
+  const drawTasks = list;
+      const pos = {}; // id -> {x,y,w}
+      drawTasks.forEach((t, i)=>{
+  const y = 20 + i*rowH;
+  const label = document.createElementNS(svg.namespaceURI,'text'); label.setAttribute('x', 6); label.setAttribute('y', y+14);
+  label.setAttribute('fill','#e5e7eb'); label.setAttribute('font-size','12'); label.textContent = t.name || t.id; 
+  label.style.cursor = 'pointer'; label.addEventListener('click', ()=> selectTask(t));
+  g.appendChild(label);
+        if(t.start && t.end){
+          const x = padL + dateToX(t0, t.start, 1, pxPerDay);
+          const x2 = padL + dateToX(t0, t.end, 1, pxPerDay);
+          const w = Math.max(2, x2 - x);
+          const rect = document.createElementNS(svg.namespaceURI,'rect'); rect.setAttribute('x', x); rect.setAttribute('y', y);
+          rect.setAttribute('width', w); rect.setAttribute('height', 14);
+          rect.setAttribute('rx', 4); rect.setAttribute('fill', t.color || '#333333');
+          rect.setAttribute('data-id', t.id||'');
+          // Outline for risk states (match desktop: red overdue, orange at-risk)
+          if(t.risk === 'overdue'){
+            rect.setAttribute('stroke', '#ff0000'); rect.setAttribute('stroke-width', '2');
+          } else if(t.risk === 'at_risk'){
+            rect.setAttribute('stroke', '#FFA500'); rect.setAttribute('stroke-width', '2');
+          }
+          rect.style.cursor = 'pointer'; rect.addEventListener('click', ()=> selectTask(t));
+          g.appendChild(rect);
+          // progress overlay
+          const pw = Math.round(w * (Math.min(100, Math.max(0, t.progress||0))/100));
+          const pr = document.createElementNS(svg.namespaceURI,'rect'); pr.setAttribute('x', x); pr.setAttribute('y', y);
+          const progCol = (document.getElementById('toggle-critical').checked && t.critical) ? '#DAA520' : (t.color_progress || '#FF8200');
+          pr.setAttribute('width', pw); pr.setAttribute('height', 14); pr.setAttribute('rx', 4); pr.setAttribute('fill', progCol);
+          // Let clicks pass through overlay to the base bar
+          pr.setAttribute('pointer-events','none'); pr.style.pointerEvents = 'none';
+          g.appendChild(pr);
+          pos[t.id] = {x, y, w};
+          // Milestone diamond if zero duration
+          if((t.duration||0) <= 0 || t.start===t.end){
+            const cx = x; const cy = y + 7; const s = 6;
+            const path = document.createElementNS(svg.namespaceURI,'path');
+            path.setAttribute('d', `M ${cx} ${cy-s} L ${cx+s} ${cy} L ${cx} ${cy+s} L ${cx-s} ${cy} Z`);
+            path.setAttribute('fill', '#333333'); path.setAttribute('stroke', '#FF8200'); path.setAttribute('stroke-width','2');
+            g.appendChild(path);
+          }
+        }
+      });
+  // Dependency lines (elbows)
+      const drawDeps = document.getElementById('toggle-deps').checked;
+      const gl = document.createElementNS(svg.namespaceURI,'g'); svg.appendChild(gl);
+      if(drawDeps) drawTasks.forEach(t=>{
+        if(!t.dependencies) return; const deps = String(t.dependencies||'').split(',').map(s=>s.trim()).filter(Boolean);
+        const dst = pos[t.id]; if(!dst) return;
+        deps.forEach(did=>{
+          const src = pos[did]; if(!src) return;
+          const x1 = src.x + src.w; const y1 = src.y + 7; const x2 = dst.x; const y2 = dst.y + 7;
+          // Draw horizontal from src to mid, then vertical to dst
+          const mid = (x1 + x2) / 2;
+          const path = document.createElementNS(svg.namespaceURI,'path');
+          path.setAttribute('d', `M ${x1} ${y1} L ${mid} ${y1} L ${mid} ${y2} L ${x2} ${y2}`);
+          path.setAttribute('fill','none'); path.setAttribute('stroke', '#FFAA28'); path.setAttribute('stroke-width','1');
+          gl.appendChild(path);
+          // arrow head
+          const ah = document.createElementNS(svg.namespaceURI,'path');
+          ah.setAttribute('d', `M ${x2-4} ${y2-3} L ${x2} ${y2} L ${x2-4} ${y2+3}`);
+          ah.setAttribute('fill','none'); ah.setAttribute('stroke','#FFAA28'); ah.setAttribute('stroke-width','1');
+          gl.appendChild(ah);
+        });
+      });
+      // Defer selection highlight draw to global updater so it can run after click without re-render
+      el.appendChild(svg);
+      updateSelectionHighlight();
+      // Timeline view (proper horizontal bars packed into non-overlapping lanes)
+  const timeline = document.getElementById('timeline-view');
+      try {
+        const tlPadL = 60; // space for tick labels
+        const laneH = 18; const topPad = 24; const bottomPad = 16;
+        const tlPxPerDay = pxPerDayForView();
+        // Precompute task spans in pixels and filter invalid
+        const spans = drawTasks.filter(t=>t.start && t.end).map(t=>{
+          const x1 = tlPadL + dateToX(t0, t.start, 1, tlPxPerDay);
+          const x2 = tlPadL + dateToX(t0, t.end, 1, tlPxPerDay);
+          return { t, x1: Math.min(x1,x2), x2: Math.max(x1,x2) };
+        }).sort((a,b)=> a.x1 - b.x1 || (a.x2-a.x1) - (b.x2-b.x1));
+        // Pack into lanes greedily
+        const lanes = []; // each lane keeps last x2
+        const placed = spans.map(sp => ({...sp, lane: 0}));
+        for(const p of placed){
+          let assigned = false;
+          for(let i=0;i<lanes.length;i++){
+            if(lanes[i] <= p.x1 - 4){ p.lane = i; lanes[i] = p.x2; assigned = true; break; }
+          }
+          if(!assigned){ p.lane = lanes.length; lanes.push(p.x2); }
+        }
+        const tlRows = Math.max(1, lanes.length);
+        const tlH = topPad + tlRows * laneH + bottomPad;
+        const tlWidth = Math.ceil((new Date(t1) - new Date(t0))/(1000*60*60*24)) * tlPxPerDay + tlPadL + 40;
+        const tlSvg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+        tlSvg.setAttribute('width', tlWidth);
+        tlSvg.setAttribute('height', tlH);
+        // Shading + Ticks + Today
+        if(document.getElementById('toggle-shade').checked){ addShading(tlSvg, t0, t1, tlPadL, tlPxPerDay, tlH); }
+        addTickLines(tlSvg, t0, t1, tlPadL, tlPxPerDay, tlH);
+        const tlGroup = document.createElementNS(tlSvg.namespaceURI,'g'); tlSvg.appendChild(tlGroup);
+  // Draw each placed task
+        for(const p of placed){
+          const y = topPad + p.lane * laneH;
+          const w = Math.max(2, p.x2 - p.x1);
+          // Base bar
+          const r = document.createElementNS(tlSvg.namespaceURI,'rect');
+          r.setAttribute('x', p.x1); r.setAttribute('y', y);
+          r.setAttribute('width', w); r.setAttribute('height', 10); r.setAttribute('rx', 4);
+          r.setAttribute('fill', p.t.color || '#333333');
+          r.setAttribute('data-id', p.t.id||'');
+          if(p.t.risk === 'overdue'){ r.setAttribute('stroke','#ff0000'); r.setAttribute('stroke-width','2'); }
+          else if(p.t.risk === 'at_risk'){ r.setAttribute('stroke','#FFA500'); r.setAttribute('stroke-width','2'); }
+          r.style.cursor = 'pointer'; r.addEventListener('click', ()=> selectTask(p.t));
+          tlGroup.appendChild(r);
+          // Progress inner overlay
+          const pw = Math.round(w * (Math.min(100, Math.max(0, p.t.progress||0))/100));
+          if(pw > 0){
+            const pr = document.createElementNS(tlSvg.namespaceURI,'rect');
+            pr.setAttribute('x', p.x1); pr.setAttribute('y', y);
+            pr.setAttribute('width', pw); pr.setAttribute('height', 10); pr.setAttribute('rx', 4);
+            const progCol = (document.getElementById('toggle-critical').checked && p.t.critical) ? '#DAA520' : (p.t.color_progress || '#FF8200');
+            pr.setAttribute('fill', progCol);
+            pr.setAttribute('pointer-events','none'); pr.style.pointerEvents='none';
+            tlGroup.appendChild(pr);
+          }
+          // Label to the right of the bar (or inside if space)
+          const label = document.createElementNS(tlSvg.namespaceURI,'text');
+          const inset = 4;
+          const placeInside = (w >= 80);
+          label.setAttribute('x', placeInside ? (p.x1 + inset) : (p.x2 + 6));
+          label.setAttribute('y', y + 9);
+          label.setAttribute('fill', placeInside ? '#e5e7eb' : '#cbd5e1');
+          label.setAttribute('font-size','11');
+          label.textContent = p.t.name || p.t.id;
+          label.style.cursor = 'pointer';
+          label.addEventListener('click', ()=> selectTask(p.t));
+          tlGroup.appendChild(label);
+          // Milestone diamond for zero-duration
+          if((p.t.duration||0) <= 0 || p.t.start===p.t.end){
+            const cx = p.x1; const cy = y + 5; const s = 6;
+            const d = document.createElementNS(tlSvg.namespaceURI,'path');
+            d.setAttribute('d', `M ${cx} ${cy-s} L ${cx+s} ${cy} L ${cx} ${cy+s} L ${cx-s} ${cy} Z`);
+            d.setAttribute('fill', '#333333'); d.setAttribute('stroke', '#FF8200'); d.setAttribute('stroke-width','2');
+            tlGroup.appendChild(d);
+          }
+        }
+        // Dependency elbows (use placed positions)
+        const tlLines = document.createElementNS(tlSvg.namespaceURI,'g'); tlSvg.appendChild(tlLines);
+        // Build map from id to placed span for quick lookup
+        const byIdPlaced = {}; placed.forEach(p=>{ if(p.t.id) byIdPlaced[p.t.id] = p; });
+        const drawDepsTL = document.getElementById('toggle-deps').checked;
+        for(const p of placed){ if(!drawDepsTL) break;
+          const dst = p; const deps = String(dst.t.dependencies||'').split(',').map(s=>s.trim()).filter(Boolean);
+          for(const did of deps){
+            const src = byIdPlaced[did]; if(!src) continue;
+            const x1 = src.x2; const y1 = topPad + src.lane * laneH + 5;
+            const x2 = dst.x1; const y2 = topPad + dst.lane * laneH + 5;
+            const mid = (x1 + x2) / 2;
+            const path = document.createElementNS(tlSvg.namespaceURI,'path');
+            path.setAttribute('d', `M ${x1} ${y1} L ${mid} ${y1} L ${mid} ${y2} L ${x2} ${y2}`);
+            path.setAttribute('fill','none'); path.setAttribute('stroke', '#FFAA28'); path.setAttribute('stroke-width','1');
+            tlLines.appendChild(path);
+            const ah = document.createElementNS(tlSvg.namespaceURI,'path');
+            ah.setAttribute('d', `M ${x2-4} ${y2-3} L ${x2} ${y2} L ${x2-4} ${y2+3}`);
+            ah.setAttribute('fill','none'); ah.setAttribute('stroke','#FFAA28'); ah.setAttribute('stroke-width','1');
+            tlLines.appendChild(ah);
+          }
+        }
+        timeline.innerHTML = '';
+        timeline.appendChild(tlSvg);
+        updateSelectionHighlight();
+      } catch(e) {
+        timeline.innerHTML = `<div class='empty'>${e}</div>`;
+      }
+      // Basic tree view (by parent_id)
+  const tree = document.getElementById('tree-view');
+  const byParent = {}; drawTasks.forEach(t=>{ const p=t.parent_id||'__root__'; (byParent[p]=byParent[p]||[]).push(t); });
+      function renderBranch(pid, depth){ const kids = byParent[pid]||[]; let html='';
+        for(const k of kids){ html += `<div style='padding-left:${depth*16}px'><span class='tree-name' data-id='${k.id}'>${k.name}</span></div>` + renderBranch(k.id, depth+1); }
+        return html; }
+      tree.innerHTML = renderBranch('__root__', 0);
+      tree.querySelectorAll('.tree-name').forEach(el=>{ el.style.cursor='pointer'; el.onclick = ()=>{ const id = el.getAttribute('data-id'); const t = tasks.find(x=>x.id===id); if(t) selectTask(t); };});
+
+  // Calendar view (simple month grid from earliest start)
+      const calHost = document.getElementById('calendar-view');
+      try {
+        const starts = tasks.map(t=>t.start).filter(Boolean).sort();
+        const base = starts[0] ? new Date(starts[0]+'T00:00:00') : new Date();
+        const year = base.getFullYear(); const month = base.getMonth();
+        const first = new Date(year, month, 1);
+        const last = new Date(year, month+1, 0);
+        const startDow = (first.getDay()+6)%7; // make Monday=0
+        const days = last.getDate();
+        const cells = [];
+        for(let i=0;i<startDow;i++) cells.push(null);
+        for(let d=1; d<=days; d++) cells.push(new Date(year, month, d));
+        while(cells.length % 7 !== 0) cells.push(null);
+        const fmt = (dt)=> dt.toISOString().slice(0,10);
+        const overlaps = (t, dt)=>{
+          if(!t.start || !t.end) return false;
+          const s = new Date(t.start+'T00:00:00'); const e = new Date(t.end+'T00:00:00');
+          return s <= dt && dt <= e;
+        };
+        let html = "<table><thead><tr>" + ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d=>`<th>${d}</th>`).join('') + "</tr></thead><tbody>";
+        for(let r=0; r<cells.length/7; r++){
+          html += '<tr>';
+          for(let c=0; c<7; c++){
+            const idx = r*7+c; const dt = cells[idx];
+            if(!dt){ html += `<td style='vertical-align:top;height:92px;background:#2b2b2b'></td>`; continue; }
+            const dayTasks = tasks.filter(t=>overlaps(t, dt));
+            html += `<td style='vertical-align:top;height:92px;background:#2b2b2b'>`+
+              `<div style='font-size:11px;color:#cbd5e1;margin-bottom:4px'>${dt.getDate()}</div>`+
+              `<div style='display:flex;flex-direction:column;gap:2px;max-height:70px;overflow:auto'>`+
+              dayTasks.slice(0,5).map(t=>`<div class='cal-pill' data-id='${t.id}' style='padding:2px 4px;border-radius:4px;background:${t.color_progress||'#94a3b8'};color:#111;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>${escapeHtml(t.name||t.id)}</div>`).join('')+
+              (dayTasks.length>5?`<div style='font-size:10px;color:#94a3b8'>+${dayTasks.length-5} more</div>`:'')+
+              `</div>`+
+            `</td>`;
+          }
+          html += '</tr>';
+        }
+        html += '</tbody></table>';
+        calHost.innerHTML = html;
+        calHost.querySelectorAll('.cal-pill').forEach(el=>{ el.style.cursor='pointer'; el.onclick=()=>{ const id=el.getAttribute('data-id'); const t=tasks.find(x=>x.id===id); if(t) selectTask(t); }; });
+      } catch(e) {
+        calHost.innerHTML = `<div class='empty'>${e}</div>`;
+      }
     }
+  function selectedTaskId(){ return (selected && selected.type==='task' && selected.data && selected.data.id) ? selected.data.id : null; }
     async function renderImages(force=false){
       const grid = document.getElementById('images'); grid.innerHTML='';
       if(force || !images) images = await fetch('/api/images').then(r=>r.json());
@@ -119,9 +638,252 @@
       if(f){ rows = rows.filter(r => (r['Project Part']||'').toLowerCase().includes(f) || (r['Parent']||'').toLowerCase().includes(f)); }
       const table = document.createElement('table'); const thead=document.createElement('thead'); const trh=document.createElement('tr');
       cols.forEach(c=>{ const th=document.createElement('th'); th.textContent=c; trh.appendChild(th);}); thead.appendChild(trh); table.appendChild(thead);
+      const tbody = document.createElement('tbody'); rows.forEach(r=>{ const tr=document.createElement('tr'); tr.style.cursor='pointer';
+        tr.addEventListener('click', ()=> selectRow(r));
+        cols.forEach(c=>{ const td=document.createElement('td'); const v=r[c]; td.textContent=(v==null?'':String(v)); tr.appendChild(td);}); tbody.appendChild(tr);});
+      table.appendChild(tbody); host.appendChild(table);
+    }
+
+    async function renderDashboard(force=false){
+      const host = document.getElementById('dash'); host.innerHTML='';
+      if(force || !metrics) metrics = await fetch('/api/metrics').then(r=>r.json());
+      const m = metrics;
+      const statusRows = Object.entries(m.status_counts||{}).sort((a,b)=>a[0].localeCompare(b[0]));
+      host.innerHTML = `
+        <div style='display:flex;gap:12px;align-items:center;margin-bottom:8px'>
+          <div style='background:#2b2b2b;border:1px solid var(--border);border-radius:8px;padding:8px'>Overall: <b>${m.overall_percent}%</b></div>
+          <div style='background:#2b2b2b;border:1px solid var(--border);border-radius:8px;padding:8px'>Critical: <b>${m.critical_percent}%</b></div>
+          <div style='background:#2b2b2b;border:1px solid var(--border);border-radius:8px;padding:8px'>Leaf: <b>${m.leaf_count}</b></div>
+          <div style='background:#2b2b2b;border:1px solid var(--border);border-radius:8px;padding:8px'>Done: <b>${m.done_count}</b></div>
+          <div style='background:#2b2b2b;border:1px solid var(--border);border-radius:8px;padding:8px'>Overdue: <b>${m.overdue}</b></div>
+          <div style='background:#2b2b2b;border:1px solid var(--border);border-radius:8px;padding:8px'>At Risk: <b>${m.at_risk}</b></div>
+        </div>
+        <div style='display:grid;grid-template-columns:1fr 1fr; gap:12px;'>
+          <div>
+            <div style='font-weight:600;margin-bottom:4px'>Status Distribution</div>
+            <table><thead><tr><th>Status</th><th>Count</th><th>% of Leaf</th></tr></thead>
+              <tbody>
+                ${statusRows.map(([st,c])=>`<tr><td>${st}</td><td>${c}</td><td>${(c/(m.leaf_count||1)*100).toFixed(1)}%</td></tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+          <div>
+            <div style='font-weight:600;margin-bottom:4px'>Critical Path</div>
+            <div>${(m.critical_path||[]).join(' → ') || '(none)'}</div>
+            <div style='font-weight:600;margin:8px 0 4px'>Overdue</div>
+            <div style='font-family:Consolas'>${(m.overdue_list||[]).slice(0,20).join(', ') || '(none)'}</div>
+            <div style='font-weight:600;margin:8px 0 4px'>At Risk</div>
+            <div style='font-family:Consolas'>${(m.at_risk_list||[]).slice(0,20).join(', ') || '(none)'}</div>
+          </div>
+        </div>`;
+    }
+
+    async function renderCosts(force=false){
+      const host = document.getElementById('costs'); host.innerHTML='';
+      if(force || !costs) costs = await fetch('/api/costs').then(r=>r.json());
+      const cols = costs.columns||[]; const rows = costs.rows||[];
+      if(!rows.length){ host.innerHTML = `<div class='empty'>No cost rows</div>`; return; }
+      const table = document.createElement('table'); const thead=document.createElement('thead'); const trh=document.createElement('tr');
+      cols.forEach(c=>{ const th=document.createElement('th'); th.textContent=c; trh.appendChild(th);}); thead.appendChild(trh); table.appendChild(thead);
       const tbody = document.createElement('tbody'); rows.forEach(r=>{ const tr=document.createElement('tr'); cols.forEach(c=>{ const td=document.createElement('td'); const v=r[c]; td.textContent=(v==null?'':String(v)); tr.appendChild(td);}); tbody.appendChild(tr);});
       table.appendChild(tbody); host.appendChild(table);
     }
+
+  function selectTask(t){ selected = {type:'task', data:t}; renderDetails(); updateSelectionHighlight(); }
+    function selectRow(r){ selected = {type:'row', data:r}; renderDetails(); }
+    function renderDetails(){ const host = document.getElementById('details-body');
+      if(!selected){ host.innerHTML = `<div class='empty'>Select a task or row</div>`; return; }
+      if(selected.type==='task'){
+        const t = selected.data; const raw = t.raw||{};
+        let imgs = '';
+        if(t.images && t.images.length){ imgs = `<div style='display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:6px;'>` + t.images.map(i=>`<img src='${i.url}' alt='' style='width:100%;border-radius:6px;border:1px solid var(--border)'/>`).join('') + `</div>`; }
+        const badgeColor = (st)=>{
+          const s = (st||'').toLowerCase();
+          if(s.includes('done')) return '#10b981';
+          if(s.includes('block')) return '#ef4444';
+          if(s.includes('hold')||s.includes('defer')) return '#94a3b8';
+          return '#FF8200';
+        }
+        host.innerHTML = `
+          <div style='display:flex;align-items:center;gap:8px;margin-bottom:4px'>
+            <div style='font-weight:600;flex:1'>${t.name}</div>
+            <span style='font-size:11px;background:${badgeColor(t.status)};color:#111;border-radius:12px;padding:2px 8px'>${t.status||'Planned'}</span>
+          </div>
+          <div style='font-size:12px;color:var(--muted)'>${t.start||'?'} → ${t.end||'?'} · ${t.progress||0}%</div>
+          <hr style='border-color:var(--border)'>
+          <div style='font-size:12px'>
+            <div><b>Status:</b> ${t.status||''}</div>
+            <div><b>Type:</b> ${t.type||''}</div>
+            <div><b>Parent:</b> ${t.parent_id||''}</div>
+            <div><b>Dependencies:</b> ${t.dependencies||''}</div>
+            <div><b>Internal/External:</b> ${t.internal_external||''}</div>
+            <div><b>Duration (days):</b> ${t.duration||''}</div>
+          </div>
+          ${imgs}
+          <details style='margin-top:6px'>
+            <summary>Raw</summary>
+            <pre style='white-space:pre-wrap;font-size:11px;background:#2b2b2b;padding:6px;border-radius:6px;border:1px solid var(--border)'>${escapeHtml(JSON.stringify(raw, null, 2))}</pre>
+          </details>`;
+      } else {
+        const r = selected.data; const cols = Object.keys(r);
+        host.innerHTML = `<table>` + cols.map(k=>`<tr><th style='text-align:left;vertical-align:top;padding-right:8px'>${k}</th><td>${escapeHtml(String(r[k]??''))}</td></tr>`).join('') + `</table>`;
+      }
+    }
+
+    // Draw selection highlight on current SVG view without re-rendering
+    function updateSelectionHighlight(){
+      const id = selectedTaskId();
+      // Gantt
+      const gsvg = document.querySelector('#gantt-view svg');
+      if(gsvg){
+        const old = gsvg.querySelector('#sel-highlight'); if(old) old.remove();
+        if(id){
+          const rect = gsvg.querySelector(`rect[data-id='${id}']`);
+          if(rect){
+            const s = document.createElementNS(gsvg.namespaceURI,'rect'); s.setAttribute('id','sel-highlight');
+            const x=parseFloat(rect.getAttribute('x')||'0'), y=parseFloat(rect.getAttribute('y')||'0'); const w=parseFloat(rect.getAttribute('width')||'0'), h=parseFloat(rect.getAttribute('height')||'0');
+            s.setAttribute('x', String(x-2)); s.setAttribute('y', String(y-2)); s.setAttribute('width', String(w+4)); s.setAttribute('height', String(h+4));
+            s.setAttribute('rx', 6); s.setAttribute('fill','none'); s.setAttribute('stroke', '#00BFFF'); s.setAttribute('stroke-width','2');
+            gsvg.appendChild(s);
+          }
+        }
+      }
+      // Timeline
+      const tsvg = document.querySelector('#timeline-view svg');
+      if(tsvg){
+        const old = tsvg.querySelector('#sel-highlight'); if(old) old.remove();
+        if(id){
+          const rect = tsvg.querySelector(`rect[data-id='${id}']`);
+          if(rect){
+            const s = document.createElementNS(tsvg.namespaceURI,'rect'); s.setAttribute('id','sel-highlight');
+            const x=parseFloat(rect.getAttribute('x')||'0'), y=parseFloat(rect.getAttribute('y')||'0'); const w=parseFloat(rect.getAttribute('width')||'0'), h=parseFloat(rect.getAttribute('height')||'0');
+            s.setAttribute('x', String(x-2)); s.setAttribute('y', String(y-2)); s.setAttribute('width', String(w+4)); s.setAttribute('height', String(h+4));
+            s.setAttribute('rx', 6); s.setAttribute('fill','none'); s.setAttribute('stroke', '#00BFFF'); s.setAttribute('stroke-width','2');
+            tsvg.appendChild(s);
+          }
+        }
+      }
+    }
+
+    function exportCsv(){
+      if(mode==='database' && dbdata){
+        const cols = dbdata.columns||[]; const rows = dbdata.rows||[];
+        const csv = [cols.map(csvCell).join(',')].concat(rows.map(r=>cols.map(c=>csvCell(r[c])).join(','))).join('\n');
+        downloadText('database.csv', csv);
+      } else if(mode==='dashboard' && metrics){
+        const m = metrics; const rows = Object.entries(m.status_counts||{}).map(([st,c])=>({Status:st, Count:c, PctOfLeaf: (c/(m.leaf_count||1)*100).toFixed(1)}));
+        const cols = ['Status','Count','PctOfLeaf'];
+        const csv = [cols.join(',')].concat(rows.map(r=>cols.map(c=>csvCell(r[c])).join(','))).join('\n');
+        downloadText('dashboard_status.csv', csv);
+      } else if(mode==='costs' && costs){
+        const cols = costs.columns||[]; const rows = costs.rows||[];
+        const csv = [cols.join(',')].concat(rows.map(r=>cols.map(c=>csvCell(r[c])).join(','))).join('\n');
+        downloadText('costs.csv', csv);
+      } else if(selected && selected.type==='task'){
+        const t = selected.data; const raw = t.raw||{}; const cols = Object.keys(raw);
+        const csv = [cols.map(csvCell).join(',')].concat([[cols.map(c=>csvCell(raw[c])).join(',')]]).join('\n');
+        downloadText('task_raw.csv', csv);
+      }
+    }
+
+    // Export image/dialog
+    document.getElementById('export-img').addEventListener('click', ()=>{
+      if(mode!=='gantt'){ alert('Switch to Gantt to export.'); return; }
+      document.getElementById('export-dialog').showModal();
+    });
+    // Export include footer option
+    const EXP_FOOT_ID = 'exp-include-footer';
+    if(!document.getElementById(EXP_FOOT_ID)){
+      const dlg = document.getElementById('export-dialog');
+      const ins = document.createElement('div'); ins.style.marginTop='8px';
+      ins.innerHTML = `<label><input id='${EXP_FOOT_ID}' type='checkbox' checked> Include footer note</label>`;
+      dlg.querySelector('form').insertBefore(ins, dlg.querySelector('form').lastElementChild);
+    }
+    document.getElementById('exp-run').addEventListener('click', (e)=>{
+      e.preventDefault();
+      const fmt = document.getElementById('exp-format').value;
+      const scale = parseFloat(document.getElementById('exp-scale').value||'1');
+      const bg = document.getElementById('exp-bg').value;
+      const name = (document.getElementById('exp-name').value||'gantt_export').replace(/[^A-Za-z0-9_\-]/g,'_');
+      const paper = (document.getElementById('exp-paper').value||'').toLowerCase();
+      const orient = (document.getElementById('exp-orient').value||'Portrait').toLowerCase();
+      const marginMm = parseFloat(document.getElementById('exp-margin').value||'10');
+      const dpi = 96; const mmToPx = (mm)=> (mm/25.4)*dpi;
+      function paperDimsPx(){
+        if(!paper) return null;
+        if(paper==='letter'){ let w=8.5*dpi, h=11*dpi; if(orient==='landscape') [w,h]=[h,w]; return {w:Math.round(w), h:Math.round(h)}; }
+        if(paper==='a4'){ const wmm=210, hmm=297; let w=mmToPx(wmm), h=mmToPx(hmm); if(orient==='landscape') [w,h]=[h,w]; return {w:Math.round(w), h:Math.round(h)}; }
+        return null;
+      }
+      const host = document.getElementById('gantt-view'); const svg = host.querySelector('svg');
+      if(!svg){ alert('Nothing to export'); return; }
+      const watermark = document.querySelector('footer span')?.textContent || '';
+      const includeFooter = document.getElementById(EXP_FOOT_ID).checked;
+      if(fmt==='SVG'){
+        // Build an output SVG possibly sized to paper with margins
+        const contentW = parseFloat(svg.getAttribute('width')||'0');
+        const contentH = parseFloat(svg.getAttribute('height')||'0');
+        const dims = paperDimsPx();
+        const out = document.createElementNS(svg.namespaceURI,'svg');
+        let outW = contentW, outH = contentH, footerH = includeFooter ? 24 : 0;
+        let marginPx = mmToPx(marginMm);
+        if(dims){ outW = dims.w; outH = dims.h; } else { marginPx = 0; }
+        out.setAttribute('width', String(outW)); out.setAttribute('height', String(outH));
+        const g = document.createElementNS(svg.namespaceURI,'g');
+        const fitW = Math.max(1, outW - 2*marginPx);
+        const fitH = Math.max(1, outH - 2*marginPx - footerH);
+        const sX = fitW / contentW, sY = fitH / contentH; const s = (dims ? Math.min(sX, sY) : scale);
+        g.setAttribute('transform', `translate(${marginPx},${marginPx}) scale(${s})`);
+        // BG
+        if(bg && bg!=='transparent'){
+          const rect = document.createElementNS(svg.namespaceURI,'rect');
+          rect.setAttribute('x','0'); rect.setAttribute('y','0'); rect.setAttribute('width', String(outW)); rect.setAttribute('height', String(outH)); rect.setAttribute('fill', bg);
+          out.appendChild(rect);
+        }
+        const clonedInner = svg.cloneNode(true);
+        g.appendChild(clonedInner); out.appendChild(g);
+        if(includeFooter){
+          const textEl = document.createElementNS(svg.namespaceURI,'text'); textEl.textContent = watermark;
+          textEl.setAttribute('x', String(Math.max(4, outW/2 - watermark.length*3)));
+          textEl.setAttribute('y', String(outH - 6)); textEl.setAttribute('fill','#bbb'); textEl.setAttribute('font-size','12');
+          out.appendChild(textEl);
+        }
+        const ser = new XMLSerializer(); const xml = ser.serializeToString(out);
+        downloadText(name + '.svg', xml);
+      } else {
+        // PNG via canvas
+        let contentW = parseFloat(svg.getAttribute('width')||'0');
+        let contentH = parseFloat(svg.getAttribute('height')||'0');
+        const extraH = includeFooter ? 24 : 0;
+        const dims = paperDimsPx();
+        let outW = contentW, outH = contentH + extraH;
+        let marginPx = mmToPx(marginMm);
+        if(dims){ outW = dims.w; outH = dims.h; } else { marginPx = 0; }
+        const ser = new XMLSerializer(); const svgStr = ser.serializeToString(svg);
+        const img = new Image(); const blob = new Blob([svgStr], {type: 'image/svg+xml;charset=utf-8'});
+        const url = URL.createObjectURL(blob);
+        img.onload = function(){
+          const canvas = document.createElement('canvas'); canvas.width = Math.ceil(outW); canvas.height = Math.ceil(outH);
+          const ctx = canvas.getContext('2d');
+          if(bg && bg!=='transparent'){ ctx.fillStyle = bg; ctx.fillRect(0,0,canvas.width,canvas.height); }
+          const fitW = Math.max(1, outW - 2*marginPx);
+          const fitH = Math.max(1, outH - 2*marginPx - extraH);
+          const sX = fitW / contentW, sY = fitH / contentH; const s = dims ? Math.min(sX, sY) : scale;
+          ctx.setTransform(s, 0, 0, s, marginPx, marginPx);
+          ctx.drawImage(img, 0, 0, contentW, contentH);
+          if(includeFooter){ ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle = '#bbb'; ctx.font = `12px sans-serif`; ctx.fillText(watermark, 8, outH - 8); }
+          URL.revokeObjectURL(url);
+          canvas.toBlob((png)=>{ const dl = document.createElement('a'); dl.href = URL.createObjectURL(png); dl.download = name + '.png'; document.body.appendChild(dl); dl.click(); setTimeout(()=>{ URL.revokeObjectURL(dl.href); dl.remove(); }, 0); }, 'image/png');
+        };
+        img.onerror = function(){ URL.revokeObjectURL(url); alert('Failed to render PNG'); };
+        img.src = url;
+      }
+      document.getElementById('export-dialog').close();
+    });
+
+    function csvCell(v){ if(v==null) return ''; const s = String(v).replaceAll('"','""'); return '"'+s+'"'; }
+    function downloadText(name, text){ const blob = new Blob([text], {type:'text/csv;charset=utf-8;'}); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 0); }
+    function escapeHtml(s){ return s.replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
 
     // initial
     setMode('gantt');
