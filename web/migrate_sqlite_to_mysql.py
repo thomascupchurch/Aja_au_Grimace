@@ -48,6 +48,17 @@ def read_sqlite_rows(sqlite_path: str, table: str) -> List[Dict]:
         con.close()
 
 
+def qi(identifier: str) -> str:
+    """Quote an identifier for MySQL and escape percent signs for DBAPI string interpolation.
+
+    - Wrap with backticks to preserve spaces/symbols.
+    - Escape any literal `%` as `%%` to avoid PyMySQL treating them as placeholders.
+    """
+    # Backticks inside names are extremely unlikely; if present, double them
+    safe = identifier.replace("`", "``").replace("%", "%%")
+    return f"`{safe}`"
+
+
 def ensure_table(engine, table: str, sample: Dict, drop_first: bool, create_if_missing: bool):
     # Construct a CREATE TABLE with quoted identifiers based on sample row
     # Use LONGTEXT for text-ish data, DOUBLE for floats, BIGINT for ints when possible
@@ -62,11 +73,11 @@ def ensure_table(engine, table: str, sample: Dict, drop_first: bool, create_if_m
 
     with engine.begin() as conn:
         if drop_first:
-            conn.execute(text(f"DROP TABLE IF EXISTS `{table}`"))
+            conn.execute(text(f"DROP TABLE IF EXISTS {qi(table)}"))
         # Check existence
         exists = False
         try:
-            conn.execute(text(f"SELECT 1 FROM `{table}` LIMIT 1"))
+            conn.execute(text(f"SELECT 1 FROM {qi(table)} LIMIT 1"))
             exists = True
         except Exception:
             exists = False
@@ -77,8 +88,8 @@ def ensure_table(engine, table: str, sample: Dict, drop_first: bool, create_if_m
         if not exists:
             cols_sql = []
             for k, v in sample.items():
-                cols_sql.append(f"`{k}` {col_type(v)}")
-            ddl = f"CREATE TABLE `{table}` (" + ", ".join(cols_sql) + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+                cols_sql.append(f"{qi(k)} {col_type(v)}")
+            ddl = f"CREATE TABLE {qi(table)} (" + ", ".join(cols_sql) + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
             conn.execute(text(ddl))
 
 
@@ -91,23 +102,51 @@ def migrate(sqlite_path: str, mysql_url: str, table: str, create: bool, replace:
     engine = create_engine(mysql_url, pool_pre_ping=True)
     ensure_table(engine, table, rows[0], drop_first=replace, create_if_missing=create)
 
-    with engine.begin() as conn:
+    # Use driver-level positional params to avoid issues with special column names
+    # Build INSERT with %s placeholders and execute via the DBAPI driver
+    keys = list(rows[0].keys())
+    col_list = ",".join([qi(k) for k in keys])
+    insert_sql = f"INSERT INTO {qi(table)} ({col_list}) VALUES (" + ",".join(["%s"] * len(keys)) + ")"
+
+    # Prepare batch values in column order; coerce empty strings to None to be safe
+    def to_tuple(rec: Dict) -> tuple:
+        out = []
+        for k in keys:
+            v = rec.get(k)
+            if v == "":
+                v = None
+            out.append(v)
+        return tuple(out)
+
+    raw_conn = engine.raw_connection()
+    cur = None
+    try:
+        cur = raw_conn.cursor()
         if truncate and not replace:
-            conn.execute(text(f"TRUNCATE TABLE `{table}`"))
-        # Insert in batches
-        keys = list(rows[0].keys())
-        placeholders = ",".join([f":{k}" for k in keys])
-        col_list = ",".join([f"`{k}`" for k in keys])
-        sql = text(f"INSERT INTO `{table}` ({col_list}) VALUES ({placeholders})")
-        batch = []
+            cur.execute(f"TRUNCATE TABLE {qi(table)}")
+        batch_vals = []
+        count = 0
         for rec in rows:
-            batch.append(rec)
-            if len(batch) >= batch_size:
-                conn.execute(sql, batch)
-                batch.clear()
-        if batch:
-            conn.execute(sql, batch)
-    print(f"[migrate] Inserted {len(rows)} rows into `{table}`")
+            batch_vals.append(to_tuple(rec))
+            if len(batch_vals) >= batch_size:
+                cur.executemany(insert_sql, batch_vals)
+                count += len(batch_vals)
+                batch_vals.clear()
+        if batch_vals:
+            cur.executemany(insert_sql, batch_vals)
+            count += len(batch_vals)
+        raw_conn.commit()
+        print(f"[migrate] Inserted {count} rows into `{table}`")
+    finally:
+        try:
+            if cur is not None:
+                cur.close()
+        except Exception:
+            pass
+        try:
+            raw_conn.close()
+        except Exception:
+            pass
 
 
 def main():

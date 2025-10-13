@@ -24,4 +24,11 @@ try:
 except Exception as e:
     # Avoid breaking app on bootcheck issues
     print(f"[bootcheck] skipped: {e}")
-from app import app as application
+
+# Prefer the new v2 app if present; otherwise fall back to legacy web/app.py
+try:
+    from v2.app import app as application  # noqa: F401
+    print("[wsgi] Loaded v2.app:app")
+except Exception as e:
+    print(f"[wsgi] v2 import failed, falling back to app.app: {e}")
+    from app import app as application

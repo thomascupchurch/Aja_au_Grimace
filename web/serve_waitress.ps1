@@ -1,7 +1,8 @@
 param(
   [string]$DbPath,
   [int]$Port = 8000,
-  [switch]$ReadOnly
+  [switch]$ReadOnly,
+  [switch]$V2
 )
 $ErrorActionPreference = 'Stop'
 
@@ -27,10 +28,16 @@ Write-Host "Ensuring 'waitress' is available in $python" -ForegroundColor DarkCy
 # Set PYTHONPATH to allow importing web.app:app
 $env:PYTHONPATH = "$repo;$web"
 
-Write-Host "Starting Waitress on port $Port (web.app:app) using $python" -ForegroundColor Cyan
+if ($V2) {
+  $entry = 'web.v2.app:app'
+} else {
+  $entry = 'web.app:app'
+}
+
+Write-Host "Starting Waitress on port $Port ($entry) using $python" -ForegroundColor Cyan
 Push-Location $repo
 try {
-  & $python -m waitress --listen=0.0.0.0:$Port web.app:app
+  & $python -m waitress --listen=0.0.0.0:$Port $entry
 } finally {
   Pop-Location
 }

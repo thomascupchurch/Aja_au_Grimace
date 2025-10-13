@@ -64,6 +64,8 @@ from app import app as application
 - If using PythonAnywhere MySQL: add
   - `WEB_DB_URL = mysql+pymysql://<user>:<pass>@<host>/<user>$<dbname>?charset=utf8mb4`
   - Example host is like `youruser.mysql.pythonanywhere-services.com`
+ - Optional: if your images are not under the repo's `images/` folder, set
+   - `WEB_IMAGES_ROOT = /absolute/path/to/your/images`
 
 6) Reload the web app
 - Open the PythonAnywhere dashboard page for the web app and click “Reload”
@@ -244,7 +246,8 @@ Read‑only mode for network shares:
 ## Verify deployment
 
 1. Open `/api/debug` in your deployed site
-   - Confirms `db_path`, existence, and row count
+  - Confirms `db_path`, backend, existence, and row count
+  - Also shows `images_root` and `images_count` for troubleshooting image serving
 2. Open the root `/`
    - Should render the Gantt
 3. If bars or assets are missing
@@ -258,6 +261,10 @@ Read‑only mode for network shares:
   - Check provider logs (PythonAnywhere error log; Render service logs)
 - No tasks shown
   - `/api/debug` row_count is 0 or DB not found → set `PROJECT_DB_PATH` or place `db_path.txt`
+- Images not appearing
+  - Check `/api/debug` for `images_root` and `images_count`
+  - Ensure the folder exists on the server and contains image files (png/jpg/...)
+  - If images live elsewhere, set `WEB_IMAGES_ROOT` to that absolute folder path and reload the app
 - CDN blocked / CSP errors
   - Ensure vendored JS is present: `web/static/vendor/frappe-gantt.umd.js`
 - Gunicorn not found (Render)

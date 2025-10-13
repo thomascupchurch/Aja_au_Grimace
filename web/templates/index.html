@@ -68,7 +68,8 @@
   body.mode-gantt .toolbar #view-mode, body.mode-gantt .toolbar label:nth-of-type(2) { display:inline-block; }
   body.mode-calendar .toolbar #view-mode, body.mode-calendar .toolbar label:nth-of-type(2),
   body.mode-timeline .toolbar #view-mode, body.mode-timeline .toolbar label:nth-of-type(2),
-  body.mode-images .toolbar #view-mode, body.mode-images .toolbar label:nth-of-type(2) { display: none; }
+  body.mode-images .toolbar #view-mode, body.mode-images .toolbar label:nth-of-type(2),
+  body.mode-database .toolbar #view-mode, body.mode-database .toolbar label:nth-of-type(2) { display: none; }
   /* Calendar styles */
   .cal-toolbar { display:flex; gap:8px; align-items:center; padding:8px 0; }
   .cal-toolbar button { padding:4px 8px; }
@@ -203,6 +204,7 @@
         <option value="timeline">Timeline</option>
         <option value="tree">Tree</option>
         <option value="images">Images</option>
+  <option value="database">Database</option>
       </select>
       <label>View:</label>
       <select id="view-mode">
@@ -255,6 +257,14 @@
         <input id="images-filter" type="text" placeholder="Filter images by name..." />
       </div>
       <div id="images" class="images-grid"></div>
+    </div>
+    <div id="database-view" class="view" hidden>
+      <div class="toolbar" style="padding:8px 12px;">
+        <input id="db-filter" type="text" placeholder="Filter by Project Part or Parent..." style="min-width:280px; padding:6px 10px; background:var(--input-bg); color:var(--input-text); border:1px solid #cfcfcf; border-radius:6px;" />
+        <button id="db-refresh">Refresh</button>
+        <span id="db-count" style="margin-left:auto; color:var(--muted); font-size:12px;"></span>
+      </div>
+      <div id="database" style="overflow:auto; border-top:1px solid var(--border); flex:1; min-height:0;"></div>
     </div>
     <!-- Details Drawer -->
     <aside id="details" class="details" hidden>
@@ -1076,9 +1086,11 @@
       document.getElementById('calendar-view').hidden = mode !== 'calendar';
       document.getElementById('timeline-view').hidden = mode !== 'timeline';
       document.getElementById('tree-view').hidden = mode !== 'tree';
-      document.getElementById('images-view').hidden = mode !== 'images';
+  document.getElementById('images-view').hidden = mode !== 'images';
+  document.getElementById('database-view').hidden = mode !== 'database';
       updateUrlFromState(true);
       if (mode === 'images') { renderImages(); return; }
+  if (mode === 'database') { renderDatabase(); return; }
       if (!cachedTasks) return;
       if (mode === 'gantt') {
         waitForGantt(8000).then(ok => { if (ok) renderGantt(cachedTasks); });
@@ -1345,6 +1357,59 @@
       const res = await fetch('/api/images');
       if (!res.ok) throw new Error('Failed to load images');
       return res.json();
+    }
+
+    // ---- Database view (read-only) ----
+    let cachedDb = null;
+    async function fetchDatabase() {
+      const res = await fetch('/api/database', { cache: 'no-store' });
+      if (!res.ok) throw new Error('Failed to load database');
+      return res.json();
+    }
+    function renderDbTable(container, columns, rows) {
+      // Build simple table
+      const table = document.createElement('table');
+      table.style.width = '100%'; table.style.borderCollapse = 'collapse'; table.style.fontSize = '13px';
+      const thead = document.createElement('thead'); const trh = document.createElement('tr');
+      columns.forEach(c => { const th = document.createElement('th'); th.textContent = c; th.style.position='sticky'; th.style.top='0'; th.style.background='var(--bg2)'; th.style.color='var(--text)'; th.style.borderBottom='1px solid var(--border)'; th.style.textAlign='left'; th.style.padding='6px 8px'; trh.appendChild(th); });
+      thead.appendChild(trh); table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      rows.forEach(r => {
+        const tr = document.createElement('tr');
+        columns.forEach(c => { const td = document.createElement('td'); let v = r[c]; if (v == null) v = ''; td.textContent = String(v); td.style.borderBottom='1px solid var(--border)'; td.style.padding='4px 8px'; tr.appendChild(td); });
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      container.innerHTML = ''; container.appendChild(table);
+    }
+    function getDbFilter() { const el = document.getElementById('db-filter'); return (el && el.value || '').toLowerCase().trim(); }
+    function applyDbFilterAndRender() {
+      const container = document.getElementById('database'); if (!container) return;
+      if (!cachedDb || !cachedDb.columns) { container.textContent = 'No data'; return; }
+      const f = getDbFilter();
+      let rows = cachedDb.rows || [];
+      if (f) {
+        rows = rows.filter(r => {
+          const a = (r['Project Part'] || '').toLowerCase();
+          const b = (r['Parent'] || '').toLowerCase();
+          return a.includes(f) || b.includes(f);
+        });
+      }
+      renderDbTable(container, cachedDb.columns, rows);
+      const lbl = document.getElementById('db-count'); if (lbl) lbl.textContent = `${rows.length} rows`;
+    }
+    async function renderDatabase(force=false) {
+      const container = document.getElementById('database');
+      container.innerHTML = '';
+      try {
+        if (!cachedDb || force) { cachedDb = await fetchDatabase(); }
+        applyDbFilterAndRender();
+        const f = document.getElementById('db-filter'); if (f && !f._bound) { f._bound = true; f.addEventListener('input', applyDbFilterAndRender); }
+        const r = document.getElementById('db-refresh'); if (r && !r._bound) { r._bound = true; r.addEventListener('click', () => renderDatabase(true)); }
+      } catch (e) {
+        const err = document.createElement('div'); err.className = 'error'; err.textContent = 'Error loading database: ' + (e && e.message ? e.message : e);
+        container.appendChild(err);
+      }
     }
 
     async function renderImages(forceReload=false) {

@@ -9,12 +9,46 @@ from typing import List, Dict, Any
 
 # Optional SQLAlchemy for MySQL support (used if WEB_DB_URL is set)
 try:
-    from sqlalchemy import create_engine, text
+    from sqlalchemy import create_engine, text  # type: ignore
     _HAS_SA = True
 except Exception:
     _HAS_SA = False
 
 app = Flask(__name__)
+
+
+# Columns order for the Database view (mirrors desktop ProjectDataModel.COLUMNS)
+PROJECT_COLUMNS = [
+    "Project Part", "Parent", "Children", "Start Date", "Duration (days)", "Internal/External", "Dependencies", "Type", "Calculated End Date", "Resources", "Notes", "Responsible", "Images", "Pace Link", "Attachments",
+    # Progress tracking fields
+    "% Complete",            # Integer 0-100 (leaf editable, parents rolled up in desktop)
+    "Status",                 # Planned | In Progress | Blocked | Done | Deferred
+    "Actual Start Date",      # Set when Status transitions to In Progress
+    "Actual Finish Date",     # Set when Status transitions to Done
+    "Baseline Start Date",    # Captured first time valid start/duration appear
+    "Baseline End Date",      # Derived from baseline start + duration
+    # Cost tracking fields
+    "Production Cost",        # Internal estimated production cost (materials + fabrication labor)
+    "Installation Cost",      # Internal estimated install cost (crew labor + equipment)
+    "Production Price",       # Decimal number (price to be charged for production)
+    "Installation Price",     # Decimal number (price to be charged for installation)
+    # Extended cost breakdown (append-only)
+    "Material Cost",          # Materials-only direct cost
+    "Fabrication Labor Hours",# Hours for shop fabrication
+    "Installation Labor Hours",# Hours for field install
+    "Labor Rate",             # Default blended labor rate
+    "Install Labor Rate",     # Field install labor rate
+    "Equipment Cost",         # Lift / crane / equipment rental cost
+    "Permit/Eng Cost",        # Permitting or engineering fees
+    "Contingency %",          # Applied percentage buffer
+    "Warranty Reserve %",     # Percentage of price allocated to warranty reserve
+    "Risk Level",             # Low | Medium | High
+    "Quote Version",          # Current working quote version label
+    "Frozen Production Cost", # Snapshot baseline cost
+    "Frozen Installation Cost",
+    "Frozen Production Price",
+    "Frozen Installation Price",
+]
 
 
 def get_db_path():
@@ -283,6 +317,74 @@ def fetch_tasks():
     return tasks
 
 
+def _normalize_db_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Prepare rows for the Database view without mutating the source DB.
+
+    - Ensure Children is a derived, comma-separated list of child names.
+    - If Calculated End Date is missing, derive from Start Date + Duration (days).
+    - Normalize % Complete to int (default 0); if Status is Done then cap to 100.
+    """
+    name_index = { (r.get("Project Part") or "").strip(): i for i, r in enumerate(rows) }
+    children_map = { name: [] for name in name_index.keys() }
+    for r in rows:
+        parent = (r.get("Parent") or "").strip()
+        child = (r.get("Project Part") or "").strip()
+        if parent and child and parent in children_map and parent != child:
+            children_map[parent].append(child)
+
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        row = dict(r)  # shallow copy
+        name = (row.get("Project Part") or "").strip()
+        # Children
+        try:
+            row["Children"] = ", ".join(children_map.get(name, []))
+        except Exception:
+            row["Children"] = row.get("Children", "")
+        # Calculated End Date fallback: Start + Duration
+        ced = (row.get("Calculated End Date") or "").strip()
+        if not ced:
+            sd = _parse_date(row.get("Start Date") or "")
+            dur = 0
+            try:
+                dur = int(row.get("Duration (days)") or 0)
+            except Exception:
+                dur = 0
+            if sd:
+                try:
+                    de = sd + timedelta(days=max(1, dur) if dur else 1)
+                    row["Calculated End Date"] = de.strftime("%m-%d-%Y")
+                except Exception:
+                    pass
+        # % Complete normalization
+        pc = 0
+        try:
+            pc = int(row.get("% Complete") or 0)
+        except Exception:
+            pc = 0
+        status = (row.get("Status") or "").strip().lower()
+        if "done" in status and pc < 100:
+            pc = 100
+        row["% Complete"] = pc
+        out.append(row)
+    return out
+
+
+@app.route("/api/database")
+def api_database():
+    rows = _fetch_rows_any()
+    rows_n = _normalize_db_rows(rows)
+    # Project only known columns (preserving order); include unknowns in a side payload if needed later
+    def project_row(r: Dict[str, Any]) -> Dict[str, Any]:
+        return { col: r.get(col, "") for col in PROJECT_COLUMNS }
+    data = [project_row(r) for r in rows_n]
+    return jsonify({
+        "columns": PROJECT_COLUMNS,
+        "rows": data,
+        "stats": {"row_count": len(rows)}
+    })
+
+
 @app.route("/")
 def index():
     watermark = os.environ.get("WEB_WATERMARK_TEXT", "For internal use only · Read‑only viewer")
@@ -425,6 +527,16 @@ def api_debug():
     db_url = os.environ.get("WEB_DB_URL", "").strip()
     using_mysql = bool(db_url and _HAS_SA)
     db = get_db_path()
+    img_root = _images_root()
+    img_count = 0
+    try:
+        if os.path.isdir(img_root):
+            img_count = sum(
+                1 for n in os.listdir(img_root)
+                if os.path.isfile(os.path.join(img_root, n))
+            )
+    except Exception:
+        pass
     info = {
         "db_backend": "mysql" if using_mysql else "sqlite",
         "db_path": db if not using_mysql else db_url.split("@")[-1],
@@ -433,6 +545,8 @@ def api_debug():
         "row_count": 0,
         "sample": [],
         "error": None,
+        "images_root": img_root,
+        "images_count": img_count,
     }
     try:
         if using_mysql:
@@ -469,8 +583,16 @@ def health():
     return Response("ok", mimetype="text/plain")
 
 
-# Images: list and serve from repo_root/images
+# Images: list and serve from repo_root/images (with optional override via WEB_IMAGES_ROOT)
 def _images_root():
+    """Compute the images root directory.
+
+    If WEB_IMAGES_ROOT is set, use that value as-is. Otherwise, default to
+    the repo root "images" folder (parent of this web/ directory).
+    """
+    override = os.environ.get("WEB_IMAGES_ROOT", "").strip()
+    if override:
+        return override
     return os.path.join(os.path.dirname(app.root_path), "images")
 
 

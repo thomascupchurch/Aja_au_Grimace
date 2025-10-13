@@ -1,0 +1,130 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Project Viewer (v2)</title>
+  <style>
+    :root { --bg:#4B4B4B; --bg2:#3f3f3f; --panel:#585858; --border:#6a6a6a; --text:#f5f5f5; --muted:#d1d5db; --brand:#FF8200; --input-bg:#fff; --input-text:#111; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+    header { display:grid; place-items:center; padding:8px 12px; border-bottom:1px solid var(--border); background: linear-gradient(180deg, var(--bg) 0%, var(--bg2) 100%); }
+    header img { height: 92px; filter: drop-shadow(0 1px 0 rgba(255,255,255,0.08)) drop-shadow(0 12px 18px rgba(0,0,0,0.55)); }
+    .toolbar { display:flex; gap:8px; align-items:center; padding:8px 12px; border-bottom:1px solid var(--border); background: color-mix(in oklab, var(--bg2) 75%, #000 25%); }
+    .toolbar select, .toolbar button, .toolbar input { padding:6px 10px; border-radius:6px; border:1px solid #cfcfcf; background:var(--input-bg); color:var(--input-text); }
+    main { min-height:0; display:flex; flex-direction:column; }
+    .view { min-height: calc(100vh - 200px); padding: 8px 12px; }
+    .empty { color:#e5e7eb; text-align:center; padding: 16px; }
+    table { width:100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align:left; }
+    thead th { position:sticky; top:0; background:var(--bg2); }
+    .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap:10px; }
+    .img-card { background:var(--panel); border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+    .img-card .wrap { position:relative; padding-top:66%; background:#333; }
+    .img-card img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+    .img-card .name { padding:6px 8px; border-top:1px solid var(--border); }
+    footer { display:flex; justify-content:center; border-top:1px solid var(--border); padding:6px 12px; color:var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="/static/header.svg" onerror="this.src='/static/header.png'" alt="Header" />
+  </header>
+  <div class="toolbar">
+    <label>Display:</label>
+    <select id="display">
+      <option value="gantt">Gantt</option>
+      <option value="calendar">Calendar</option>
+      <option value="timeline">Timeline</option>
+      <option value="tree">Tree</option>
+      <option value="images">Images</option>
+      <option value="database">Database</option>
+    </select>
+    <label id="view-label">View:</label>
+    <select id="view">
+      <option>Day</option><option>Week</option><option>Month</option><option>Year</option>
+    </select>
+    <button id="refresh">Refresh</button>
+    <span id="info" style="margin-left:auto;color:var(--muted);font-size:12px"></span>
+  </div>
+  <main>
+    <section id="gantt-view" class="view"></section>
+    <section id="calendar-view" class="view" hidden></section>
+    <section id="timeline-view" class="view" hidden></section>
+    <section id="tree-view" class="view" hidden></section>
+    <section id="images-view" class="view" hidden>
+      <input id="img-filter" placeholder="Filter images..." />
+      <div id="images" class="grid"></div>
+    </section>
+    <section id="db-view" class="view" hidden>
+      <input id="db-filter" placeholder="Filter by Project Part/Parent..." />
+      <div id="db" style="overflow:auto;max-height:70vh"></div>
+    </section>
+  </main>
+  <footer><span>{{ watermark }}</span></footer>
+  <script>
+    let tasks = null, dbdata = null, images = null, mode = 'gantt';
+    document.getElementById('display').addEventListener('change', (e) => setMode(e.target.value));
+    document.getElementById('refresh').addEventListener('click', () => refresh());
+    document.getElementById('img-filter').addEventListener('input', () => renderImages());
+    document.getElementById('db-filter').addEventListener('input', () => renderDb());
+
+    function setMode(m){ mode = m; const ids=['gantt','calendar','timeline','tree','images','db'];
+      ids.forEach(id => { const el = document.getElementById(id + (id==='db' ? '-view' : (id==='images' ? '-view' : '-view')));});
+      document.getElementById('gantt-view').hidden = m!=='gantt';
+      document.getElementById('calendar-view').hidden = m!=='calendar';
+      document.getElementById('timeline-view').hidden = m!=='timeline';
+      document.getElementById('tree-view').hidden = m!=='tree';
+      document.getElementById('images-view').hidden = m!=='images';
+      document.getElementById('db-view').hidden = m!=='database';
+      document.getElementById('view').parentElement.style.display = (m==='gantt' ? '' : 'none');
+      refresh();
+    }
+
+    async function refresh(){
+      const info = document.getElementById('info');
+      try{
+        const dbg = await fetch('/api/debug').then(r=>r.json());
+        info.textContent = `DB: ${dbg.db_path||'?'} | rows: ${dbg.row_count}`;
+      }catch(_){ info.textContent=''; }
+      if(mode==='images') return renderImages(true);
+      if(mode==='database') return renderDb(true);
+      return loadTasks();
+    }
+
+    async function loadTasks(){
+      const el = document.getElementById('gantt-view'); el.innerHTML = '';
+      try{ tasks = await fetch('/api/tasks').then(r=>r.json()); }
+      catch(e){ el.innerHTML = `<div class='empty'>${e}</div>`; return; }
+      if(!tasks || !tasks.length){ el.innerHTML = `<div class='empty'>No tasks</div>`; return; }
+      el.innerHTML = `<pre style='white-space:pre-wrap'>`+JSON.stringify(tasks.slice(0,5), null, 2)+`\n… (${tasks.length} total)</pre>`;
+    }
+    async function renderImages(force=false){
+      const grid = document.getElementById('images'); grid.innerHTML='';
+      if(force || !images) images = await fetch('/api/images').then(r=>r.json());
+      const f = (document.getElementById('img-filter').value||'').toLowerCase();
+      const items = images.filter(it => !f || it.name.toLowerCase().includes(f));
+      if(!items.length){ grid.innerHTML = `<div class='empty'>No images</div>`; return; }
+      const frag = document.createDocumentFragment();
+      for(const it of items){ const card = document.createElement('div'); card.className='img-card';
+        const wrap = document.createElement('div'); wrap.className='wrap'; const img = document.createElement('img'); img.src = it.url; wrap.appendChild(img);
+        const name = document.createElement('div'); name.className = 'name'; name.textContent = it.name;
+        card.appendChild(wrap); card.appendChild(name); frag.appendChild(card); }
+      grid.appendChild(frag);
+    }
+    async function renderDb(force=false){
+      const host = document.getElementById('db'); host.innerHTML='';
+      if(force || !dbdata) dbdata = await fetch('/api/database').then(r=>r.json());
+      const cols = dbdata.columns||[]; let rows = dbdata.rows||[];
+      const f = (document.getElementById('db-filter').value||'').toLowerCase();
+      if(f){ rows = rows.filter(r => (r['Project Part']||'').toLowerCase().includes(f) || (r['Parent']||'').toLowerCase().includes(f)); }
+      const table = document.createElement('table'); const thead=document.createElement('thead'); const trh=document.createElement('tr');
+      cols.forEach(c=>{ const th=document.createElement('th'); th.textContent=c; trh.appendChild(th);}); thead.appendChild(trh); table.appendChild(thead);
+      const tbody = document.createElement('tbody'); rows.forEach(r=>{ const tr=document.createElement('tr'); cols.forEach(c=>{ const td=document.createElement('td'); const v=r[c]; td.textContent=(v==null?'':String(v)); tr.appendChild(td);}); tbody.appendChild(tr);});
+      table.appendChild(tbody); host.appendChild(table);
+    }
+
+    // initial
+    setMode('gantt');
+  </script>
+</body>
+</html>
