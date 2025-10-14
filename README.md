@@ -461,3 +461,12 @@ Parameters (optional):
 
 Tip: Windows sometimes caches shortcut icons; after changing icons, delete and recreate the shortcut or clear the icon cache to refresh.
 
+## Support & Feedback
+
+For help, feedback, or bug reports, contact:
+- Email: support@lsigraphics.com
+- Teams: LSI Graphics IT Support
+- Web: https://lsigraphics.com/support
+
+Please include your app version (shown in the footer) and a description of your issue.
+

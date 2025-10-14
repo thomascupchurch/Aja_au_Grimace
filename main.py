@@ -14,6 +14,10 @@ from PyQt6.QtCore import QDate, Qt
 from PyQt6.QtGui import QPixmap
 import os
 
+# --- Central version check imports ---
+import threading
+import requests
+
 # (Removed transitional PyQt5 compatibility shim – codebase now fully PyQt6 native)
 
 # --- Dependency cycle detection helper ---
@@ -1924,6 +1928,7 @@ class ConflictResolutionDialog(QDialog):
             grid.addWidget(QLabel("No differing fields – you can keep remote copy."), row_idx, 0, 1, 5)
         scroll.setWidget(container)
         layout.addWidget(scroll,1)
+            # Central version check (network/intranet file)
         # Buttons
         btn_row = QHBoxLayout()
         self.btn_keep = QPushButton("Keep Remote")
@@ -9550,6 +9555,16 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
 
+                # Add support contact/feedback link to Tools menu
+                act_support = tmenu.addAction("Contact Support / Feedback")
+                def open_support():
+                    try:
+                        import webbrowser
+                        webbrowser.open("https://lsigraphics.com/support")
+                    except Exception:
+                        QMessageBox.information(self, "Support Info", "Email: support@lsigraphics.com\nTeams: LSI Graphics IT Support\nWeb: https://lsigraphics.com/support")
+                act_support.triggered.connect(open_support)
+
                 # Sync menu with current (loaded) settings later in init
             except Exception:
                 pass
@@ -9710,8 +9725,18 @@ class MainWindow(QMainWindow):
             content_layout.addWidget(self.views, 1)
             main_layout.addLayout(content_layout)
 
-            # Footer
-            footer_label = QLabel("Copyright 2025 © LSI Graphics, LLC. All Rights Reserved.")
+            # Footer with version
+            version_str = ""
+            try:
+                ver_path = resolve_resource_path("VERSION")
+                if ver_path and os.path.exists(ver_path):
+                    with open(ver_path, 'r', encoding='utf-8') as vf:
+                        _ver = vf.read().strip()
+                        if _ver:
+                            version_str = f" | Version: {_ver}"
+            except Exception:
+                pass
+            footer_label = QLabel(f"Copyright 2025 © LSI Graphics, LLC. All Rights Reserved.{version_str}")
             footer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             footer_label.setStyleSheet("color: #888; font-size: 11px; margin-top: 8px;")
             main_layout.addWidget(footer_label)
@@ -11366,4 +11391,8 @@ if __name__ == "__main__":
         import traceback, sys
         print("FATAL: Unhandled exception during startup:", e)
         traceback.print_exc()
+        try:
+            log_event("error", "startup_exception", error=str(e), traceback=traceback.format_exc())
+        except Exception:
+            pass
         sys.exit(1)

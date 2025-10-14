@@ -296,6 +296,15 @@ if ($IncludeDBTemplate) {
   if ($DryRun) { Write-Host "[dryrun] Would copy project_data.db" -ForegroundColor DarkGray }
   elseif (Test-Path 'project_data.db') { Copy-Item 'project_data.db' $staging } else { Write-Warning 'project_data.db not found; skipping DB template.' }
 }
+
+# Always include README_DISTRIBUTION.txt and config.env in release
+if ($DryRun) {
+  Write-Host "[dryrun] Would copy README_DISTRIBUTION.txt" -ForegroundColor DarkGray
+  Write-Host "[dryrun] Would copy config.env" -ForegroundColor DarkGray
+} else {
+  if (Test-Path 'README_DISTRIBUTION.txt') { Copy-Item 'README_DISTRIBUTION.txt' $staging } else { Write-Warning 'README_DISTRIBUTION.txt not found; skipping.' }
+  if (Test-Path 'config.env') { Copy-Item 'config.env' $staging } else { Write-Warning 'config.env not found; skipping.' }
+}
 if ($DryRun) { Write-Host "[dryrun] Would copy README.md" -ForegroundColor DarkGray } elseif (Test-Path 'README.md') { Copy-Item 'README.md' $staging }
 
 if ($IncludeManifest) {
