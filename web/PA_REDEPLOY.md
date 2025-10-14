@@ -53,6 +53,12 @@ MySQL (PythonAnywhere DB)
   - `WEB_DB_URL = mysql+pymysql://USER:PASSWORD@HOST/USER$DBNAME?charset=utf8mb4`
 - App will use MySQL automatically when `WEB_DB_URL` is set and SQLAlchemy is installed
 
+Write access (optional)
+- To enable edits from the web UI, set an edit token in PA Web UI > Environment Variables:
+  - `WEB_EDIT_TOKEN = your-strong-shared-secret`
+- If using SQLite, ensure `WEB_SQLITE_RO` is not truthy. For writes, unset it or set `WEB_SQLITE_RO=0`.
+- If using MySQL, ensure the DB user has UPDATE privileges on `project_parts`.
+
 ---
 
 ## 4) (Optional) Migrate SQLite → MySQL
@@ -93,6 +99,7 @@ Verify
 - Interactions:
   - Gantt/Timeline bars & labels: double‑click opens Full Details
   - Details… toolbar button enables after selection and opens the modal
+  - Set Token… in the toolbar stores the token locally; Edit… button in Details opens an edit form. Saving calls `/api/task/update`.
   - Images/Database/Dashboard/Costs views load
 
 ---
@@ -123,8 +130,9 @@ Defaults
 
 ## 9) Security
 
-- This viewer is read‑only; do not expose sensitive data publicly
-- Prefer snapshots for demos; for internal use, restrict access as needed
+- Edits (if enabled) require `WEB_EDIT_TOKEN` and are limited to a small set of columns: `% Complete`, `Status`, `Start Date`, `Duration (days)`, `Responsible`, `Type`, `Internal/External`, `Dependencies`, `Pace Link`, `Notes`.
+- For a strictly read‑only site, omit `WEB_EDIT_TOKEN` and/or set `WEB_SQLITE_RO=1` (SQLite). Alternatively, use a MySQL user without UPDATE permission.
+- Do not expose sensitive data publicly; restrict access at the PA app level if needed.
 
 ---
 
@@ -133,3 +141,4 @@ Defaults
 - `/` main viewer
 - `/api/debug` diagnostics (backend, row count, paths)
 - `/api/tasks`, `/api/database`, `/api/images`, `/api/metrics`, `/api/costs` data APIs
+- `POST /api/task/update` write API (requires `WEB_EDIT_TOKEN` if set); JSON body: `{ "edit_token": "...", "project_part": "Name", "updates": { "Status": "In Progress", "% Complete": 20, ... } }`

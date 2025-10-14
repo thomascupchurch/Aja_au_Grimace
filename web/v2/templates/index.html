@@ -62,6 +62,8 @@
     <button id="export-csv" title="Export current view (CSV)">Export CSV</button>
   <button id="export-img" title="Export image">Export…</button>
   <button id="open-details-toolbar" title="Open Full Details" disabled>Details…</button>
+  <button id="set-token" title="Set edit token (for saves)">Set Token…</button>
+  <span id="token-badge" style="font-size:12px;padding:2px 8px;border-radius:12px;border:1px solid var(--border);color:var(--brand)" title="Edit mode status"></span>
     <label style="margin-left:8px">Status</label>
     <select id="filter-status">
       <option value="">All</option>
@@ -148,6 +150,43 @@
       </div>
     </form>
   </dialog>
+  <!-- Edit modal -->
+  <dialog id="edit-dialog" style="border:1px solid var(--border);background:var(--bg2);color:var(--text);border-radius:8px;padding:12px;max-width:720px;width:90vw;">
+    <form method="dialog">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <div id="edit-title" style="font-weight:700;color:var(--brand);flex:1">Edit</div>
+        <button value="cancel">Close</button>
+      </div>
+      <div style="display:grid;grid-template-columns:180px 1fr;gap:8px;align-items:center" id="edit-form">
+        <label>% Complete</label>
+        <input id="ed-pct" type="number" min="0" max="100" step="1" />
+        <label>Status</label>
+        <select id="ed-status">
+          <option>Planned</option><option>In Progress</option><option>Blocked</option><option>Done</option><option>Deferred</option>
+        </select>
+        <label>Start Date (mm-dd-yyyy)</label>
+        <input id="ed-start" placeholder="mm-dd-yyyy" />
+        <label>Duration (days)</label>
+        <input id="ed-dur" type="number" step="1" />
+        <label>Type</label>
+        <input id="ed-type" />
+        <label>Internal/External</label>
+        <input id="ed-intext" />
+        <label>Responsible</label>
+        <input id="ed-resp" />
+        <label>Dependencies (comma sep)</label>
+        <input id="ed-deps" />
+        <label>Pace Link</label>
+        <input id="ed-pace" />
+        <label>Notes</label>
+        <textarea id="ed-notes" rows="4" style="resize:vertical"></textarea>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;align-items:center">
+        <span id="edit-hint" style="font-size:12px;color:#bbb"></span>
+        <button id="ed-save" value="default">Save Changes</button>
+      </div>
+    </form>
+  </dialog>
   <!-- Full Details modal -->
   <dialog id="details-dialog" style="border:1px solid var(--border);background:var(--bg2);color:var(--text);border-radius:8px;padding:12px;max-width:900px;width:90vw;">
     <form method="dialog">
@@ -163,6 +202,12 @@
   let tasks = null, dbdata = null, images = null, metrics = null, costs = null, mode = 'gantt', selected = null;
   const detailsBtn = document.getElementById('open-details-toolbar');
   if(detailsBtn){ detailsBtn.addEventListener('click', ()=>{ if(selected) openFullDetails(); }); }
+  // Edit token handling
+  const TKEY = 'editToken';
+  function getToken(){ return (localStorage.getItem(TKEY)||'').trim(); }
+  function setToken(tok){ if(tok==null) return; const t=String(tok).trim(); if(t){ localStorage.setItem(TKEY, t); } else { localStorage.removeItem(TKEY); } updateTokenBadge(); }
+  function updateTokenBadge(){ const b=document.getElementById('token-badge'); if(!b) return; const t=getToken(); if(t){ b.textContent='Edit: On'; b.style.borderColor='#22c55e'; b.style.color='#22c55e'; } else { b.textContent='Edit: Off'; b.style.borderColor='var(--border)'; b.style.color='var(--brand)'; } }
+  document.getElementById('set-token')?.addEventListener('click', ()=>{ const cur=getToken(); const v=prompt('Enter edit token (leave empty to clear):', cur); if(v===null) return; setToken(v||''); });
   // Utils: copy to clipboard and linkify
   async function copyText(txt){ try { await navigator.clipboard.writeText(String(txt||'')); } catch(_){ const ta=document.createElement('textarea'); ta.value=String(txt||''); document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); }catch(_){ } ta.remove(); } }
   function linkify(text){ const s = String(text||''); const esc = escapeHtml(s); const re = /(https?:\/\/[^\s<]+[^<.,:;"')\]\s])/g; return esc.replace(re, '<a href="$1" target="_blank" rel="noopener nofollow">$1<\/a>'); }
@@ -498,6 +543,8 @@
   el.appendChild(svg);
   updateSelectionHighlight();
   updateDetailsButton();
+  // Reselect if a pending name is queued
+  if(window._pendSelectName){ const tSel = tasks.find(x=>x.name===window._pendSelectName); if(tSel){ selectTask(tSel); } window._pendSelectName=null; }
       // Timeline view (proper horizontal bars packed into non-overlapping lanes)
   const timeline = document.getElementById('timeline-view');
       try {
@@ -603,6 +650,7 @@
   timeline.appendChild(tlSvg);
   updateSelectionHighlight();
   updateDetailsButton();
+  if(window._pendSelectName){ const tSel = tasks.find(x=>x.name===window._pendSelectName); if(tSel){ selectTask(tSel); } window._pendSelectName=null; }
       } catch(e) {
         timeline.innerHTML = `<div class='empty'>${e}</div>`;
       }
@@ -780,6 +828,7 @@
           ${imgs}
           <div style='margin-top:8px'>
             <button id='open-full-details'>Open Full Details…</button>
+            <button id='open-edit' style='margin-left:8px'>Edit…</button>
           </div>
           <details style='margin-top:6px'>
             <summary>Raw</summary>
@@ -788,12 +837,66 @@
         // Wire copy buttons
         host.querySelectorAll('button.cpy').forEach(btn=>{ btn.addEventListener('click', (ev)=>{ const txt = btn.getAttribute('data-copy')||''; copyText(txt.replaceAll('&amp;','&').replaceAll('&lt;','<').replaceAll('&gt;','>').replaceAll('&#39;','\'').replaceAll('&quot;','"')); ev.stopPropagation(); }); });
         document.getElementById('open-full-details').onclick = (ev)=>{ ev.preventDefault(); openFullDetails(); };
+        document.getElementById('open-edit').onclick = (ev)=>{ ev.preventDefault(); openEditDialog(t); };
       } else {
         const r = selected.data; const cols = Object.keys(r);
         host.innerHTML = `<table>` + cols.map(k=>`<tr><th style='text-align:left;vertical-align:top;padding-right:8px'>${k}</th><td>${escapeHtml(String(r[k]??''))}</td></tr>`).join('') + `</table>` +
           `<div style='margin-top:8px'><button id='open-full-details'>Open Full Details…</button></div>`;
         document.getElementById('open-full-details').onclick = (ev)=>{ ev.preventDefault(); openFullDetails(); };
       }
+    }
+
+    function openEditDialog(task){
+      const raw = task.raw||{}; const dlg = document.getElementById('edit-dialog');
+      document.getElementById('edit-title').textContent = `Edit: ${task.name||task.id||''}`;
+      // Prefill
+      function val(k, fallback=''){ const v = raw[k]; return (v==null||v==='') ? fallback : String(v); }
+      document.getElementById('ed-pct').value = String(task.progress ?? val('% Complete','0'));
+      document.getElementById('ed-status').value = String(task.status || val('Status','Planned'));
+      document.getElementById('ed-start').value = val('Start Date','');
+      document.getElementById('ed-dur').value = String(task.duration ?? val('Duration (days)',''));
+      document.getElementById('ed-type').value = String(task.type || val('Type',''));
+      document.getElementById('ed-intext').value = String(task.internal_external || val('Internal/External',''));
+      document.getElementById('ed-resp').value = String(val('Responsible',''));
+      document.getElementById('ed-deps').value = String(raw['Dependencies']||'');
+      document.getElementById('ed-pace').value = String(val('Pace Link',''));
+      document.getElementById('ed-notes').value = String(val('Notes',''));
+      document.getElementById('edit-hint').textContent = getToken()? '' : 'Tip: Set an edit token to enable saving';
+      dlg.showModal();
+      // Wire save (one-shot)
+      const btn = document.getElementById('ed-save');
+      const handler = async (e)=>{
+        e.preventDefault();
+        const tok = getToken();
+        if(!tok){ alert('No edit token set. Click "Set Token…" in the toolbar.'); return; }
+        const updates = {
+          '% Complete': String(document.getElementById('ed-pct').value||'').trim(),
+          'Status': String(document.getElementById('ed-status').value||'').trim(),
+          'Start Date': String(document.getElementById('ed-start').value||'').trim(),
+          'Duration (days)': String(document.getElementById('ed-dur').value||'').trim(),
+          'Type': String(document.getElementById('ed-type').value||'').trim(),
+          'Internal/External': String(document.getElementById('ed-intext').value||'').trim(),
+          'Responsible': String(document.getElementById('ed-resp').value||'').trim(),
+          'Dependencies': String(document.getElementById('ed-deps').value||'').trim(),
+          'Pace Link': String(document.getElementById('ed-pace').value||'').trim(),
+          'Notes': String(document.getElementById('ed-notes').value||'').trim(),
+        };
+        // Remove empty keys to avoid overwriting with blanks unless explicitly set
+        Object.keys(updates).forEach(k=>{ if(updates[k]==='') delete updates[k]; });
+        if(Object.keys(updates).length===0){ alert('No changes to save.'); dlg.close(); return; }
+        try{
+          const res = await fetch('/api/task/update', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ edit_token: tok, project_part: task.name, updates }) });
+          if(!res.ok){ const txt = await res.text(); throw new Error(`${res.status} ${res.statusText} - ${txt}`); }
+          const j = await res.json();
+          if(!j.ok){ throw new Error('Save failed'); }
+          // Queue reselection and refresh
+          window._pendSelectName = task.name;
+          tasks = null; // force reload
+          await refresh();
+          dlg.close();
+        }catch(err){ alert(`Save failed: ${err}`); }
+      };
+      btn.addEventListener('click', handler, { once: true });
     }
 
     function openFullDetails(){
@@ -1047,6 +1150,7 @@
     // initial
     setMode('gantt');
     updateDetailsButton();
+    updateTokenBadge();
   </script>
 </body>
 </html>

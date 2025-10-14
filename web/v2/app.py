@@ -3,6 +3,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple
 from flask import Flask, jsonify, render_template, send_from_directory, Response, abort
+from flask import request
 
 # Optional SQLAlchemy for MySQL
 try:
@@ -93,6 +94,100 @@ def _fetch_rows() -> List[Dict[str, Any]]:
         return [{k:v for k,v in zip(cols, r)} for r in rows]
     finally:
         con.close()
+
+# --- Write helpers (optional edit support) ---
+
+ALLOWED_UPDATE_COLS = {
+    "% Complete",
+    "Status",
+    "Start Date",
+    "Duration (days)",
+    "Notes",
+    "Pace Link",
+    "Responsible",
+    "Type",
+    "Internal/External",
+    "Dependencies",
+}
+
+def _using_mysql() -> Tuple[bool, str]:
+    db_url = os.environ.get('WEB_DB_URL', '').strip()
+    return (bool(db_url and _HAS_SA), db_url)
+
+def _deny_if_ro_sqlite():
+    if (os.environ.get('WEB_SQLITE_RO', '').lower() in ('1','true','yes')):
+        abort(403, description='SQLite is in read-only mode (WEB_SQLITE_RO=1)')
+
+@app.post('/api/task/update')
+def api_task_update():
+    # Optional token auth
+    token_env = os.environ.get('WEB_EDIT_TOKEN', '').strip()
+    if token_env:
+        tok = (request.json or {}).get('edit_token', '').strip()
+        if tok != token_env:
+            abort(403, description='Invalid edit token')
+    data = request.get_json(silent=True) or {}
+    name = (data.get('project_part') or '').strip()
+    updates_in = data.get('updates') or {}
+    if not name:
+        abort(400, description='project_part is required')
+    # Filter allowed columns only
+    updates = { k: v for k, v in updates_in.items() if k in ALLOWED_UPDATE_COLS }
+    if not updates:
+        abort(400, description='No allowed columns to update')
+    using_mysql, db_url = _using_mysql()
+    rows_affected = 0
+    if using_mysql:
+        # Use SQLAlchemy text with backtick-quoted identifiers
+        engine = create_engine(db_url, pool_pre_ping=True)
+        sets = []
+        params: Dict[str, Any] = {}
+        for i,(k,v) in enumerate(updates.items(), start=1):
+            p = f"v{i}"
+            sets.append(f"`{k}` = :{p}")
+            params[p] = v
+        params['name'] = name
+        sql = text(f"UPDATE `project_parts` SET {', '.join(sets)} WHERE `Project Part` = :name")
+        try:
+            with engine.begin() as conn:
+                res = conn.execute(sql, params)
+                rows_affected = res.rowcount or 0
+        except Exception as e:
+            abort(500, description=f'MySQL update failed: {e}')
+    else:
+        # SQLite direct update (deny if RO)
+        _deny_if_ro_sqlite()
+        db = get_db_path()
+        if not os.path.exists(db):
+            abort(404, description='SQLite DB not found')
+        try:
+            con = sqlite3.connect(db)
+            cur = con.cursor()
+            sets = []
+            vals: List[Any] = []
+            for k, v in updates.items():
+                sets.append(f'"{k}" = ?')
+                vals.append(v)
+            vals.append(name)
+            sql = f'UPDATE project_parts SET {", ".join(sets)} WHERE "Project Part" = ?'
+            cur.execute(sql, vals)
+            rows_affected = cur.rowcount or 0
+            con.commit()
+        except Exception as e:
+            try:
+                con.rollback()
+            except Exception:
+                pass
+            abort(500, description=f'SQLite update failed: {e}')
+        finally:
+            try:
+                con.close()
+            except Exception:
+                pass
+    # Return the updated row (best-effort)
+    rows = _fetch_rows()
+    row = next((r for r in rows if (r.get('Project Part') or '').strip() == name), None)
+    return jsonify({ 'ok': True, 'rows_affected': rows_affected, 'row': row })
 
 # --- Mapping for views ---
 

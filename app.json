@@ -1,0 +1,17 @@
+{
+  "name": "Aja_au_Grimace Web (v2)",
+  "description": "Flask v2 web viewer (Gantt/Timeline/DB) in web/ using Gunicorn",
+  "env": {
+    "APP_BASE": { "description": "Monorepo buildpack subdir", "value": "web" },
+    "WEB_WATERMARK_TEXT": { "required": false },
+    "PROJECT_DB_PATH": { "required": false },
+    "WEB_IMAGES_ROOT": { "required": false },
+    "WEB_SQLITE_RO": { "required": false },
+    "WEB_DB_URL": { "required": false },
+    "WEB_EDIT_TOKEN": { "required": false }
+  },
+  "buildpacks": [
+    { "url": "https://github.com/lstoll/heroku-buildpack-monorepo" },
+    { "url": "heroku/python" }
+  ]
+}

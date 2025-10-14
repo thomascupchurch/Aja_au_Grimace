@@ -1,6 +1,6 @@
 # Deploying the Read‑only Web Viewer
 
-This guide covers deploying the Flask web viewer in `web/` to PythonAnywhere and Render. The viewer is read‑only and serves data from your SQLite database.
+This guide covers deploying the Flask web viewer in `web/` to PythonAnywhere, Heroku, and Render. The viewer serves data from your SQLite or MySQL database. Optional edit mode is available when configured.
 
 Quick facts
 - App entry point: `web/app.py` (Flask app object is `app`)
@@ -10,6 +10,7 @@ Quick facts
 
 Contents
 - PythonAnywhere (shared hosting)
+- Heroku (monorepo / web subdirectory)
 - Render (managed container)
 - On‑prem: Windows service/IIS/Docker
 - Environment variables and DB placement
@@ -279,3 +280,42 @@ Read‑only mode for network shares:
 - Do not expose sensitive data publicly
 - Prefer a snapshot DB for public demos
 - For private/internal use, restrict access at the platform level or place behind SSO
+
+---
+
+## Heroku (Deploy from GitHub)
+
+Heroku can deploy this repo even though the app lives under `web/`. Use the monorepo buildpack to target the subdirectory, and keep server‑only requirements separate from desktop.
+
+1) Prepare the `web/` folder (already in repo)
+  - `web/Procfile`: `web: gunicorn -w 2 -b 0.0.0.0:$PORT v2.app:app`
+  - `web/runtime.txt`: e.g., `python-3.11.9`
+  - `web/requirements-web.txt` includes Flask, SQLAlchemy, PyMySQL, gunicorn
+
+2) Configure Heroku app (Dashboard)
+  - Connect GitHub repo
+  - In Settings → Buildpacks, add the Monorepo buildpack:
+    - `https://github.com/lstoll/heroku-buildpack-monorepo`
+  - Add a config var `APP_BASE` with value `web` (monorepo buildpack reads this)
+  - Add the official Python buildpack after the monorepo buildpack
+
+3) Environment variables (Settings → Config Vars)
+  - Optional (SQLite path): `PROJECT_DB_PATH` → absolute path within dyno or mount
+  - Optional (MySQL): `WEB_DB_URL = mysql+pymysql://user:pass@host/db?charset=utf8mb4`
+    - You can use Heroku ClearDB (MySQL) or other add‑ons. Ensure UPDATE privilege if enabling edits.
+  - Optional (images): `WEB_IMAGES_ROOT` → absolute path of images directory, or place images in the repo `images/`
+  - Optional (read‑only SQLite): `WEB_SQLITE_RO=1`
+  - Optional (edit mode): `WEB_EDIT_TOKEN=<strong-secret>`
+
+4) Deploy tab
+  - Select branch `main` and click Deploy (manual) or enable automatic deploys
+  - Heroku will build using `web/` as the app root and launch Gunicorn serving `v2.app:app`
+
+5) Verify
+  - Visit `/api/debug` to confirm DB backend, row count, images path
+  - Visit `/` to verify Gantt/Timeline/Details
+  - If using edit mode, click Set Token… in the toolbar and try an edit
+
+Notes
+  - Do not use the root `requirements.txt` on Heroku; it includes desktop-only packages (PyQt). The monorepo buildpack limits the build context to `web/`, where requirements are lean.
+  - If you need the legacy `web/app.py`, change Procfile to `app:app` instead of `v2.app:app`.
