@@ -77,6 +77,9 @@ PROJECT_COLUMNS = [
 def _fetch_rows() -> List[Dict[str, Any]]:
     db_url = os.environ.get('WEB_DB_URL', '').strip()
     if db_url and _HAS_SA:
+        # Heroku sets DATABASE_URL to 'postgres://...' (deprecated); SQLAlchemy expects 'postgresql://...'
+        if db_url.startswith('postgres://'):
+            db_url = 'postgresql://' + db_url[len('postgres://'):]
         engine = create_engine(db_url, pool_pre_ping=True)
         try:
             with engine.connect() as conn:
@@ -504,6 +507,9 @@ def api_images():
 @app.route('/api/debug')
 def api_debug():
     db_url = os.environ.get('WEB_DB_URL','').strip()
+    # Heroku sets DATABASE_URL to 'postgres://...' (deprecated); SQLAlchemy expects 'postgresql://...'
+    if db_url.startswith('postgres://'):
+        db_url = 'postgresql://' + db_url[len('postgres://'):]
     using_mysql = bool(db_url and _HAS_SA)
     db = get_db_path()
     img_root = images_root()
