@@ -4,7 +4,7 @@ import zipfile
 
 # --- CONFIGURATION ---
 GITHUB_REPO = "thomascupchurch/Aja_au_Grimace"
-ONEDRIVE_FOLDER = r"C:\Users\tupchurch\OneDrive - LSI\UT_App_Shared"  # Change to your shared folder path
+ONEDRIVE_FOLDER = r"\\app01\lsi\UT_App_Shared"  # Change to your shared folder path
 
 def get_latest_release_zip_url():
     api_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases"

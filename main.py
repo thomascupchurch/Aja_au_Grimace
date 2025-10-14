@@ -4398,7 +4398,13 @@ class GanttChartView(QWidget):
                         if prev: filter_edit.setText(prev)
                     except Exception: pass
                     vb.addWidget(filter_edit)
-                    lst = QListWidget(); lst.setSelectionMode(QListWidget.MultiSelection); vb.addWidget(lst,1)
+                    lst = QListWidget()
+                    try:
+                        sel_mode = QAbstractItemView.SelectionMode.MultiSelection
+                    except Exception:
+                        sel_mode = getattr(QAbstractItemView, 'MultiSelection', 1)
+                    lst.setSelectionMode(sel_mode)
+                    vb.addWidget(lst,1)
                     cur_tokens = {t.strip() for t in (dep_edit.text() or '').split(',') if t.strip()}
                     # id mapping
                     name_to_id = {}
@@ -4410,13 +4416,18 @@ class GanttChartView(QWidget):
                                 for rid, pname in cur.fetchall(): name_to_id[pname]=rid
                     except Exception: pass
                     current_name = row.get('Project Part','')
+                    # PyQt6: roles live under Qt.ItemDataRole
+                    try:
+                        user_role = Qt.ItemDataRole.UserRole
+                    except Exception:
+                        user_role = getattr(Qt, 'UserRole', 32)
                     for r2 in self.model.rows:
                         pname = r2.get('Project Part','')
                         if not pname or pname == current_name: continue
                         disp = f"{pname} ({name_to_id[pname]})" if pname in name_to_id else pname
                         it = QListWidgetItem(disp, lst)
                         if pname in cur_tokens: it.setSelected(True)
-                        it.setData(Qt.UserRole, pname)
+                        it.setData(user_role, pname)
                     def apply_filter():
                         q = filter_edit.text().strip().lower()
                         for i in range(lst.count()):
@@ -4431,13 +4442,13 @@ class GanttChartView(QWidget):
                             names.add(target); target = name_map.get(target,{}).get('Parent') or ''
                         for i in range(lst.count()):
                             it = lst.item(i)
-                            if it.data(Qt.UserRole) in names: it.setSelected(True)
+                            if it.data(user_role) in names: it.setSelected(True)
                     btn_par.clicked.connect(do_par)
                     def do_cp():
                         crit = getattr(self, '_current_critical_set', set())
                         for i in range(lst.count()):
                             it = lst.item(i)
-                            if it.data(Qt.UserRole) in crit: it.setSelected(True)
+                            if it.data(user_role) in crit: it.setSelected(True)
                     btn_cp.clicked.connect(do_cp)
                     def do_cl():
                         for i in range(lst.count()): lst.item(i).setSelected(False)
@@ -4447,7 +4458,7 @@ class GanttChartView(QWidget):
                         sels=[]
                         for i in range(lst.count()):
                             it = lst.item(i)
-                            if it.isSelected(): sels.append(it.data(Qt.UserRole))
+                            if it.isSelected(): sels.append(it.data(user_role))
                         if sels and _would_create_cycle(self.model, row.get('Project Part',''), set(sels)):
                             if QMessageBox.warning(d,'Cycle Detected','Cycle introduced. Proceed?', QMessageBox.Yes|QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
                                 return
@@ -7750,6 +7761,405 @@ from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem
 from PyQt6.QtWidgets import QDateEdit
 from PyQt6.QtCore import QDate
 
+# --- Reusable Dependencies Picker Dialog (PyQt6) ---
+class DependenciesPickerDialog(QDialog):
+    """Dialog to pick Dependencies for a given row using project part names.
+    - Supports filtering, multi-select, 'Select Parents', and cycle detection.
+    - Persists filter text via QSettings("LSI","ProjectPlanner").
+    Returns a list of selected names in self.selected when accepted.
+    """
+    # Shared clipboard for Copy/Paste across dialog instances
+    CLIPBOARD = []
+
+    def __init__(self, parent, model, row: dict):
+        super().__init__(parent)
+        from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QMessageBox
+        from PyQt6.QtWidgets import QAbstractItemView
+        from PyQt6.QtCore import QSettings
+        from PyQt6.QtCore import Qt
+        import os, sqlite3
+
+        self.model = model
+        self.row = row
+        self.selected = None
+
+        self.setWindowTitle("Select Dependencies")
+        vb = QVBoxLayout(self)
+        # Filter
+        self.filter_edit = QLineEdit(self)
+        self.filter_edit.setPlaceholderText("Filter…")
+        try:
+            prev = QSettings('LSI','ProjectPlanner').value('DepsPicker/filter','')
+            if prev:
+                self.filter_edit.setText(prev)
+        except Exception:
+            pass
+        vb.addWidget(self.filter_edit)
+
+        # List
+        self.lst = QListWidget(self)
+        try:
+            sel_mode = QAbstractItemView.SelectionMode.MultiSelection
+        except Exception:
+            sel_mode = getattr(QAbstractItemView, 'MultiSelection', 1)
+        self.lst.setSelectionMode(sel_mode)
+        vb.addWidget(self.lst, 1)
+
+        # Build name -> id map (optional)
+        name_to_id = {}
+        try:
+            if hasattr(self.model, 'DB_FILE') and os.path.exists(self.model.DB_FILE):
+                with self.model._connect() as _c:  # type: ignore[attr-defined]
+                    cur = _c.cursor(); cur.execute('SELECT id, "Project Part" FROM project_parts')
+                    for rid, pname in cur.fetchall():
+                        name_to_id[pname] = rid
+        except Exception:
+            pass
+
+        # Preselect current tokens
+        cur_tokens = {t.strip() for t in (row.get('Dependencies') or '').split(',') if t.strip()}
+        current_name = row.get('Project Part','')
+        # Populate list
+        try:
+            user_role = Qt.ItemDataRole.UserRole
+        except Exception:
+            user_role = getattr(Qt, 'UserRole', 32)
+        for r2 in getattr(self.model, 'rows', []):
+            pname = r2.get('Project Part','')
+            if not pname or pname == current_name:
+                continue
+            disp = f"{pname} ({name_to_id[pname]})" if pname in name_to_id else pname
+            it = QListWidgetItem(disp, self.lst)
+            if pname in cur_tokens:
+                it.setSelected(True)
+            it.setData(user_role, pname)
+
+        # Filter behavior
+        def apply_filter():
+            q = (self.filter_edit.text() or '').strip().lower()
+            for i in range(self.lst.count()):
+                it = self.lst.item(i)
+                it.setHidden(q not in it.text().lower())
+        self.filter_edit.textChanged.connect(lambda _: apply_filter())
+        apply_filter()
+
+        # Helpers row
+        hb = QHBoxLayout()
+        btn_par = QPushButton('Select Parents', self)
+        btn_anc = QPushButton('Select Ancestors', self)
+        btn_desc = QPushButton('Select Descendants', self)
+        btn_children = QPushButton('Select Children', self)
+        btn_siblings = QPushButton('Select Siblings', self)
+        btn_up = QPushButton('Select Upstream', self)
+        btn_down = QPushButton('Select Downstream', self)
+        btn_cp = QPushButton('Select Critical Path', self)
+        btn_copy = QPushButton('Copy', self)
+        btn_paste = QPushButton('Paste', self)
+        btn_clear = QPushButton('Clear', self)
+        for b in (btn_par, btn_anc, btn_desc, btn_children, btn_siblings, btn_up, btn_down, btn_cp, btn_copy, btn_paste, btn_clear):
+            hb.addWidget(b)
+        hb.addStretch(1)
+        vb.addLayout(hb)
+
+        def do_par():
+            target = self.row.get('Parent') or ''
+            name_map = {r.get('Project Part',''): r for r in getattr(self.model, 'rows', [])}
+            names = set()
+            while target:
+                names.add(target)
+                target = name_map.get(target,{}).get('Parent') or ''
+            for i in range(self.lst.count()):
+                it = self.lst.item(i)
+                try:
+                    role = Qt.ItemDataRole.UserRole
+                except Exception:
+                    role = getattr(Qt, 'UserRole', 32)
+                if it.data(role) in names:
+                    it.setSelected(True)
+        btn_par.clicked.connect(do_par)
+
+        def do_ancestors():
+            cur = self.row.get('Project Part','')
+            name_map = {r.get('Project Part',''): r for r in getattr(self.model,'rows',[])}
+            names=set(); target = name_map.get(cur,{}).get('Parent') or ''
+            while target:
+                names.add(target); target = name_map.get(target,{}).get('Parent') or ''
+            role = _get_role()
+            for i in range(self.lst.count()):
+                it = self.lst.item(i)
+                if it.data(role) in names:
+                    it.setSelected(True)
+        btn_anc.clicked.connect(do_ancestors)
+
+        def do_descendants():
+            cur = self.row.get('Project Part','')
+            children_map = {}
+            for r in getattr(self.model,'rows',[]):
+                p = r.get('Parent',''); n = r.get('Project Part','')
+                if n and p:
+                    children_map.setdefault(p, set()).add(n)
+            seen=set(); stack=list(children_map.get(cur, []))
+            while stack:
+                x = stack.pop()
+                if x in seen: continue
+                seen.add(x)
+                stack.extend(list(children_map.get(x, [])))
+            role = _get_role()
+            for i in range(self.lst.count()):
+                it = self.lst.item(i)
+                if it.data(role) in seen:
+                    it.setSelected(True)
+        btn_desc.clicked.connect(do_descendants)
+
+        def _get_role():
+            try:
+                return Qt.ItemDataRole.UserRole
+            except Exception:
+                return getattr(Qt, 'UserRole', 32)
+
+        def do_children():
+            # Select immediate children of current row
+            cur = self.row.get('Project Part','')
+            names = [r.get('Project Part','') for r in getattr(self.model,'rows',[]) if r.get('Parent','') == cur and r.get('Project Part','')]
+            role = _get_role()
+            for i in range(self.lst.count()):
+                it = self.lst.item(i)
+                if it.data(role) in names:
+                    it.setSelected(True)
+        btn_children.clicked.connect(do_children)
+
+        def do_siblings():
+            # Select tasks with same parent (excluding current)
+            par = self.row.get('Parent','')
+            cur = self.row.get('Project Part','')
+            names = [r.get('Project Part','') for r in getattr(self.model,'rows',[]) if r.get('Parent','') == par and r.get('Project Part','') and r.get('Project Part','') != cur]
+            role = _get_role()
+            for i in range(self.lst.count()):
+                it = self.lst.item(i)
+                if it.data(role) in names:
+                    it.setSelected(True)
+        btn_siblings.clicked.connect(do_siblings)
+
+        def _build_graph():
+            rows = list(getattr(self.model, 'rows', []))
+            name_to_row = {r.get('Project Part',''): r for r in rows}
+            preds = {n: [d.strip() for d in (row.get('Dependencies') or '').split(',') if d.strip()] for n, row in name_to_row.items()}
+            succs = {}
+            for n, ds in preds.items():
+                for d in ds:
+                    succs.setdefault(d, set()).add(n)
+            return preds, succs
+
+        def do_upstream():
+            # Select all transitive predecessors of current row
+            cur = self.row.get('Project Part','')
+            preds, _succs = _build_graph()
+            seen = set()
+            stack = list(preds.get(cur, []))
+            while stack:
+                x = stack.pop()
+                if x in seen:
+                    continue
+                seen.add(x)
+                stack.extend(preds.get(x, []))
+            role = _get_role()
+            for i in range(self.lst.count()):
+                it = self.lst.item(i)
+                if it.data(role) in seen:
+                    it.setSelected(True)
+        btn_up.clicked.connect(do_upstream)
+
+        def do_downstream():
+            # Select all transitive successors (tasks depending on current)
+            cur = self.row.get('Project Part','')
+            _preds, succs = _build_graph()
+            seen = set()
+            stack = list(succs.get(cur, []))
+            while stack:
+                x = stack.pop()
+                if x in seen:
+                    continue
+                seen.add(x)
+                stack.extend(list(succs.get(x, [])))
+            role = _get_role()
+            for i in range(self.lst.count()):
+                it = self.lst.item(i)
+                if it.data(role) in seen:
+                    it.setSelected(True)
+        btn_down.clicked.connect(do_downstream)
+
+        def do_cp():
+            # Compute a cheap critical set using the same approach as progress_metrics, local to current model.rows
+            try:
+                import datetime as _dt
+                rows = list(getattr(self.model, 'rows', []))
+                name_to_row = {r.get("Project Part", ""): r for r in rows}
+                # Build predecessors map from Dependencies
+                preds = {n: [d.strip() for d in (name_to_row.get(n, {}).get("Dependencies") or '').split(',') if d.strip()] for n in name_to_row}
+                # Topo order
+                indeg = {n: 0 for n in name_to_row}
+                for n, ds in preds.items():
+                    for d in ds:
+                        indeg[n] += 1
+                q = [n for n, d in indeg.items() if d == 0]
+                order = []
+                while q:
+                    cur = q.pop(0)
+                    order.append(cur)
+                    for m, ds in preds.items():
+                        if cur in ds:
+                            indeg[m] -= 1
+                            if indeg[m] == 0:
+                                q.append(m)
+                # Dates/durations
+                def _parse_date(s):
+                    try:
+                        return _dt.datetime.strptime(s, "%m-%d-%Y").date()
+                    except Exception:
+                        return None
+                start = {n: _parse_date(name_to_row.get(n, {}).get("Start Date", "")) for n in name_to_row}
+                dur = {}
+                for n in name_to_row:
+                    try:
+                        d = int(name_to_row.get(n, {}).get("Duration (days)") or 0)
+                    except Exception:
+                        d = 0
+                    dur[n] = d
+                es = {}; ef = {}
+                for n in order:
+                    base = start.get(n) or min((ef[p] for p in preds.get(n, []) if p in ef), default=_dt.date.today())
+                    es[n] = base
+                    ef[n] = base + _dt.timedelta(days=dur.get(n, 0))
+                # Backward
+                ls = {}; lf = {}
+                if order:
+                    project_end = max(ef.values())
+                    for n in reversed(order):
+                        succs = [m for m, ds in preds.items() if n in ds]
+                        lf[n] = min(ls[s] for s in succs) if succs else project_end
+                        dd = (ef[n] - es[n]).days
+                        ls[n] = lf[n] - _dt.timedelta(days=dd)
+                    crit = {n for n in order if abs((es[n]-ls[n]).days) <= 0}
+                else:
+                    crit = set()
+            except Exception:
+                crit = set()
+            try:
+                role = Qt.ItemDataRole.UserRole
+            except Exception:
+                role = getattr(Qt, 'UserRole', 32)
+            for i in range(self.lst.count()):
+                it = self.lst.item(i)
+                if it.data(role) in crit:
+                    it.setSelected(True)
+        btn_cp.clicked.connect(do_cp)
+
+        def do_copy():
+            # Copy current selection into shared clipboard and QSettings
+            role = _get_role()
+            sels = []
+            for i in range(self.lst.count()):
+                it = self.lst.item(i)
+                if it.isSelected():
+                    sels.append(it.data(role))
+            type(self).CLIPBOARD = list(sorted({s for s in sels if s}))
+            try:
+                QSettings('LSI','ProjectPlanner').setValue('DepsPicker/clipboard', ','.join(type(self).CLIPBOARD))
+            except Exception:
+                pass
+        btn_copy.clicked.connect(do_copy)
+
+        def do_paste():
+            # Apply clipboard selection if available
+            names = list(type(self).CLIPBOARD)
+            if not names:
+                try:
+                    cached = QSettings('LSI','ProjectPlanner').value('DepsPicker/clipboard','')
+                    if cached:
+                        names = [t.strip() for t in str(cached).split(',') if t.strip()]
+                except Exception:
+                    names = []
+            if not names:
+                return
+            role = _get_role()
+            for i in range(self.lst.count()):
+                it = self.lst.item(i)
+                if it.data(role) in names:
+                    it.setSelected(True)
+        btn_paste.clicked.connect(do_paste)
+
+        def do_clear():
+            for i in range(self.lst.count()):
+                self.lst.item(i).setSelected(False)
+        btn_clear.clicked.connect(do_clear)
+
+        # OK/Cancel
+        btns = QHBoxLayout()
+        ok = QPushButton('OK', self)
+        canc = QPushButton('Cancel', self)
+        btns.addStretch(1)
+        btns.addWidget(ok)
+        btns.addWidget(canc)
+        vb.addLayout(btns)
+
+        def accept_clicked():
+            sels = []
+            try:
+                role = Qt.ItemDataRole.UserRole
+            except Exception:
+                role = getattr(Qt, 'UserRole', 32)
+            for i in range(self.lst.count()):
+                it = self.lst.item(i)
+                if it.isSelected():
+                    sels.append(it.data(role))
+            # Cycle detection
+            try:
+                if sels and _would_create_cycle(self.model, self.row.get('Project Part',''), set(sels)):
+                    if QMessageBox.warning(self, 'Cycle Detected', 'Cycle introduced. Proceed?', QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                        return
+            except Exception:
+                pass
+            self.selected = sorted(sels)
+            try:
+                QSettings('LSI','ProjectPlanner').setValue('DepsPicker/filter', self.filter_edit.text())
+            except Exception:
+                pass
+            self.accept()
+
+        ok.clicked.connect(accept_clicked)
+        canc.clicked.connect(self.reject)
+
+        # Keyboard shortcuts
+        try:
+            from PyQt6.QtGui import QShortcut, QKeySequence
+            # Enter -> OK, Esc -> Cancel
+            QShortcut(QKeySequence("Return"), self, activated=accept_clicked)
+            QShortcut(QKeySequence("Enter"), self, activated=accept_clicked)
+            QShortcut(QKeySequence("Esc"), self, activated=self.reject)
+            # Ctrl+A select visible
+            def _sel_all_visible():
+                for i in range(self.lst.count()):
+                    it = self.lst.item(i)
+                    if not it.isHidden():
+                        it.setSelected(True)
+            QShortcut(QKeySequence("Ctrl+A"), self, activated=_sel_all_visible)
+            # Ctrl+I invert visible
+            def _inv_visible():
+                for i in range(self.lst.count()):
+                    it = self.lst.item(i)
+                    if not it.isHidden():
+                        it.setSelected(not it.isSelected())
+            QShortcut(QKeySequence("Ctrl+I"), self, activated=_inv_visible)
+            # Ctrl+C / Ctrl+V copy/paste
+            QShortcut(QKeySequence("Ctrl+C"), self, activated=do_copy)
+            QShortcut(QKeySequence("Ctrl+V"), self, activated=do_paste)
+            # Ctrl+P parents; Ctrl+Shift+P critical path
+            QShortcut(QKeySequence("Ctrl+P"), self, activated=do_par)
+            QShortcut(QKeySequence("Ctrl+Shift+P"), self, activated=lambda: btn_cp.click())
+        except Exception:
+            pass
+
+
 class DatabaseView(QWidget):
     DATE_FIELDS = {"Start Date", "Calculated End Date"}
     DROPDOWN_FIELDS = {
@@ -7953,6 +8363,59 @@ class DatabaseView(QWidget):
                         spin.setEnabled(False)
                     self.table.setCellWidget(row, col, spin)
                     self.table.setItem(row, col, QTableWidgetItem(str(spin.value())))
+                elif colname == "Dependencies":
+                    # Provide a 'Select…' button to launch the dependencies picker
+                    from PyQt6.QtWidgets import QWidget as _QW, QHBoxLayout as _HB, QPushButton as _PB, QLineEdit as _LE
+                    cell = _QW()
+                    h = _HB(cell)
+                    h.setContentsMargins(0,0,0,0)
+                    dep_text = rowdata.get(colname, "")
+                    txt = _LE(dep_text)
+                    txt.setReadOnly(True)
+                    # Add count badge in button label
+                    dep_count = len([t for t in (dep_text or '').split(',') if t.strip()])
+                    btn = _PB(f"Select… ({dep_count})")
+                    btn.setToolTip(dep_text or "No dependencies")
+                    if getattr(self, '_read_only', False):
+                        btn.setEnabled(False)
+                    def open_picker(r=row, c=col):
+                        dlg = DependenciesPickerDialog(self, self.model, self.model.rows[r])
+                        if dlg.exec():
+                            new_txt = ', '.join(dlg.selected or [])
+                            self.model.rows[r]["Dependencies"] = new_txt
+                            # Persist to DB and refresh
+                            try:
+                                self.model.save_to_db()
+                            except Exception:
+                                pass
+                            # Update UI inline (avoid full table rebuild for snappier UX)
+                            txt.setText(new_txt)
+                            new_count = len([t for t in (new_txt or '').split(',') if t.strip()])
+                            btn.setText(f"Select… ({new_count})")
+                            btn.setToolTip(new_txt or "No dependencies")
+                            # Optional: status bar toast if available
+                            try:
+                                mw = self.window()
+                                if hasattr(mw, 'statusBar'):
+                                    mw.statusBar().showMessage(f"Updated dependencies ({new_count}) for '{self.model.rows[r].get('Project Part','')}'", 4000)
+                            except Exception:
+                                pass
+                            # If other views depend on Dependencies, then perform full refresh
+                            try:
+                                self.refresh_table()
+                            except Exception:
+                                pass
+                            if self.on_data_changed:
+                                try:
+                                    self.on_data_changed()
+                                except Exception:
+                                    pass
+                    btn.clicked.connect(open_picker)
+                    h.addWidget(txt, 1)
+                    h.addWidget(btn)
+                    cell.setLayout(h)
+                    self.table.setCellWidget(row, col, cell)
+                    self.table.setItem(row, col, QTableWidgetItem(txt.text()))
                 elif colname in self.DROPDOWN_FIELDS or colname == "Parent":
                     from PyQt6.QtWidgets import QComboBox
                     combo = QComboBox()
