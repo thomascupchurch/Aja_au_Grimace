@@ -80,6 +80,9 @@ def _fetch_rows() -> List[Dict[str, Any]]:
         # Heroku sets DATABASE_URL to 'postgres://...' (deprecated); SQLAlchemy expects 'postgresql://...'
         if db_url.startswith('postgres://'):
             db_url = 'postgresql://' + db_url[len('postgres://'):]
+        # SQL Server support: rewrite mssql:// to mssql+pyodbc:// for SQLAlchemy
+        if db_url.startswith('mssql://'):
+            db_url = db_url.replace('mssql://', 'mssql+pyodbc://', 1)
         engine = create_engine(db_url, pool_pre_ping=True)
         try:
             with engine.connect() as conn:
@@ -510,19 +513,31 @@ def api_debug():
     # Heroku sets DATABASE_URL to 'postgres://...' (deprecated); SQLAlchemy expects 'postgresql://...'
     if db_url.startswith('postgres://'):
         db_url = 'postgresql://' + db_url[len('postgres://'):]
-    using_mysql = bool(db_url and _HAS_SA)
+    # SQL Server support: rewrite mssql:// to mssql+pyodbc:// for SQLAlchemy
+    if db_url.startswith('mssql://'):
+        db_url = db_url.replace('mssql://', 'mssql+pyodbc://', 1)
+    using_sql = bool(db_url and _HAS_SA)
     db = get_db_path()
     img_root = images_root()
+    # Detect backend for reporting
+    if db_url.startswith('mssql+pyodbc://'):
+        backend = 'sqlserver'
+    elif db_url.startswith('postgresql://'):
+        backend = 'postgres'
+    elif db_url.startswith('mysql'):
+        backend = 'mysql'
+    else:
+        backend = 'sqlite'
     info = {
-        'db_backend': 'mysql' if using_mysql else 'sqlite',
-        'db_path': db if not using_mysql else db_url.split('@')[-1],
-        'db_exists': os.path.exists(db) if not using_mysql else True,
+        'db_backend': backend,
+        'db_path': db if backend == 'sqlite' else db_url.split('@')[-1],
+        'db_exists': os.path.exists(db) if backend == 'sqlite' else True,
         'table': 'project_parts',
         'row_count': 0,
         'images_root': img_root,
     }
     try:
-        if using_mysql:
+        if backend != 'sqlite':
             engine = create_engine(db_url, pool_pre_ping=True)
             with engine.connect() as conn:
                 info['row_count'] = conn.execute(text('SELECT COUNT(*) FROM project_parts')).scalar_one()
