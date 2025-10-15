@@ -6,6 +6,7 @@ Prune old release artifacts, keeping the most recent N releases.
 - Keeps the newest N matching release zip files (e.g., release_*.zip) and their .sha256 checksums.
 - Optionally prunes matching release folders under .\release\ if they follow a sortable timestamped naming pattern.
 - Safe by default with -WhatIf support; shows planned deletions.
+ - Also removes orphan checksum files (release_*.zip.sha256) that do not correspond to the kept set of .zip files or whose .zip no longer exists.
 
 .PARAMETER Keep
 Number of newest releases to keep (default 3).
@@ -61,6 +62,31 @@ try {
     }
   }
   Write-Host ("Kept {0} zip(s). Deleted {1}." -f $keepSet.Count, ($delZips | Measure-Object).Count)
+
+  # 1b) Prune orphan checksum files (e.g., release_*.zip.sha256) not in the kept set or where the .zip is missing
+  $checksumFilter = if ($Pattern.EndsWith('.sha256')) { $Pattern } else { "$Pattern.sha256" }
+  $allChecksums = Get-ChildItem -File -Filter $checksumFilter -ErrorAction SilentlyContinue
+  if ($allChecksums) {
+    # Build lookup of kept zip full paths
+    $keepZipSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($p in $keepSet) { $null = $keepZipSet.Add($p) }
+
+    $delChecksums = @()
+    foreach ($cs in $allChecksums) {
+      # Derive the corresponding .zip by trimming the trailing ".sha256"
+      $zipPath = $cs.FullName.Substring(0, $cs.FullName.Length - 7)
+      if (-not $keepZipSet.Contains($zipPath)) {
+        $delChecksums += $cs
+      }
+    }
+
+    foreach ($cs in $delChecksums) {
+      if ($PSCmdlet.ShouldProcess($cs.FullName, 'Remove orphan checksum')) {
+        Remove-Item -Force -ErrorAction SilentlyContinue -- $cs.FullName
+      }
+    }
+    Write-Host ("Deleted {0} orphan checksum file(s)." -f (($delChecksums | Measure-Object).Count))
+  }
 
   if ($PruneFolders) {
     # 2) Prune release subfolders older than kept zip cohort (by name prefix timestamp or by mtime)
