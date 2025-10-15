@@ -204,6 +204,15 @@ Notes and caveats:
 - SQLite WAL (`-wal`/`-shm`) files may appear alongside the DB; this is normal in read‑write sessions. Read‑only sessions do not write these files.
 - For high‑conflict environments, encourage viewers to keep Read‑Only on and reserve edits to one person at a time.
 
+### Shared SMB/UNC Deployment Tips
+- Prefer a proper SMB share on a Windows file server for the live `project_data.db` (avoid OneDrive/SharePoint sync locations for the writable DB).
+- The app auto‑detects UNC paths and avoids WAL (uses `journal_mode=DELETE` and `synchronous=FULL`) to reduce corruption risk on network shares.
+- Environment overrides:
+    - `PROJECTAPP_DB_NETWORK=1` → force SMB‑safe PRAGMAs even if the path doesn’t look UNC.
+    - `PROJECTAPP_SQLITE_WAL=1` → force WAL even on UNC (not recommended on shares).
+- Keep transactions short and let only one person edit at a time (advisory lock file coordinates a single writer).
+- Backups: use SQLite online backup (`VACUUM INTO`) or copy while no editor holds the lock.
+
 ---
 
 ## Project Structure

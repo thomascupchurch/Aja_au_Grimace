@@ -600,10 +600,17 @@ class ProjectDataModel:
             raise
 
     def _connect(self):
-        """Return an sqlite3 connection with WAL, busy timeout and slightly safer cache settings.
-        For network drives like OneDrive/SharePoint, WAL reduces lock contention but conflicts can still occur.
+        """Return an sqlite3 connection with PRAGMAs tuned for local vs shared (SMB) deployments.
+        Defaults:
+        - Read-only: true SQLite read-only URI, foreign_keys=ON, busy_timeout=20000
+        - Read-write local: WAL + synchronous=NORMAL
+        - Read-write UNC/SMB: journal_mode=DELETE + synchronous=FULL (avoid WAL on shares)
+
+        Overrides:
+        - PROJECTAPP_DB_NETWORK=1  → force UNC/SMB-safe mode (DELETE/FULL)
+        - PROJECTAPP_SQLITE_WAL=1  → force WAL even on network (not recommended)
         """
-        import sqlite3
+        import sqlite3, os
         # Ensure parent exists (defensive guard for scenarios where DB path dir was missing)
         try:
             db_dir = os.path.dirname(os.path.abspath(self.DB_FILE))
@@ -611,30 +618,55 @@ class ProjectDataModel:
                 os.makedirs(db_dir, exist_ok=True)
         except Exception:
             pass
+
+        # Detect UNC/SMB path (e.g., \\server\share\...)
+        try:
+            db_abs = os.path.abspath(self.DB_FILE)
+            # UNC paths on Windows start with two backslashes (e.g., \\server\share\...)
+            is_unc = db_abs.startswith('\\')
+        except Exception:
+            is_unc = False
+        # Env overrides
+        try:
+            force_net = str(os.environ.get('PROJECTAPP_DB_NETWORK','')).lower() in ('1','true','yes','on')
+        except Exception:
+            force_net = False
+        try:
+            force_wal = str(os.environ.get('PROJECTAPP_SQLITE_WAL','')).lower() in ('1','true','yes','on')
+        except Exception:
+            force_wal = False
+        network_mode = bool(force_net or is_unc)
+
         # Use check_same_thread=False to allow background UI operations if needed (Qt timers)
         if getattr(self, 'read_only', False):
             try:
                 # Attempt read-only connection via URI
                 uri = f"file:{self.DB_FILE}?mode=ro"
-                conn = sqlite3.connect(uri, uri=True, timeout=5.0, check_same_thread=False)
+                conn = sqlite3.connect(uri, uri=True, timeout=20.0, check_same_thread=False)
                 try:
                     cur = conn.cursor()
                     cur.execute("PRAGMA foreign_keys=ON")
-                    cur.execute("PRAGMA busy_timeout=5000")
+                    cur.execute("PRAGMA busy_timeout=20000")
                     conn.commit()
                 except Exception:
                     pass
                 return conn
             except Exception:
                 # Fallback to normal connect (may still be readable)
-                return sqlite3.connect(self.DB_FILE, timeout=5.0, check_same_thread=False)
+                return sqlite3.connect(self.DB_FILE, timeout=20.0, check_same_thread=False)
         else:
-            conn = sqlite3.connect(self.DB_FILE, timeout=5.0, check_same_thread=False)
+            conn = sqlite3.connect(self.DB_FILE, timeout=20.0, check_same_thread=False)
             try:
                 cur = conn.cursor()
-                cur.execute("PRAGMA journal_mode=WAL")
-                cur.execute("PRAGMA synchronous=NORMAL")
-                cur.execute("PRAGMA busy_timeout=5000")
+                if network_mode and not force_wal:
+                    # Safer defaults on SMB/network shares
+                    cur.execute("PRAGMA journal_mode=DELETE")
+                    cur.execute("PRAGMA synchronous=FULL")
+                else:
+                    # Local disk concurrency
+                    cur.execute("PRAGMA journal_mode=WAL")
+                    cur.execute("PRAGMA synchronous=NORMAL")
+                cur.execute("PRAGMA busy_timeout=20000")
                 cur.execute("PRAGMA foreign_keys=ON")
                 conn.commit()
             except Exception:
@@ -999,38 +1031,56 @@ class ProjectDataModel:
         self.rollup_progress()
         self.create_table()
         # Full rewrite (legacy). Preserve row_version/last_modified_utc if present in table.
-        with self._connect() as conn:
-            c = conn.cursor()
+        # Add minimal retry/backoff for transient lock contention.
+        _attempts = 0
+        _max = 5
+        while True:
+            _attempts += 1
             try:
-                c.execute("BEGIN IMMEDIATE")
-            except Exception:
-                pass
-            # Determine if concurrency columns exist
-            try:
-                c.execute('PRAGMA table_info(project_parts)')
-                cols_exist = [r[1] for r in c.fetchall()]
-            except Exception:
-                cols_exist = []
-            has_rv = 'row_version' in cols_exist
-            has_lm = 'last_modified_utc' in cols_exist
-            c.execute("DELETE FROM project_parts")
-            base_cols = [col for col in self.COLUMNS]
-            extra_cols = []
-            if has_rv:
-                extra_cols.append('row_version')
-            if has_lm:
-                extra_cols.append('last_modified_utc')
-            all_cols = base_cols + extra_cols
-            columns_sql = ", ".join(['"{}"'.format(col) for col in all_cols])
-            placeholders = ", ".join(["?" for _ in all_cols])
-            for row in self.rows:
-                vals = [row.get(c, "") for c in base_cols]
-                if has_rv:
-                    vals.append(row.get('row_version', 0))
-                if has_lm:
-                    vals.append(row.get('last_modified_utc', ''))
-                c.execute(f"INSERT INTO project_parts ({columns_sql}) VALUES ({placeholders})", vals)
-            conn.commit()
+                with self._connect() as conn:
+                    c = conn.cursor()
+                    try:
+                        c.execute("BEGIN IMMEDIATE")
+                    except Exception:
+                        pass
+                    # Determine if concurrency columns exist
+                    try:
+                        c.execute('PRAGMA table_info(project_parts)')
+                        cols_exist = [r[1] for r in c.fetchall()]
+                    except Exception:
+                        cols_exist = []
+                    has_rv = 'row_version' in cols_exist
+                    has_lm = 'last_modified_utc' in cols_exist
+                    c.execute("DELETE FROM project_parts")
+                    base_cols = [col for col in self.COLUMNS]
+                    extra_cols = []
+                    if has_rv:
+                        extra_cols.append('row_version')
+                    if has_lm:
+                        extra_cols.append('last_modified_utc')
+                    all_cols = base_cols + extra_cols
+                    columns_sql = ", ".join(['"{}"'.format(col) for col in all_cols])
+                    placeholders = ", ".join(["?" for _ in all_cols])
+                    for row in self.rows:
+                        vals = [row.get(c, "") for c in base_cols]
+                        if has_rv:
+                            vals.append(row.get('row_version', 0))
+                        if has_lm:
+                            vals.append(row.get('last_modified_utc', ''))
+                        c.execute(f"INSERT INTO project_parts ({columns_sql}) VALUES ({placeholders})", vals)
+                    conn.commit()
+                break
+            except sqlite3.OperationalError as _e:
+                _msg = str(_e).lower()
+                if ("database is locked" in _msg or "database locked" in _msg or "busy" in _msg) and _attempts < _max:
+                    try:
+                        import time as _t
+                        _t.sleep(0.5 * _attempts)
+                    except Exception:
+                        pass
+                    continue
+                else:
+                    raise
         try: log_event('db','save_complete', rows=len(self.rows))
         except Exception: pass
         return True
@@ -10424,6 +10474,11 @@ class MainWindow(QMainWindow):
                 "color:#555; background-color:#efefef; border:1px solid #cfcfcf;"
                 "font-size:10px; padding:1px 6px; border-radius:3px;"
             )
+            # Quick action to request the edit lock (become editor)
+            self.request_edit_btn = _QBtn("Request Edit")
+            self.request_edit_btn.setToolTip("Try to acquire the edit lock to enable editing")
+            self.request_edit_btn.setStyleSheet("font-size:11px")
+            self.request_edit_btn.clicked.connect(self._on_request_edit)
             self.open_folder_btn = _QBtn("Open Data Folder")
             self.open_folder_btn.setStyleSheet("font-size:11px")
             self.open_folder_btn.clicked.connect(self.open_data_folder)
@@ -10433,6 +10488,7 @@ class MainWindow(QMainWindow):
             sb.addPermanentWidget(self.lock_label, 0)
             sb.addPermanentWidget(self.db_warning_label, 0)
             sb.addPermanentWidget(self.db_ro_label, 0)
+            sb.addPermanentWidget(self.request_edit_btn, 0)
             sb.addPermanentWidget(self.open_folder_btn, 0)
             # Active view/zoom label
             self.view_status_label = QLabel("Zoom: —")
@@ -10501,6 +10557,15 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     print(f"Pricing settings dialog failed: {e}")
             act_pricing.triggered.connect(_open_pricing_settings)
+            # Create Desktop Shortcut for local launch (Windows only)
+            if sys.platform.startswith('win'):
+                act_shortcut = tools_menu.addAction("Create Desktop Shortcut (Local Launch)…")
+                def _create_shortcut_action():
+                    try:
+                        self._create_local_launch_shortcut()
+                    except Exception as e:
+                        print(f"Create shortcut failed: {e}")
+                act_shortcut.triggered.connect(_create_shortcut_action)
             # Sample Data action (available anytime)
             act_sample = tools_menu.addAction("Create Sample Data…")
             def do_sample():
@@ -10672,6 +10737,72 @@ class MainWindow(QMainWindow):
             import traceback
             print("EXCEPTION in MainWindow.__init__:", e)
             traceback.print_exc()
+    def _create_local_launch_shortcut(self):
+        """Create a Desktop shortcut that calls launch_local.ps1 with the current DB path.
+        Windows-only implementation using PowerShell COM. Shows a status message on success."""
+        import os, sys, subprocess, shlex
+        if not sys.platform.startswith('win'):
+            return
+        # Resolve base dir and launcher path
+        try:
+            base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+        except Exception:
+            base_dir = os.getcwd()
+        launcher = os.path.join(base_dir, 'launch_local.ps1')
+        if not os.path.exists(launcher):
+            # Try parent dir (e.g., running from dist/ subfolder)
+            alt = os.path.abspath(os.path.join(base_dir, '..', 'launch_local.ps1'))
+            if os.path.exists(alt):
+                launcher = alt
+        if not os.path.exists(launcher):
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Launcher Missing", "launch_local.ps1 not found next to the app. Place it in the app folder and try again.")
+            return
+        # Inputs for shortcut
+        try:
+            db_path = os.path.abspath(self.model.DB_FILE)
+        except Exception:
+            db_path = self.model.DB_FILE
+        name = "ProjectPlanner (Local Launch)"
+        icon = os.path.join(base_dir, 'header.ico') if os.path.exists(os.path.join(base_dir, 'header.ico')) else ''
+        # Build PowerShell command to create the .lnk
+        # Use -Command with a semicolon-separated script; carefully quote paths
+        def _q(s):
+            s = s.replace('`', '``')
+            return '"' + s.replace('"', '`"') + '"'
+        ps = []
+        ps.append("$desktop = [Environment]::GetFolderPath('Desktop')")
+        ps.append(f"$lnk = Join-Path $desktop {_q(name + '.lnk')}")
+        ps.append("$psh = (Get-Command powershell.exe).Source")
+        ps.append(f"$launcher = {_q(launcher)}")
+        ps.append(f"$db = {_q(db_path)}")
+        ps.append(f"$wd = {_q(base_dir)}")
+        ps.append("$wsh = New-Object -ComObject WScript.Shell")
+        ps.append("$sc = $wsh.CreateShortcut($lnk)")
+        ps.append("$sc.TargetPath = $psh")
+        # Arguments: -NoProfile -ExecutionPolicy Bypass -File "<launcher>" -DbPath "<db>" -Wait
+        ps.append(f"$sc.Arguments = '-NoProfile -ExecutionPolicy Bypass -File ' + {_q(launcher)} + ' -DbPath ' + {_q(db_path)} + ' -Wait'")
+        ps.append("$sc.WorkingDirectory = $wd")
+        if icon:
+            ps.append(f"$sc.IconLocation = {_q(icon)}")
+        ps.append("$sc.Save()")
+        ps.append("Write-Output 'OK'")
+        script = '; '.join(ps)
+        try:
+            # Run PowerShell to create the shortcut
+            cp = subprocess.run([
+                'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script
+            ], capture_output=True, text=True, cwd=base_dir, timeout=15)
+            ok = (cp.returncode == 0) and ('OK' in (cp.stdout or ''))
+            if ok and self.statusBar():
+                self.statusBar().showMessage("Desktop shortcut created", 4000)
+            elif not ok:
+                from PyQt6.QtWidgets import QMessageBox
+                err = (cp.stderr or '').strip() or 'Unknown error'
+                QMessageBox.warning(self, "Shortcut Failed", f"PowerShell failed to create shortcut.\n{err}")
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Shortcut Failed", f"Error: {e}")
     def _update_read_only_indicator(self):
         try:
             ro = bool(getattr(self.model, 'read_only', False))
@@ -10680,9 +10811,58 @@ class MainWindow(QMainWindow):
         try:
             if hasattr(self, 'db_ro_label') and self.db_ro_label is not None:
                 self.db_ro_label.setVisible(ro)
+            # Show the Request Edit button only in read-only mode
+            if hasattr(self, 'request_edit_btn') and self.request_edit_btn is not None:
+                self.request_edit_btn.setVisible(ro)
         except Exception:
             pass
         # Keep Tools button text unchanged and avoid modifying the window title for a subtler signal
+    def _on_request_edit(self):
+        """Attempt to acquire the edit lock and switch out of read-only if successful."""
+        try:
+            # Fast-path: already have lock or not in read-only
+            if not bool(getattr(self.model, 'read_only', False)):
+                if self.statusBar():
+                    self.statusBar().showMessage("Already in Edit mode", 2000)
+                return
+            ok = self._acquire_edit_lock()
+            if ok:
+                # Become editor
+                self.model.read_only = False
+                try:
+                    if hasattr(self, '_act_toggle_ro'):
+                        self._act_toggle_ro.blockSignals(True)
+                        self._act_toggle_ro.setChecked(False)
+                        self._act_toggle_ro.blockSignals(False)
+                except Exception:
+                    pass
+                try:
+                    if hasattr(self, 'database_view') and hasattr(self.database_view, 'set_read_only'):
+                        self.database_view.set_read_only(False)
+                except Exception:
+                    pass
+                try:
+                    self._update_read_only_indicator()
+                except Exception:
+                    pass
+                if self.statusBar():
+                    self.statusBar().showMessage("Edit lock acquired – editing enabled", 3000)
+            else:
+                # Inform who holds the lock
+                info = self._read_edit_lock() or {}
+                owner = info.get('owner') or 'unknown'
+                when = info.get('when') or ''
+                try:
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.information(self, "Edit Lock Held",
+                        f"Another user holds the edit lock (owner: {owner}{' @ ' + when if when else ''}).\n" +
+                        "You can try again later or ask them to release it.")
+                except Exception:
+                    # Fallback to status bar
+                    if self.statusBar():
+                        self.statusBar().showMessage(f"Edit lock held by {owner}", 4000)
+        except Exception as e:
+            print(f"Request Edit failed: {e}")
     def open_data_folder(self):
         import os, sys, subprocess
         base_dir = os.path.dirname(os.path.abspath(self.model.DB_FILE))

@@ -61,10 +61,55 @@ function Write-Section($title) {
 $pythonExe = Resolve-PythonPath ($Python -replace ' ','')
 $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $hash = Get-GitShortHash
-$channelTag = if ($Channel) { "_" + $Channel } else { '' }
+$channelTag = ''
 $hashTag = if ($hash) { "_" + $hash } else { '' }
 $versionTag = if ($Version) { "_v" + ($Version -replace '[^0-9A-Za-z._-]','') } else { '' }
 $archiveName = "release_${stamp}${versionTag}${channelTag}${hashTag}.zip"
+# If -Channel not provided, auto-derive from git tag/branch
+if (-not $Channel) {
+  try {
+    $gitTag = (git describe --tags --exact-match 2>$null)
+  } catch { $gitTag = $null }
+  if ($gitTag) {
+    # Simple mapping from tag pattern to channel
+    if ($gitTag -match '^(v?\d+\.\d+\.\d+)$') {
+      $Channel = 'stable'
+    } elseif ($gitTag -match 'beta|rc') {
+      $Channel = 'beta'
+    } else {
+      $Channel = 'stable'
+    }
+  } else {
+    try { $branch = (git rev-parse --abbrev-ref HEAD 2>$null) } catch { $branch = $null }
+    if ($branch -and ($branch -in @('main','master'))) { $Channel = 'stable' }
+    elseif ($branch -and ($branch -match 'beta|release|rc')) { $Channel = 'beta' }
+    else { $Channel = 'dev' }
+  }
+  Write-Host "[channel] Auto-derived channel: $Channel" -ForegroundColor DarkCyan
+}
+
+# Now that Channel is known, compute channel tag (and refresh archiveName if needed)
+$channelTag = if ($Channel) { "_" + $Channel } else { '' }
+$archiveName = "release_${stamp}${versionTag}${channelTag}${hashTag}.zip"
+
+# If -Version not provided, try to auto-read from repo VERSION file
+if (-not $Version) {
+  try {
+    $versionPath = Join-Path (Get-Location) 'VERSION'
+    if (Test-Path $versionPath) {
+      $verText = (Get-Content -Path $versionPath -ErrorAction Stop | Select-Object -First 1).Trim()
+      if ($verText) {
+        $Version = $verText
+        Write-Host "[version] Using VERSION file value: $Version" -ForegroundColor DarkCyan
+        # Update archive name to include version tag now that we have it
+        $versionTag = "_v" + ($Version -replace '[^0-9A-Za-z._-]','')
+        $archiveName = "release_${stamp}${versionTag}${channelTag}${hashTag}.zip"
+      }
+    }
+  } catch {
+    Write-Host "[version] Failed to read VERSION file: $($_.Exception.Message)" -ForegroundColor Yellow
+  }
+}
 
 if (-not $SkipClean) {
   Write-Section "Clean previous build artifacts"
