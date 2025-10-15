@@ -363,16 +363,48 @@
     // Grouping controls (inline UI for now)
     const groupingUI = (()=>{
       const host = document.querySelector('.toolbar');
-      const gp = document.createElement('label'); gp.style.marginLeft='8px'; gp.textContent='Group preds:';
-      const gcb = document.createElement('input'); gcb.type='checkbox'; gcb.id='group-preds'; gcb.style.marginLeft='6px';
-      const gcpLbl = document.createElement('label'); gcpLbl.textContent='Cross-parent:'; gcpLbl.style.marginLeft='8px';
-      const gcp = document.createElement('input'); gcp.type='checkbox'; gcp.id='group-cross-parent'; gcp.style.marginLeft='6px';
-      const ws = document.createElement('select'); ws.id='group-weight'; ws.style.marginLeft='8px';
+  const gp = document.createElement('label'); gp.style.marginLeft='8px'; gp.textContent='Group preds:'; gp.title='Place eligible predecessors immediately before each successor';
+  const gcb = document.createElement('input'); gcb.type='checkbox'; gcb.id='group-preds'; gcb.style.marginLeft='6px'; gcb.title='Cluster predecessors just above their successor';
+  const gcpLbl = document.createElement('label'); gcpLbl.textContent='Cross-parent:'; gcpLbl.style.marginLeft='8px'; gcpLbl.title='Allow grouping across different parents when they share the same top-level ancestor';
+  const gcp = document.createElement('input'); gcp.type='checkbox'; gcp.id='group-cross-parent'; gcp.style.marginLeft='6px'; gcp.title='Permit grouping across parent groups within same root';
+  const ccLbl = document.createElement('label'); ccLbl.textContent='Cluster chains:'; ccLbl.style.marginLeft='8px'; ccLbl.title='Also group single predecessors to keep chains visually together';
+  const cc = document.createElement('input'); cc.type='checkbox'; cc.id='cluster-chains'; cc.style.marginLeft='6px'; cc.title='Group even single predecessors with their successor';
+      // load persisted cluster chains (default on)
+      try { const v = localStorage.getItem('clusterChains'); cc.checked = v==null ? true : (v==='1' || v==='true'); } catch(_){ cc.checked = true; }
+      // persist & load other toggles
+      try { const v = localStorage.getItem('groupPreds'); gcb.checked = v==null ? true : (v==='1'||v==='true'); } catch(_){ gcb.checked = true; }
+      try { const v = localStorage.getItem('groupCrossParent'); gcp.checked = v==='1'||v==='true'; } catch(_){ gcp.checked = false; }
+  const ws = document.createElement('select'); ws.id='group-weight'; ws.style.marginLeft='8px'; ws.title='Weight strategy for ordering clusters and sibling fallback';
       ['Weight: Successors','Weight: Original','Weight: Start Date','Weight: Reverse Start Date','Weight: Duration','Weight: Criticality','Weight: Criticality then Start Date']
         .forEach(x=>{ const o=document.createElement('option'); o.textContent=x; ws.appendChild(o); });
-      host.appendChild(gp); host.appendChild(gcb); host.appendChild(gcpLbl); host.appendChild(gcp); host.appendChild(ws);
-      [gcb,gcp,ws].forEach(el=> el.addEventListener('change', ()=> refresh()));
-      return {gcb,gcp,ws};
+      try { const wsel = localStorage.getItem('groupWeight'); if(wsel){ ws.value = wsel; } } catch(_){ }
+      // Chain depth spinner
+  const depthLbl = document.createElement('label'); depthLbl.textContent='Depth:'; depthLbl.style.marginLeft='8px'; depthLbl.title='How many predecessor levels to include (1–5)';
+  const depth = document.createElement('input'); depth.type='number'; depth.min='1'; depth.max='5'; depth.step='1'; depth.id='chain-depth'; depth.style.width='56px'; depth.title='Number of levels to group back from each successor';
+      try { const v = parseInt(localStorage.getItem('chainDepth')||'1',10); depth.value = isNaN(v)?1:Math.max(1,Math.min(5,v)); } catch(_){ depth.value=1; }
+      // Only Cluster toggle
+  const onlyLbl = document.createElement('label'); onlyLbl.textContent='Only Cluster:'; onlyLbl.style.marginLeft='8px'; onlyLbl.title='Disable weight-based sibling sorting when no clusters changed';
+  const only = document.createElement('input'); only.type='checkbox'; only.id='only-cluster'; only.style.marginLeft='6px'; only.title='When on, keep sibling order unless clusters were applied';
+      try { const v = localStorage.getItem('onlyCluster'); only.checked = v==='1'||v==='true'; } catch(_){ only.checked=false; }
+      // Links toggle
+  const linksLbl = document.createElement('label'); linksLbl.textContent='Links:'; linksLbl.style.marginLeft='8px'; linksLbl.title='Show 🔗 icons and enable link opening';
+  const links = document.createElement('input'); links.type='checkbox'; links.id='show-links'; links.style.marginLeft='6px'; links.title='Show 🔗 on bars; click to open Pace Link';
+      try { const v = localStorage.getItem('showLinks'); links.checked = v==null ? true : (v==='1'||v==='true'); } catch(_){ links.checked=true; }
+      host.appendChild(gp); host.appendChild(gcb); host.appendChild(gcpLbl); host.appendChild(gcp); host.appendChild(ccLbl); host.appendChild(cc); host.appendChild(ws);
+      host.appendChild(depthLbl); host.appendChild(depth); host.appendChild(onlyLbl); host.appendChild(only); host.appendChild(linksLbl); host.appendChild(links);
+      [gcb,gcp,ws,cc,depth,only,links].forEach(el=> el.addEventListener('change', ()=>{
+        try{
+          if(el===cc) localStorage.setItem('clusterChains', cc.checked ? '1' : '0');
+          if(el===gcb) localStorage.setItem('groupPreds', gcb.checked ? '1' : '0');
+          if(el===gcp) localStorage.setItem('groupCrossParent', gcp.checked ? '1' : '0');
+          if(el===ws) localStorage.setItem('groupWeight', ws.value);
+          if(el===depth) localStorage.setItem('chainDepth', String(parseInt(depth.value||'1',10)||1));
+          if(el===only) localStorage.setItem('onlyCluster', only.checked ? '1' : '0');
+          if(el===links) localStorage.setItem('showLinks', links.checked ? '1' : '0');
+        }catch(_){ }
+        refresh();
+      }));
+      return {gcb,gcp,ws,cc,depth,only,links};
     })();
     async function loadTasks(){
       const el = document.getElementById('gantt-view'); el.innerHTML = '';
@@ -411,10 +443,13 @@
       // Optional grouping / reordering before render
   let list = filtered.slice();
       try {
-        const group = document.getElementById('group-preds').checked;
+        const group = groupingUI.gcb.checked;
         if(group){
-          const cross = document.getElementById('group-cross-parent').checked;
-          const strategy = document.getElementById('group-weight').value;
+          const cross = groupingUI.gcp.checked;
+          const strategy = groupingUI.ws.value;
+          const cluster = groupingUI.cc.checked;
+          const depth = Math.max(1, Math.min(5, parseInt(groupingUI.depth.value||'1',10) || 1));
+          const onlyCluster = groupingUI.only.checked;
           // Build maps
           const byId = {}; list.forEach(t=>{ if(t.id) byId[t.id] = t; });
           const dependencies = {}; const successors = {}; const parentOf = {}; const rootOf = {};
@@ -431,8 +466,10 @@
           const succCount = {}; Object.entries(successors).forEach(([k,arr])=> succCount[k] = (arr||[]).length);
           const nameToStart = {}; const nameToDuration = {};
           list.forEach(t=>{ nameToDuration[t.id] = parseInt(t.duration||0,10) || 0; nameToStart[t.id] = t.start ? new Date(t.start+'T00:00:00') : null; });
+          const baseOrder = list.map(x=>x.id);
+          const baseOrderMap = {}; baseOrder.forEach((id,idx)=> baseOrderMap[id]=idx);
           function weightKey(p){
-            const base = list.findIndex(x=>x.id===p);
+            const base = baseOrderMap[p] ?? 10**9;
             switch(strategy){
               case 'Weight: Successors': return [- (succCount[p]||0), base];
               case 'Weight: Original': return [0, base];
@@ -447,12 +484,22 @@
               default: return [- (succCount[p]||0), base];
             }
           }
-          // Group preds near successors
+          // Group preds near successors (with optional recursive chain depth)
           let seq = list.map(t=>t.id);
+          let appliedAny = false;
           let i=0; while(i<seq.length){ const s = seq[i]; const preds = (dependencies[s]||[]).filter(p=> seq.includes(p));
             const parentS = parentOf[s];
-            const eligible = preds.filter(p=> cross ? (rootOf[p]===rootOf[s]) : (parentOf[p]===parentS));
-            if(eligible.length >= 2){
+            const elig = (nm)=> cross ? (rootOf[nm]===rootOf[s]) : (parentOf[nm]===parentS);
+            let eligible = preds.filter(p=> elig(p));
+            if(depth>1){
+              const seen = new Set(eligible); let frontier = eligible.slice(); let steps=1;
+              while(frontier.length && steps<depth){
+                const nxt=[]; for(const node of frontier){ for(const pp of (dependencies[node]||[])){ if(!seen.has(pp) && seq.includes(pp) && elig(pp)){ seen.add(pp); nxt.push(pp);} } }
+                frontier = nxt; steps++;
+              }
+              eligible = seq.filter(x=> seen.has(x));
+            }
+            if(eligible.length >= 2 || (cluster && eligible.length === 1)){
               const predsInOrder = seq.filter(x=> eligible.includes(x));
               const sorted = predsInOrder.sort((a,b)=>{
                 const ka = weightKey(a), kb = weightKey(b); const la = ka.length, lb = kb.length; for(let j=0;j<Math.max(la,lb);j++){ const va=ka[j]??0, vb=kb[j]??0; if(va<vb) return -1; if(va>vb) return 1; } return 0; });
@@ -462,10 +509,22 @@
                 seq = seq.filter(x=> !sorted.includes(x));
                 const newSIdx = seq.indexOf(s);
                 seq.splice(newSIdx, 0, ...sorted);
-                i = seq.indexOf(s) + 1; continue;
+                appliedAny = true; i = seq.indexOf(s) + 1; continue;
               }
             }
             i++;
+          }
+          // Fallback: if no groups were applied and non-Original weight, sort siblings by weight within each parent (unless Only Cluster)
+          if(!appliedAny && strategy !== 'Weight: Original' && !onlyCluster){
+            const byParentIds = {};
+            seq.forEach((id, idx)=>{ const p = parentOf[id]||''; (byParentIds[p] = byParentIds[p]||[]).push(idx); });
+            Object.values(byParentIds).forEach(idxList=>{
+              if(idxList.length < 2) return;
+              const names = idxList.map(k=> seq[k]);
+              const sorted = names.slice().sort((a,b)=>{
+                const ka = weightKey(a), kb = weightKey(b); const la = ka.length, lb = kb.length; for(let j=0;j<Math.max(la,lb);j++){ const va=ka[j]??0, vb=kb[j]??0; if(va<vb) return -1; if(va>vb) return 1; } return 0; });
+              idxList.forEach((pos, i2)=>{ seq[pos] = sorted[i2]; });
+            });
           }
           // Remap list by new order
           const pos = {}; seq.forEach((id,idx)=> pos[id]=idx);
@@ -498,6 +557,23 @@
           }
           rect.style.cursor = 'pointer'; rect.addEventListener('click', ()=> selectTask(t)); rect.addEventListener('dblclick', ()=>{ selectTask(t); openFullDetails(); });
           g.appendChild(rect);
+          // Link icon and click-through when enabled
+          try{
+            const showLinks = (function(){ try{ const v = localStorage.getItem('showLinks'); return v==null ? true : (v==='1'||v==='true'); } catch(_){ return true; } })();
+            const pace = String(((t.raw||{})['Pace Link']||'').toString()).trim();
+            if(showLinks && pace && (pace.startsWith('http://')||pace.startsWith('https://'))){
+              const icon = document.createElementNS(svg.namespaceURI, 'text');
+              icon.setAttribute('x', String(x + Math.max(2, w - 12)));
+              icon.setAttribute('y', String(y + 12));
+              icon.setAttribute('fill', '#ffffff');
+              icon.setAttribute('font-size','12');
+              icon.textContent = '🔗';
+              icon.style.cursor = 'pointer';
+              icon.addEventListener('click', (ev)=>{ ev.stopPropagation(); window.open(pace, '_blank', 'noopener'); });
+              g.appendChild(icon);
+              rect.addEventListener('click', (ev)=>{ if(ev.shiftKey){ window.open(pace, '_blank', 'noopener'); }});
+            }
+          }catch(_){ }
           // progress overlay
           const pw = Math.round(w * (Math.min(100, Math.max(0, t.progress||0))/100));
           const pr = document.createElementNS(svg.namespaceURI,'rect'); pr.setAttribute('x', x); pr.setAttribute('y', y);
@@ -615,6 +691,22 @@
           label.addEventListener('click', ()=> selectTask(p.t));
           label.addEventListener('dblclick', ()=>{ selectTask(p.t); openFullDetails(); });
           tlGroup.appendChild(label);
+          // Link icon (timeline) when enabled
+          try{
+            const showLinks = (function(){ try{ const v = localStorage.getItem('showLinks'); return v==null ? true : (v==='1'||v==='true'); } catch(_){ return true; } })();
+            const pace = String(((p.t.raw||{})['Pace Link']||'').toString()).trim();
+            if(showLinks && pace && (pace.startsWith('http://')||pace.startsWith('https://'))){
+              const icon = document.createElementNS(tlSvg.namespaceURI,'text');
+              icon.setAttribute('x', String(p.x2 - 10));
+              icon.setAttribute('y', String(y + 10));
+              icon.setAttribute('fill', '#ffffff');
+              icon.setAttribute('font-size','12');
+              icon.textContent = '🔗';
+              icon.style.cursor = 'pointer';
+              icon.addEventListener('click', (ev)=>{ ev.stopPropagation(); window.open(pace, '_blank', 'noopener'); });
+              tlGroup.appendChild(icon);
+            }
+          }catch(_){ }
           // Milestone diamond for zero-duration
           if((p.t.duration||0) <= 0 || p.t.start===p.t.end){
             const cx = p.x1; const cy = y + 5; const s = 6;

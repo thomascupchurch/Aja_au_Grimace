@@ -5333,6 +5333,89 @@ class GanttChartView(QWidget):
         self.group_cross_parent_checkbox.stateChanged.connect(lambda _s: _on_gcp_toggle())
         toolbar.addWidget(self.group_cross_parent_checkbox)
 
+        # Cluster chains toggle (persisted, groups even single predecessors with their successor)
+        self._cluster_chains = True
+        try:
+            from PyQt6.QtCore import QSettings as _QS_cc
+            _ps_cc = _QS_cc('LSI','ProjectPlanner')
+            cc_val = _ps_cc.value('Gantt/ClusterChains', 'true')
+            def _b_cc(v):
+                if isinstance(v, bool): return v
+                if isinstance(v, str): return v.lower() in ('1','true','yes','on')
+                return True
+            self._cluster_chains = _b_cc(cc_val)
+        except Exception:
+            self._cluster_chains = True
+        from PyQt6.QtWidgets import QCheckBox as _QCB_cc
+        self.cluster_chains_checkbox = _QCB_cc("Cluster Chains")
+        self.cluster_chains_checkbox.setToolTip("Group each task with its direct dependencies; affects even single predecessors")
+        self.cluster_chains_checkbox.setChecked(self._cluster_chains)
+        def _on_cc_toggle():
+            self._cluster_chains = self.cluster_chains_checkbox.isChecked()
+            try:
+                from PyQt6.QtCore import QSettings as _QS2_cc
+                _QS2_cc('LSI','ProjectPlanner').setValue('Gantt/ClusterChains', self._cluster_chains)
+            except Exception:
+                pass
+            self.refresh_gantt()
+        self.cluster_chains_checkbox.stateChanged.connect(lambda _s: _on_cc_toggle())
+        toolbar.addWidget(self.cluster_chains_checkbox)
+
+        # Chain depth selector (persisted)
+        from PyQt6.QtWidgets import QSpinBox as _QS_chain
+        self._chain_depth = 1
+        try:
+            from PyQt6.QtCore import QSettings as _QS_chain_store
+            v = _QS_chain_store('LSI','ProjectPlanner').value('Gantt/ChainDepth', 1)
+            try:
+                self._chain_depth = max(1, min(5, int(v)))
+            except Exception:
+                self._chain_depth = 1
+        except Exception:
+            self._chain_depth = 1
+        self.chain_depth_spin = _QS_chain()
+        self.chain_depth_spin.setRange(1, 5)
+        self.chain_depth_spin.setValue(self._chain_depth)
+        self.chain_depth_spin.setToolTip("How many predecessor levels to cluster back from each successor (1=direct preds only)")
+        def _on_chain_depth(_=None):
+            try:
+                self._chain_depth = int(self.chain_depth_spin.value())
+                from PyQt6.QtCore import QSettings as _QS_chain_store2
+                _QS_chain_store2('LSI','ProjectPlanner').setValue('Gantt/ChainDepth', self._chain_depth)
+            except Exception:
+                pass
+            self.refresh_gantt()
+        self.chain_depth_spin.valueChanged.connect(_on_chain_depth)
+        toolbar.addWidget(QLabel("Depth:"))
+        toolbar.addWidget(self.chain_depth_spin)
+
+        # Disable sibling fallback sort toggle
+        from PyQt6.QtWidgets import QCheckBox as _QCB_fallback
+        self._disable_sibling_fallback = False
+        try:
+            from PyQt6.QtCore import QSettings as _QS_fb
+            val = _QS_fb('LSI','ProjectPlanner').value('Gantt/DisableSiblingFallback', 'false')
+            def _b_fb(v):
+                if isinstance(v, bool): return v
+                if isinstance(v, str): return v.lower() in ('1','true','yes','on')
+                return False
+            self._disable_sibling_fallback = _b_fb(val)
+        except Exception:
+            self._disable_sibling_fallback = False
+        self.disable_fallback_checkbox = _QCB_fallback("Only Cluster")
+        self.disable_fallback_checkbox.setToolTip("When on, do not apply weight-based sibling sorting if no clusters changed")
+        self.disable_fallback_checkbox.setChecked(self._disable_sibling_fallback)
+        def _on_fb_toggle():
+            self._disable_sibling_fallback = self.disable_fallback_checkbox.isChecked()
+            try:
+                from PyQt6.QtCore import QSettings as _QS_fb2
+                _QS_fb2('LSI','ProjectPlanner').setValue('Gantt/DisableSiblingFallback', self._disable_sibling_fallback)
+            except Exception:
+                pass
+            self.refresh_gantt()
+        self.disable_fallback_checkbox.stateChanged.connect(lambda _s: _on_fb_toggle())
+        toolbar.addWidget(self.disable_fallback_checkbox)
+
         # Grouping weight strategy dropdown
         from PyQt6.QtWidgets import QComboBox as _QCB_w, QPushButton as _QPB_w
         self.weight_combo = _QCB_w()
@@ -5355,7 +5438,8 @@ class GanttChartView(QWidget):
                 "Weight: Start Date",
                 "Weight: Reverse Start Date",
                 "Weight: Duration",
-                "Weight: Criticality"
+                "Weight: Criticality",
+                "Weight: Criticality then Start Date",
             ]:
                 sel = "Weight: Successors"
             idx = self.weight_combo.findText(sel)
@@ -5377,14 +5461,19 @@ class GanttChartView(QWidget):
         help_btn.setFixedWidth(22)
         def _show_weight_help():
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.information(self, "Weighting Strategies",
-                "Successors: Tasks depended on by more successors appear closer to the successor.\n"
-                "Original: Preserve original order.\n"
-                "Start Date: Earlier starts first.\n"
-                "Reverse Start Date: Later starts first.\n"
-                "Duration: Longer durations first.\n"
-                "Criticality: Critical-path tasks first.\n"
-                "Criticality then Start Date: Critical first; among equals, earlier starts first.")
+            QMessageBox.information(self, "Grouping & Weighting Help",
+                "Group Preds: Place eligible predecessors immediately before each successor.\n"
+                "Cross-parent: Allow grouping across different parents when they share the same top-level ancestor.\n"
+                "Cluster Chains: Also group single predecessors; with Depth>1, include predecessors of predecessors, etc.\n"
+                "Only Cluster: Disable the fallback sibling weight sort when no clusters changed.\n\n"
+                "Weights:\n"
+                "- Successors: More successors first.\n"
+                "- Original: Preserve original order.\n"
+                "- Start Date: Earlier starts first.\n"
+                "- Reverse Start Date: Later starts first.\n"
+                "- Duration: Longer durations first.\n"
+                "- Criticality: Critical-path tasks first.\n"
+                "- Criticality then Start Date: Critical first; among equals, earlier starts first.")
         help_btn.clicked.connect(_show_weight_help)
         toolbar.addWidget(help_btn)
 
@@ -6101,8 +6190,9 @@ class GanttChartView(QWidget):
                     strategy = self.weight_combo.currentText()
                 except Exception:
                     strategy = "Weight: Successors"
-                # Grouping pass: for each successor, cluster its multiple preds that share same parent or same root (option)
+                # Grouping pass: for each successor, cluster its eligible predecessors. If Chain Depth>1, include preds-of-preds up to depth.
                 seq = list(base_order)
+                applied_any_group = False  # track if any predecessor cluster was actually reordered
                 i = 0
                 while i < len(seq):
                     s = seq[i]
@@ -6111,13 +6201,33 @@ class GanttChartView(QWidget):
                     row_s = name_to_row_local.get(s) or {}
                     parent_s = (row_s.get("Parent") or "")
                     preds_all = deps_map.get(s, [])
+                    # Build eligible set considering cross-parent flag
                     if getattr(self, '_group_cross_parent', False):
                         root_s = root_of(s)
-                        preds_eligible = [p for p in preds_all if p in seq and root_of(p) == root_s]
+                        def eligible(nm): return (nm in seq) and (root_of(nm) == root_s)
                     else:
-                        preds_eligible = [p for p in preds_all if (name_to_row_local.get(p, {}).get("Parent") or "") == parent_s and p in seq]
-                    # Only act when multiple preds exist
-                    if len(preds_eligible) >= 2:
+                        def eligible(nm): return (nm in seq) and ((name_to_row_local.get(nm, {}).get("Parent") or "") == parent_s)
+                    preds_eligible = [p for p in preds_all if eligible(p)]
+                    # If chain depth > 1, walk predecessors-of-predecessors up to depth-1 and include if eligible
+                    try:
+                        depth = max(1, int(getattr(self, '_chain_depth', 1)))
+                    except Exception:
+                        depth = 1
+                    if depth > 1:
+                        seen = set(preds_eligible)
+                        frontier = list(preds_eligible)
+                        steps = 1
+                        while frontier and steps < depth:
+                            nxt = []
+                            for node in frontier:
+                                for pp in deps_map.get(node, []):
+                                    if pp not in seen and eligible(pp):
+                                        seen.add(pp); nxt.append(pp)
+                            frontier = nxt
+                            steps += 1
+                        preds_eligible = [p for p in seq if p in seen]  # preserve seq order for stable sort input
+                    # Act when multiple preds exist; or when Cluster Chains enabled, allow single predecessor
+                    if len(preds_eligible) >= 2 or (self._cluster_chains and len(preds_eligible) == 1):
                         # Weighted, stable order by chosen strategy; tiebreaker is base order
                         preds_in_order = [x for x in seq if x in preds_eligible]
                         preds_sorted = sorted(preds_in_order, key=lambda p: _weight_key(p, strategy))
@@ -6132,8 +6242,29 @@ class GanttChartView(QWidget):
                             seq[s_index:s_index] = preds_sorted
                             # Advance past successor to avoid reprocessing same window endlessly
                             i = seq.index(s) + 1
+                            applied_any_group = True
                             continue
                     i += 1
+
+                # Fallback: if no predecessor clusters were affected and a non-Original weight is selected,
+                # apply a sibling-level reorder by weight within each parent group to make the strategy visible
+                try:
+                    if (not applied_any_group) and (strategy != "Weight: Original") and (not getattr(self, '_disable_sibling_fallback', False)):
+                        # Build mapping of parent -> indices in seq of its direct children (including roots with empty parent)
+                        from collections import defaultdict
+                        parent_to_indices = defaultdict(list)
+                        for idx_name, nm in enumerate(seq):
+                            parent_to_indices[parent_of.get(nm, "")].append(idx_name)
+                        # For each parent group with 2+ children, reorder those slots by weight (stable within ties)
+                        for par, idx_list in parent_to_indices.items():
+                            if len(idx_list) < 2:
+                                continue
+                            names = [seq[k] for k in idx_list]
+                            names_sorted = sorted(names, key=lambda p: _weight_key(p, strategy))
+                            for pos, nm in zip(idx_list, names_sorted):
+                                seq[pos] = nm
+                except Exception:
+                    pass
                 # Build index map for bars that actually render
                 bars_names = [n for (n, *_rest) in bars]
                 ordered_names = [n for n in seq if n in bars_names]
@@ -6634,15 +6765,7 @@ class GanttChartView(QWidget):
                 prog_rect.setZValue(rect.zValue() + 1)
             full_name = name
             display_name = full_name
-            # Paperclip if attachments present
-            try:
-                import json as _json_attlabel
-                att_raw = r.get("Attachments") or "[]"
-                att_list = _json_attlabel.loads(att_raw) if att_raw else []
-                if isinstance(att_list, list) and len(att_list) > 0:
-                    display_name = "\uD83D\uDCCE " + display_name  # paperclip emoji
-            except Exception:
-                pass
+            # Attachment paperclip indicator removed per request
             if len(display_name) > max_chars_fixed:
                 display_name = display_name[:max_chars_fixed-1] + "…"
             text_item = self.scene.addText(display_name)
