@@ -969,8 +969,8 @@ class ProjectDataModel:
             # Skip save in read-only mode (collaborative viewer)
             try: log_event('db','save_skipped_read_only')
             except Exception: pass
-            return
-            # Enforce single-editor lock: if a lock file exists and we are not the owner, prevent writes
+            return False
+        # Enforce single-editor lock: if a lock file exists and we are not the owner, prevent writes
         try:
             dbp = getattr(self, 'DB_FILE', None) or ''
             if dbp:
@@ -991,7 +991,7 @@ class ProjectDataModel:
                         print(f"Save blocked: edit lock held by {owner}")
                         try: log_event('db','save_blocked_lock', owner=owner)
                         except Exception: pass
-                        return
+                        return False
         except Exception:
             pass
         self.update_calculated_end_dates()
@@ -1033,6 +1033,37 @@ class ProjectDataModel:
             conn.commit()
         try: log_event('db','save_complete', rows=len(self.rows))
         except Exception: pass
+        return True
+
+    def can_save(self):
+        """Preflight check whether a write is allowed. Returns (ok, reason, owner).
+        ok: bool, True if writing is permitted
+        reason: short string if not ok (read-only or lock)
+        owner: lock owner string if locked, else ''
+        """
+        try:
+            if getattr(self, 'read_only', False):
+                return False, 'Read-only mode (shared lock active)', ''
+            import os, json, socket, getpass
+            dbp = getattr(self, 'DB_FILE', None) or ''
+            if not dbp:
+                return True, '', ''
+            lock_path = os.path.abspath(dbp) + '.lock.json'
+            if os.path.exists(lock_path):
+                try:
+                    info = json.load(open(lock_path, 'r', encoding='utf-8'))
+                except Exception:
+                    info = None
+                owner = (info or {}).get('owner') if isinstance(info, dict) else None
+                try:
+                    me = f"{getpass.getuser()}@{socket.gethostname()}"
+                except Exception:
+                    me = 'unknown@host'
+                if owner and owner != me:
+                    return False, 'Edit lock held by another user', owner
+            return True, '', ''
+        except Exception:
+            return True, '', ''
 
     def create_table(self):
         import sqlite3
@@ -4814,6 +4845,15 @@ class GanttChartView(QWidget):
         apply_box.addWidget(apply_inst_btn)
         def save():
             try:
+                # Preflight write permission
+                ok, reason, owner = (True, '', '')
+                if hasattr(self.model, 'can_save'):
+                    ok, reason, owner = self.model.can_save()
+                if not ok:
+                    from PyQt6.QtWidgets import QMessageBox as _QB
+                    owner_sfx = f" (owner: {owner})" if owner else ""
+                    _QB.information(dialog, "Read-Only", f"Cannot save changes: {reason}{owner_sfx}")
+                    return
                 for col in self.model.COLUMNS:
                     widget = edits[col]
                     if isinstance(widget, QLineEdit):
@@ -4905,7 +4945,11 @@ class GanttChartView(QWidget):
                             return
                 except Exception:
                     pass
-                self.model.save_to_db()
+                saved = bool(self.model.save_to_db())
+                if not saved:
+                    from PyQt6.QtWidgets import QMessageBox as _QB
+                    _QB.warning(dialog, "Save Failed", "Changes could not be saved.")
+                    return
                 self.render_gantt(self.model)
                 dialog.accept()
             except Exception as e:
@@ -8379,15 +8423,29 @@ class DatabaseView(QWidget):
                     if getattr(self, '_read_only', False):
                         btn.setEnabled(False)
                     def open_picker(r=row, c=col):
+                        # Preflight write permission
+                        ok, reason, owner = (True, '', '')
+                        if hasattr(self.model, 'can_save'):
+                            ok, reason, owner = self.model.can_save()
+                        if not ok:
+                            from PyQt6.QtWidgets import QMessageBox as _QB
+                            owner_sfx = f" (owner: {owner})" if owner else ""
+                            _QB.information(self, "Read-Only", f"Cannot modify dependencies: {reason}{owner_sfx}")
+                            return
                         dlg = DependenciesPickerDialog(self, self.model, self.model.rows[r])
                         if dlg.exec():
                             new_txt = ', '.join(dlg.selected or [])
                             self.model.rows[r]["Dependencies"] = new_txt
                             # Persist to DB and refresh
+                            saved = False
                             try:
-                                self.model.save_to_db()
+                                saved = bool(self.model.save_to_db())
                             except Exception:
-                                pass
+                                saved = False
+                            if not saved:
+                                from PyQt6.QtWidgets import QMessageBox as _QB
+                                _QB.warning(self, "Save Failed", "Dependency changes could not be saved.")
+                                return
                             # Update UI inline (avoid full table rebuild for snappier UX)
                             txt.setText(new_txt)
                             new_count = len([t for t in (new_txt or '').split(',') if t.strip()])

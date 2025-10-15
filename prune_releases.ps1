@@ -64,11 +64,17 @@ try {
   Write-Host ("Kept {0} zip(s). Deleted {1}." -f $keepSet.Count, ($delZips | Measure-Object).Count)
 
   # 1b) Prune orphan checksum files (e.g., release_*.zip.sha256) not in the kept set or where the .zip is missing
-  $checksumFilter = if ($Pattern.EndsWith('.sha256')) { $Pattern } else { "$Pattern.sha256" }
+  # Derive checksum filter robustly: if pattern ends with .zip, replace with .zip.sha256; otherwise append .sha256
+  if ($Pattern -match "\.zip$") {
+    $checksumFilter = ($Pattern -replace '\\.zip$', '.zip.sha256')
+  }
+  else {
+    $checksumFilter = if ($Pattern.EndsWith('.sha256')) { $Pattern } else { "$Pattern.sha256" }
+  }
   $allChecksums = Get-ChildItem -File -Filter $checksumFilter -ErrorAction SilentlyContinue
   if ($allChecksums) {
     # Build lookup of kept zip full paths
-    $keepZipSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $keepZipSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($p in $keepSet) { $null = $keepZipSet.Add($p) }
 
     $delChecksums = @()
